@@ -351,6 +351,26 @@ impl ModelsManager {
         Self::find_model_by_longest_prefix(suffix, candidates)
     }
 
+    /// Retry metadata lookup for common provider-specific model suffixes like
+    /// `-with-tools`, `-latest`, and `-fast`.
+    fn find_model_by_variant_suffix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
+        const VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
+
+        for suffix in VARIANT_SUFFIXES {
+            let Some(base_slug) = model.strip_suffix(suffix) else {
+                continue;
+            };
+            if base_slug.is_empty() {
+                continue;
+            }
+            if let Some(found) = Self::find_model_by_longest_prefix(base_slug, candidates) {
+                return Some(found);
+            }
+        }
+
+        None
+    }
+
     fn construct_model_info_from_candidates(
         model: &str,
         candidates: &[ModelInfo],
@@ -359,7 +379,8 @@ impl ModelsManager {
         // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
         // retry for namespaced slugs like `custom/gpt-5.3-codex`.
         let remote = Self::find_model_by_longest_prefix(model, candidates)
-            .or_else(|| Self::find_model_by_namespaced_suffix(model, candidates));
+            .or_else(|| Self::find_model_by_namespaced_suffix(model, candidates))
+            .or_else(|| Self::find_model_by_variant_suffix(model, candidates));
         let model_info = if let Some(remote) = remote {
             ModelInfo {
                 slug: model.to_string(),

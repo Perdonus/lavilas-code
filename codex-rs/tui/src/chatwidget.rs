@@ -5065,7 +5065,7 @@ impl ChatWidget {
             }
             SlashCommand::Profiles => {
                 self.submit_op(AppCommand::run_user_shell_command(
-                    "/root/codex-mistral-fork/bin/mistral-profiles list".to_string(),
+                    "mistral-profiles list".to_string(),
                 ));
             }
             SlashCommand::Setlang => {
@@ -5412,7 +5412,7 @@ impl ChatWidget {
                     return;
                 }
                 self.submit_op(AppCommand::run_user_shell_command(format!(
-                    "/root/codex-mistral-fork/bin/mistral-profile-tool set-lang {lang}",
+                    "mistral-profile-tool set-lang {lang}",
                 )));
                 self.bottom_pane.drain_pending_submission_state();
             }
@@ -8115,10 +8115,16 @@ impl ChatWidget {
             });
         }
 
-        let header = self.model_menu_header(
-            "Select Model and Effort",
-            "Access legacy models by running codex -m <model_name> or in your config.toml",
-        );
+        let subtitle = if self.config.model_provider.is_openai() {
+            "Access legacy models by running codex -m <model_name> or in your config.toml"
+                .to_string()
+        } else {
+            format!(
+                "Provider: {} ({}). Select a model and reasoning budget for this provider.",
+                self.config.model_provider.name, self.config.model_provider_id
+            )
+        };
+        let header = self.model_menu_header("Select Model and Effort", &subtitle);
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
             items,
@@ -8321,13 +8327,23 @@ impl ChatWidget {
         } else {
             None
         };
+        let provider_is_openai = self.config.model_provider.is_openai();
         let warning_text = warn_effort.map(|effort| {
             let effort_label = Self::reasoning_effort_label(effort);
-            format!("⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits.")
+            if provider_is_openai {
+                format!(
+                    "⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits."
+                )
+            } else {
+                format!(
+                    "⚠ {effort_label} reasoning budget can increase latency and token usage for this provider."
+                )
+            }
         });
-        let warn_for_model = preset.model.starts_with("gpt-5.1-codex")
-            || preset.model.starts_with("gpt-5.1-codex-max")
-            || preset.model.starts_with("gpt-5.2");
+        let warn_for_model = provider_is_openai
+            && (preset.model.starts_with("gpt-5.1-codex")
+                || preset.model.starts_with("gpt-5.1-codex-max")
+                || preset.model.starts_with("gpt-5.2"));
 
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
@@ -8411,7 +8427,11 @@ impl ChatWidget {
                 })
                 .filter(|text| !text.is_empty());
 
-            let show_warning = warn_for_model && warn_effort == Some(effort);
+            let show_warning = if provider_is_openai {
+                warn_for_model && warn_effort == Some(effort)
+            } else {
+                warn_effort == Some(effort)
+            };
             let selected_description = if show_warning {
                 warning_text.as_ref().map(|warning_message| {
                     description.as_ref().map_or_else(
@@ -8456,7 +8476,7 @@ impl ChatWidget {
 
         let mut header = ColumnRenderable::new();
         header.push(Line::from(
-            format!("Select Reasoning Level for {model_slug}").bold(),
+            format!("Select Reasoning Budget for {model_slug}").bold(),
         ));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {

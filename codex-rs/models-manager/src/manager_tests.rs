@@ -326,6 +326,29 @@ async fn get_model_info_matches_namespaced_suffix() {
 }
 
 #[tokio::test]
+async fn get_model_info_matches_provider_variant_suffixes() {
+    let codex_home = tempdir().expect("temp dir");
+    let config = ModelsManagerConfig::default();
+    let remote = remote_model("mistral-vibe-cli", "Mistral Vibe", /*priority*/ 0);
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let manager = ModelsManager::new(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        Some(ModelsResponse {
+            models: vec![remote],
+        }),
+        CollaborationModesConfig::default(),
+    );
+    let variant_slug = "mistral-vibe-cli-with-tools".to_string();
+
+    let model_info = manager.get_model_info(&variant_slug, &config).await;
+
+    assert_eq!(model_info.slug, variant_slug);
+    assert_eq!(model_info.display_name, "Mistral Vibe");
+    assert!(!model_info.used_fallback_model_metadata);
+}
+
+#[tokio::test]
 async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
     let codex_home = tempdir().expect("temp dir");
     let config = ModelsManagerConfig::default();
