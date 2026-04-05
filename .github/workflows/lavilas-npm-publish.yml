@@ -1,0 +1,30 @@
+name: lavilas-npm-publish
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Validate package metadata
+        run: |
+          node -e "const p=require('./codex-cli/package.json'); if(p.name!=='@lavilas/codex') throw new Error('unexpected package '+p.name); if(!/^\\d+\\.\\d+\\.\\d+/.test(p.version)) throw new Error('bad version '+p.version); console.log(p.name, p.version)"
+
+      - name: Publish @lavilas/codex
+        working-directory: codex-cli
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
