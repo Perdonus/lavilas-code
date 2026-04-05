@@ -13,6 +13,10 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    #[strum(serialize = "profiles", serialize = "профили")]
+    Profiles,
+    #[strum(serialize = "setlang", serialize = "set-lang", serialize = "язык")]
+    Setlang,
     Fast,
     Approvals,
     Permissions,
@@ -80,7 +84,7 @@ impl SlashCommand {
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
-            SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
+            SlashCommand::Quit | SlashCommand::Exit => "exit Lavilas Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Copy => "copy the latest Codex output to your clipboard",
             SlashCommand::Mention => "mention a file",
@@ -95,6 +99,8 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Profiles => "show Lavilas account profiles",
+            SlashCommand::Setlang => "set Lavilas profile language: /setlang <ru|en>",
             SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
@@ -112,7 +118,7 @@ impl SlashCommand {
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
-            SlashCommand::Logout => "log out of Codex",
+            SlashCommand::Logout => "log out of Lavilas Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
         }
@@ -132,6 +138,7 @@ impl SlashCommand {
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::Fast
+                | SlashCommand::Setlang
                 | SlashCommand::SandboxReadRoot
         )
     }
@@ -159,6 +166,7 @@ impl SlashCommand {
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
+            SlashCommand::Profiles | SlashCommand::Setlang => true,
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Rename
@@ -219,5 +227,18 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn russian_profile_alias_parses() {
+        assert_eq!(
+            SlashCommand::from_str("профили"),
+            Ok(SlashCommand::Profiles)
+        );
+    }
+
+    #[test]
+    fn russian_setlang_alias_parses() {
+        assert_eq!(SlashCommand::from_str("язык"), Ok(SlashCommand::Setlang));
     }
 }

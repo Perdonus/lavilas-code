@@ -5063,6 +5063,14 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::Profiles => {
+                self.submit_op(AppCommand::run_user_shell_command(
+                    "/root/codex-mistral-fork/bin/mistral-profiles list".to_string(),
+                ));
+            }
+            SlashCommand::Setlang => {
+                self.add_error_message("Usage: /setlang <ru|en>".to_string());
+            }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
                     None
@@ -5390,6 +5398,23 @@ impl ChatWidget {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
                     }
                 }
+            }
+            SlashCommand::Setlang if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                let lang = prepared_args.trim().to_ascii_lowercase();
+                if lang != "ru" && lang != "en" {
+                    self.add_error_message("Usage: /setlang <ru|en>".to_string());
+                    return;
+                }
+                self.submit_op(AppCommand::run_user_shell_command(format!(
+                    "/root/codex-mistral-fork/bin/mistral-profile-tool set-lang {lang}",
+                )));
+                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.session_telemetry
