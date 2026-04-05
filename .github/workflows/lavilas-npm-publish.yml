@@ -36,6 +36,7 @@ jobs:
           echo "Release version: $v"
 
       - name: Build Linux Codex binary
+        id: build_linux
         working-directory: codex-rs
         shell: bash
         run: |
@@ -47,6 +48,14 @@ jobs:
             done
             exit 1
           fi
+
+      - name: Upload cargo build log artifact
+        if: failure() && steps.build_linux.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-build-log-${{ github.run_id }}
+          path: /tmp/lavilas-cargo-build.log
+          if-no-files-found: warn
 
       - name: Stage npm packages
         shell: bash
