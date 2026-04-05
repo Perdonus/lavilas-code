@@ -37,7 +37,16 @@ jobs:
 
       - name: Build Linux Codex binary
         working-directory: codex-rs
-        run: cargo build -p codex-cli --release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! cargo build -p codex-cli --release > /tmp/lavilas-cargo-build.log 2>&1; then
+            echo "::error::cargo build failed; first lines from log below"
+            sed -n '1,120p' /tmp/lavilas-cargo-build.log | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          fi
 
       - name: Stage npm packages
         shell: bash
