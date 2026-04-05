@@ -12,54 +12,92 @@ use strum_macros::IntoStaticStr;
 pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
+    #[strum(serialize = "модель")]
     Model,
     #[strum(serialize = "profiles", serialize = "профили")]
     Profiles,
     #[strum(serialize = "setlang", serialize = "set-lang", serialize = "язык")]
     Setlang,
+    #[strum(serialize = "быстро")]
     Fast,
+    #[strum(serialize = "подтверждения")]
     Approvals,
+    #[strum(serialize = "разрешения")]
     Permissions,
     #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
+    #[strum(serialize = "эксперимент")]
     Experimental,
+    #[strum(serialize = "навыки")]
     Skills,
+    #[strum(serialize = "ревью")]
     Review,
+    #[strum(serialize = "переименовать")]
     Rename,
+    #[strum(serialize = "новый")]
     New,
+    #[strum(serialize = "продолжить")]
     Resume,
+    #[strum(serialize = "форк")]
     Fork,
+    #[strum(serialize = "инициализация")]
     Init,
+    #[strum(serialize = "сжать")]
     Compact,
+    #[strum(serialize = "план")]
     Plan,
+    #[strum(serialize = "режим")]
     Collab,
+    #[strum(serialize = "агент")]
     Agent,
     // Undo,
+    #[strum(serialize = "дифф")]
     Diff,
+    #[strum(serialize = "копировать")]
     Copy,
+    #[strum(serialize = "файл")]
     Mention,
+    #[strum(serialize = "статус")]
     Status,
+    #[strum(serialize = "дебаг-конфиг")]
     DebugConfig,
+    #[strum(serialize = "заголовок")]
     Title,
+    #[strum(serialize = "статус-строка")]
     Statusline,
+    #[strum(serialize = "тема")]
     Theme,
+    #[strum(serialize = "мсп")]
     Mcp,
+    #[strum(serialize = "приложения")]
     Apps,
+    #[strum(serialize = "плагины")]
     Plugins,
+    #[strum(serialize = "выйти-аккаунт")]
     Logout,
+    #[strum(serialize = "выход")]
     Quit,
+    #[strum(serialize = "закрыть")]
     Exit,
+    #[strum(serialize = "фидбек")]
     Feedback,
+    #[strum(serialize = "роллаут")]
     Rollout,
+    #[strum(serialize = "процессы")]
     Ps,
-    #[strum(to_string = "stop", serialize = "clean")]
+    #[strum(to_string = "stop", serialize = "clean", serialize = "стоп")]
     Stop,
+    #[strum(serialize = "очистить")]
     Clear,
+    #[strum(serialize = "стиль")]
     Personality,
+    #[strum(serialize = "голос")]
     Realtime,
+    #[strum(serialize = "настройки")]
     Settings,
+    #[strum(serialize = "тест-подтверждения")]
     TestApproval,
     #[strum(serialize = "subagents")]
     MultiAgents,
@@ -74,60 +112,107 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
-            SlashCommand::Feedback => "send logs to maintainers",
-            SlashCommand::New => "start a new chat during a conversation",
-            SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
-            SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
-            SlashCommand::Review => "review my current changes and find issues",
-            SlashCommand::Rename => "rename the current thread",
-            SlashCommand::Resume => "resume a saved chat",
-            SlashCommand::Clear => "clear the terminal and start a new chat",
-            SlashCommand::Fork => "fork the current chat",
+            SlashCommand::Feedback => "отправить логи разработчикам",
+            SlashCommand::New => "начать новый чат в текущей сессии",
+            SlashCommand::Init => "создать AGENTS.md с инструкциями для Codex",
+            SlashCommand::Compact => "сжать диалог, чтобы не упереться в лимит контекста",
+            SlashCommand::Review => "проверить текущие изменения и найти проблемы",
+            SlashCommand::Rename => "переименовать текущий тред",
+            SlashCommand::Resume => "продолжить сохранённый чат",
+            SlashCommand::Clear => "очистить терминал и начать новый чат",
+            SlashCommand::Fork => "сделать форк текущего чата",
             // SlashCommand::Undo => "ask Codex to undo a turn",
-            SlashCommand::Quit | SlashCommand::Exit => "exit Lavilas Codex",
-            SlashCommand::Diff => "show git diff (including untracked files)",
-            SlashCommand::Copy => "copy the latest Codex output to your clipboard",
-            SlashCommand::Mention => "mention a file",
-            SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
-            SlashCommand::Status => "show current session configuration and token usage",
-            SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
-            SlashCommand::Title => "configure which items appear in the terminal title",
-            SlashCommand::Statusline => "configure which items appear in the status line",
-            SlashCommand::Theme => "choose a syntax highlighting theme",
-            SlashCommand::Ps => "list background terminals",
-            SlashCommand::Stop => "stop all background terminals",
+            SlashCommand::Quit | SlashCommand::Exit => "выйти из Lavilas Codex",
+            SlashCommand::Diff => "показать git diff (включая untracked)",
+            SlashCommand::Copy => "скопировать последний ответ Codex в буфер обмена",
+            SlashCommand::Mention => "упомянуть файл",
+            SlashCommand::Skills => "использовать навыки для улучшения выполнения задач",
+            SlashCommand::Status => "показать конфигурацию сессии и расход токенов",
+            SlashCommand::DebugConfig => "показать слои конфига и источники требований для отладки",
+            SlashCommand::Title => "настроить элементы в заголовке терминала",
+            SlashCommand::Statusline => "настроить элементы в строке статуса",
+            SlashCommand::Theme => "выбрать тему подсветки синтаксиса",
+            SlashCommand::Ps => "показать фоновые терминалы",
+            SlashCommand::Stop => "остановить все фоновые терминалы",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
-            SlashCommand::Model => "choose what model and reasoning effort to use",
-            SlashCommand::Profiles => "show Lavilas account profiles",
-            SlashCommand::Setlang => "set Lavilas profile language: /setlang <ru|en>",
-            SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
-            SlashCommand::Personality => "choose a communication style for Codex",
-            SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
-            SlashCommand::Settings => "configure realtime microphone/speaker",
-            SlashCommand::Plan => "switch to Plan mode",
-            SlashCommand::Collab => "change collaboration mode (experimental)",
-            SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
-            SlashCommand::Approvals => "choose what Codex is allowed to do",
-            SlashCommand::Permissions => "choose what Codex is allowed to do",
-            SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
+            SlashCommand::Model => "выбрать модель и бюджет размышлений",
+            SlashCommand::Profiles => "показать профили аккаунтов Lavilas; /profiles <provider> [profile_name] создаёт шаблон",
+            SlashCommand::Setlang => "установить язык профиля Lavilas: /setlang <ru|en>",
+            SlashCommand::Fast => "переключить Fast-режим для максимальной скорости (2X расход плана)",
+            SlashCommand::Personality => "выбрать стиль общения Codex",
+            SlashCommand::Realtime => "переключить голосовой realtime-режим (эксперимент)",
+            SlashCommand::Settings => "настроить realtime-микрофон/динамик",
+            SlashCommand::Plan => "переключиться в режим Plan",
+            SlashCommand::Collab => "изменить режим совместной работы (эксперимент)",
+            SlashCommand::Agent | SlashCommand::MultiAgents => "переключить активный тред агента",
+            SlashCommand::Approvals => "выбрать, что разрешено Codex",
+            SlashCommand::Permissions => "выбрать, что разрешено Codex",
+            SlashCommand::ElevateSandbox => "настроить повышенную песочницу агента",
             SlashCommand::SandboxReadRoot => {
-                "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
+                "разрешить песочнице чтение каталога: /sandbox-add-read-dir <absolute_path>"
             }
-            SlashCommand::Experimental => "toggle experimental features",
-            SlashCommand::Mcp => "list configured MCP tools",
-            SlashCommand::Apps => "manage apps",
-            SlashCommand::Plugins => "browse plugins",
-            SlashCommand::Logout => "log out of Lavilas Codex",
-            SlashCommand::Rollout => "print the rollout file path",
-            SlashCommand::TestApproval => "test approval request",
+            SlashCommand::Experimental => "переключить экспериментальные функции",
+            SlashCommand::Mcp => "показать настроенные MCP-инструменты",
+            SlashCommand::Apps => "управление приложениями",
+            SlashCommand::Plugins => "просмотр плагинов",
+            SlashCommand::Logout => "выйти из аккаунта Lavilas Codex",
+            SlashCommand::Rollout => "показать путь к rollout-файлу",
+            SlashCommand::TestApproval => "тест запроса подтверждения",
         }
     }
 
     /// Command string without the leading '/'. Provided for compatibility with
     /// existing code that expects a method named `command()`.
     pub fn command(self) -> &'static str {
-        self.into()
+        match self {
+            SlashCommand::Model => "модель",
+            SlashCommand::Profiles => "профили",
+            SlashCommand::Setlang => "язык",
+            SlashCommand::Fast => "быстро",
+            SlashCommand::Approvals => "подтверждения",
+            SlashCommand::Permissions => "разрешения",
+            SlashCommand::ElevateSandbox => "setup-default-sandbox",
+            SlashCommand::SandboxReadRoot => "sandbox-add-read-dir",
+            SlashCommand::Experimental => "эксперимент",
+            SlashCommand::Skills => "навыки",
+            SlashCommand::Review => "ревью",
+            SlashCommand::Rename => "переименовать",
+            SlashCommand::New => "новый",
+            SlashCommand::Resume => "продолжить",
+            SlashCommand::Fork => "форк",
+            SlashCommand::Init => "инициализация",
+            SlashCommand::Compact => "сжать",
+            SlashCommand::Plan => "план",
+            SlashCommand::Collab => "режим",
+            SlashCommand::Agent => "агент",
+            SlashCommand::Diff => "дифф",
+            SlashCommand::Copy => "копировать",
+            SlashCommand::Mention => "файл",
+            SlashCommand::Status => "статус",
+            SlashCommand::DebugConfig => "дебаг-конфиг",
+            SlashCommand::Title => "заголовок",
+            SlashCommand::Statusline => "статус-строка",
+            SlashCommand::Theme => "тема",
+            SlashCommand::Mcp => "мсп",
+            SlashCommand::Apps => "приложения",
+            SlashCommand::Plugins => "плагины",
+            SlashCommand::Logout => "выйти-аккаунт",
+            SlashCommand::Quit => "выход",
+            SlashCommand::Exit => "закрыть",
+            SlashCommand::Feedback => "фидбек",
+            SlashCommand::Rollout => "роллаут",
+            SlashCommand::Ps => "процессы",
+            SlashCommand::Stop => "стоп",
+            SlashCommand::Clear => "очистить",
+            SlashCommand::Personality => "стиль",
+            SlashCommand::Realtime => "голос",
+            SlashCommand::Settings => "настройки",
+            SlashCommand::TestApproval => "тест-подтверждения",
+            SlashCommand::MultiAgents => "subagents",
+            SlashCommand::MemoryDrop => "debug-m-drop",
+            SlashCommand::MemoryUpdate => "debug-m-update",
+        }
     }
 
     /// Whether this command supports inline args (for example `/review ...`).
@@ -139,6 +224,7 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Fast
                 | SlashCommand::Setlang
+                | SlashCommand::Profiles
                 | SlashCommand::SandboxReadRoot
         )
     }
@@ -221,7 +307,7 @@ mod tests {
 
     #[test]
     fn stop_command_is_canonical_name() {
-        assert_eq!(SlashCommand::Stop.command(), "stop");
+        assert_eq!(SlashCommand::Stop.command(), "стоп");
     }
 
     #[test]

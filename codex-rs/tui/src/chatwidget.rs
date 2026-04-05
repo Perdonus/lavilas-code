@@ -5064,12 +5064,10 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Profiles => {
-                self.submit_op(AppCommand::run_user_shell_command(
-                    "mistral-profiles list".to_string(),
-                ));
+                self.show_profiles_summary();
             }
             SlashCommand::Setlang => {
-                self.add_error_message("Usage: /setlang <ru|en>".to_string());
+                self.add_error_message("Использование: /setlang <ru|en>".to_string());
             }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
@@ -5390,12 +5388,12 @@ impl ChatWidget {
                             "off"
                         };
                         self.add_info_message(
-                            format!("Fast mode is {status}."),
+                            format!("Fast-режим: {status}."),
                             /*hint*/ None,
                         );
                     }
                     _ => {
-                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
+                        self.add_error_message("Использование: /fast [on|off|status]".to_string());
                     }
                 }
             }
@@ -5408,12 +5406,61 @@ impl ChatWidget {
                 };
                 let lang = prepared_args.trim().to_ascii_lowercase();
                 if lang != "ru" && lang != "en" {
-                    self.add_error_message("Usage: /setlang <ru|en>".to_string());
+                    self.add_error_message("Использование: /setlang <ru|en>".to_string());
                     return;
                 }
-                self.submit_op(AppCommand::run_user_shell_command(format!(
-                    "mistral-profile-tool set-lang {lang}",
-                )));
+                if let Err(err) = self.persist_profiles_language(&lang) {
+                    self.add_error_message(format!("Не удалось сохранить язык профилей: {err}"));
+                    return;
+                }
+                self.add_info_message(
+                    format!("Язык профилей сохранён: {lang}."),
+                    Some("Настройка записана в ~/.codex/Profiles/settings.json".to_string()),
+                );
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Profiles if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                let prepared = prepared_args.trim();
+                let mut parts = prepared.splitn(2, char::is_whitespace);
+                let provider = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
+                let profile_name = parts.next().unwrap_or_default().trim().to_string();
+                if provider.is_empty() {
+                    self.add_error_message(
+                        "Использование: /profiles <provider> [profile_name]".to_string(),
+                    );
+                    return;
+                }
+                let supported = [
+                    "openai",
+                    "openrouter",
+                    "gemini",
+                    "anthropic",
+                    "mistral",
+                    "groq",
+                    "ollama",
+                ];
+                if !supported.contains(&provider.as_str()) {
+                    self.add_error_message(format!(
+                        "Неподдерживаемый provider: {provider}. Поддерживаются: {}",
+                        supported.join(", ")
+                    ));
+                    return;
+                }
+                match self.create_profile_template(&provider, &profile_name) {
+                    Ok(path) => self.add_info_message(
+                        format!("Создан профиль: {}", path.display()),
+                        Some("Отредактируйте файл и добавьте ключи/API URL.".to_string()),
+                    ),
+                    Err(err) => {
+                        self.add_error_message(format!("Не удалось создать профиль: {err}"))
+                    }
+                }
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
@@ -7694,12 +7741,12 @@ impl ChatWidget {
         });
     }
 
-    /// Open a popup to choose a quick auto model. Selecting "All models"
+    /// Open a popup to choose a quick auto model. Selecting "Все модели"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
         if !self.is_session_configured() {
             self.add_info_message(
-                "Model selection is disabled until startup completes.".to_string(),
+                "Выбор модели недоступен до завершения запуска.".to_string(),
                 /*hint*/ None,
             );
             return;
@@ -7709,7 +7756,7 @@ impl ChatWidget {
             Ok(models) => models,
             Err(_) => {
                 self.add_info_message(
-                    "Models are being updated; please try /model again in a moment.".to_string(),
+                    "Список моделей обновляется, повторите /model через пару секунд.".to_string(),
                     /*hint*/ None,
                 );
                 return;
@@ -8048,7 +8095,7 @@ impl ChatWidget {
             ));
 
             items.push(SelectionItem {
-                name: "All models".to_string(),
+                name: "Все модели".to_string(),
                 description,
                 is_current,
                 actions,
@@ -8058,8 +8105,8 @@ impl ChatWidget {
         }
 
         let header = self.model_menu_header(
-            "Select Model",
-            "Pick a quick auto mode or browse all models.",
+            "Выбор модели",
+            "Выберите быстрый авто-режим или откройте полный список моделей.",
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some(standard_popup_hint_line()),
@@ -8085,7 +8132,7 @@ impl ChatWidget {
     pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
         if presets.is_empty() {
             self.add_info_message(
-                "No additional models are available right now.".to_string(),
+                "Сейчас нет дополнительных моделей.".to_string(),
                 /*hint*/ None,
             );
             return;
@@ -8116,17 +8163,17 @@ impl ChatWidget {
         }
 
         let subtitle = if self.config.model_provider.is_openai() {
-            "Access legacy models by running codex -m <model_name> or in your config.toml"
+            "Для ручного выбора можно использовать codex -m <model_name> или config.toml"
                 .to_string()
         } else {
             format!(
-                "Provider: {} ({}). Select a model and reasoning budget for this provider.",
+                "Провайдер: {} ({}). Выберите модель и бюджет размышлений для этого провайдера.",
                 self.config.model_provider.name, self.config.model_provider_id
             )
         };
-        let header = self.model_menu_header("Select Model and Effort", &subtitle);
+        let header = self.model_menu_header("Выбор модели и бюджета", &subtitle);
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
+            footer_hint: Some("Нажмите Enter для выбора бюджета размышлений или Esc для выхода.".into()),
             items,
             header,
             ..Default::default()
@@ -8476,7 +8523,7 @@ impl ChatWidget {
 
         let mut header = ColumnRenderable::new();
         header.push(Line::from(
-            format!("Select Reasoning Budget for {model_slug}").bold(),
+            format!("Выбор бюджета размышлений для {model_slug}").bold(),
         ));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -8513,6 +8560,125 @@ impl ChatWidget {
         self.apply_model_and_effort_without_persist(model.clone(), effort);
         self.app_event_tx
             .send(AppEvent::PersistModelSelection { model, effort });
+    }
+
+    fn profiles_dir(&self) -> PathBuf {
+        self.config.codex_home.join("Profiles")
+    }
+
+    fn show_profiles_summary(&mut self) {
+        let profiles_dir = self.profiles_dir();
+        if let Err(err) = std::fs::create_dir_all(&profiles_dir) {
+            self.add_error_message(format!(
+                "Не удалось подготовить каталог профилей {}: {err}",
+                profiles_dir.display()
+            ));
+            return;
+        }
+
+        let mut profile_files: Vec<String> = Vec::new();
+        match std::fs::read_dir(&profiles_dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_file() {
+                        continue;
+                    }
+                    if let Some(name) = path.file_name().and_then(|v| v.to_str()) {
+                        if name.ends_with(".json") || name.ends_with(".toml") {
+                            profile_files.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Не удалось прочитать каталог профилей {}: {err}",
+                    profiles_dir.display()
+                ));
+                return;
+            }
+        }
+        profile_files.sort();
+
+        let list_text = if profile_files.is_empty() {
+            "(пока нет файлов профилей)".to_string()
+        } else {
+            profile_files.join("\n")
+        };
+
+        self.add_info_message(
+            format!(
+                "Профили аккаунтов ({}):
+{}",
+                profiles_dir.display(),
+                list_text
+            ),
+            Some(
+                "Добавить аккаунт: создайте JSON/TOML в этой папке. Провайдеры: openai, openrouter, gemini, anthropic, mistral, groq, ollama."
+                    .to_string(),
+            ),
+        );
+    }
+
+    fn persist_profiles_language(&self, lang: &str) -> std::io::Result<()> {
+        let profiles_dir = self.profiles_dir();
+        std::fs::create_dir_all(&profiles_dir)?;
+        let settings_path = profiles_dir.join("settings.json");
+        let payload = format!("{{\n  \"language\": \"{lang}\"\n}}\n");
+        std::fs::write(settings_path, payload)
+    }
+
+    fn create_profile_template(
+        &self,
+        provider: &str,
+        profile_name: &str,
+    ) -> std::io::Result<PathBuf> {
+        let profiles_dir = self.profiles_dir();
+        std::fs::create_dir_all(&profiles_dir)?;
+
+        let sanitized = if profile_name.trim().is_empty() {
+            format!("{}-profile", provider)
+        } else {
+            profile_name
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                        ch
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+        };
+        let file_name = format!("{}.json", sanitized.to_ascii_lowercase());
+        let path = profiles_dir.join(file_name);
+
+        if path.exists() {
+            return Ok(path);
+        }
+
+        let base_url = match provider {
+            "openai" => "https://api.openai.com/v1",
+            "openrouter" => "https://openrouter.ai/api/v1",
+            "gemini" => "https://generativelanguage.googleapis.com/v1beta/openai",
+            "anthropic" => "https://api.anthropic.com/v1",
+            "mistral" => "https://api.mistral.ai/v1",
+            "groq" => "https://api.groq.com/openai/v1",
+            "ollama" => "http://127.0.0.1:11434/v1",
+            _ => "",
+        };
+
+        let env_key = provider.to_ascii_uppercase() + "_API_KEY";
+        let payload = format!(
+            "{{\n  \"provider\": \"{}\",\n  \"name\": \"{}\",\n  \"base_url\": \"{}\",\n  \"env_key\": \"{}\",\n  \"model\": \"change-me\"\n}}\n",
+            provider,
+            sanitized,
+            base_url,
+            env_key
+        );
+        std::fs::write(&path, payload)?;
+        Ok(path)
     }
 
     /// Open the permissions popup (alias for /permissions).

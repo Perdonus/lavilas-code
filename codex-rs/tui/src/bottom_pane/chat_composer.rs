@@ -2093,7 +2093,7 @@ impl ChatComposer {
                         .is_some();
                 if !is_builtin {
                     let message = format!(
-                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                        r#"Неизвестная команда '/{name}'. Введите "/" для списка доступных команд."#
                     );
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_info_event(message, /*hint*/ None),

@@ -19,12 +19,64 @@ jobs:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Validate package metadata
-        run: |
-          node -e "const p=require('./codex-cli/package.json'); if(p.name!=='@lavilas/codex') throw new Error('unexpected package '+p.name); if(!/^\\d+\\.\\d+\\.\\d+/.test(p.version)) throw new Error('bad version '+p.version); console.log(p.name, p.version)"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Publish @lavilas/codex
-        working-directory: codex-cli
-        run: npm publish --access public
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v=$(node -p "require('./codex-cli/package.json').version")
+          fi
+          echo "release_version=$v" >> "$GITHUB_OUTPUT"
+          echo "Release version: $v"
+
+      - name: Build Linux Codex binary
+        working-directory: codex-rs
+        run: cargo build -p codex-cli --release
+
+      - name: Stage npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION='${{ steps.version.outputs.release_version }}'
+          VENDOR_ROOT="$RUNNER_TEMP/lavilas-vendor"
+          rm -rf "$VENDOR_ROOT"
+          mkdir -p "$VENDOR_ROOT/vendor/x86_64-unknown-linux-musl/codex"
+          mkdir -p "$VENDOR_ROOT/vendor/x86_64-unknown-linux-musl/path"
+
+          cp codex-rs/target/release/codex "$VENDOR_ROOT/vendor/x86_64-unknown-linux-musl/codex/codex"
+          cp "$(command -v rg)" "$VENDOR_ROOT/vendor/x86_64-unknown-linux-musl/path/rg"
+
+          python3 codex-cli/scripts/build_npm_package.py \
+            --package codex-linux-x64 \
+            --release-version "$RELEASE_VERSION" \
+            --staging-dir "$RUNNER_TEMP/pkg-codex-linux-x64" \
+            --vendor-src "$VENDOR_ROOT/vendor"
+
+          python3 codex-cli/scripts/build_npm_package.py \
+            --package codex \
+            --release-version "$RELEASE_VERSION" \
+            --staging-dir "$RUNNER_TEMP/pkg-codex"
+
+      - name: Publish platform package (@lavilas/codex@<version>-linux-x64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/pkg-codex-linux-x64"
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish base package (@lavilas/codex@<version>)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/pkg-codex"
+          npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
