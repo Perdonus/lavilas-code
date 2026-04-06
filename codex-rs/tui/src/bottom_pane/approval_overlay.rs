@@ -157,10 +157,10 @@ impl ApprovalOverlay {
                     additional_permissions.as_ref(),
                 ),
                 network_approval_context.as_ref().map_or_else(
-                    || "Would you like to run the following command?".to_string(),
+                    || "Разрешить выполнение команды?".to_string(),
                     |network_approval_context| {
                         format!(
-                            "Do you want to approve network access to \"{}\"?",
+                            "Разрешить сетевой доступ к \"{}\"?",
                             network_approval_context.host
                         )
                     },
@@ -168,15 +168,15 @@ impl ApprovalOverlay {
             ),
             ApprovalRequest::Permissions { .. } => (
                 permissions_options(),
-                "Would you like to grant these permissions?".to_string(),
+                "Выдать эти разрешения?".to_string(),
             ),
             ApprovalRequest::ApplyPatch { .. } => (
                 patch_options(),
-                "Would you like to make the following edits?".to_string(),
+                "Применить эти изменения?".to_string(),
             ),
             ApprovalRequest::McpElicitation { server_name, .. } => (
                 elicitation_options(),
-                format!("{server_name} needs your approval."),
+                format!("Серверу {server_name} нужно подтверждение."),
             ),
         };
 
@@ -288,11 +288,11 @@ impl ApprovalOverlay {
         };
         if request.thread_label().is_none() {
             let message = if granted_permissions.is_empty() {
-                "You did not grant additional permissions"
+                "Дополнительные разрешения не выданы"
             } else if matches!(scope, PermissionGrantScope::Session) {
-                "You granted additional permissions for this session"
+                "Дополнительные разрешения выданы до конца сессии"
             } else {
-                "You granted additional permissions"
+                "Дополнительные разрешения выданы"
             };
             self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                 crate::history_cell::PlainHistoryCell::new(vec![message.into()]),
@@ -480,19 +480,23 @@ impl Renderable for ApprovalOverlay {
 
 fn approval_footer_hint(request: &ApprovalRequest) -> Line<'static> {
     let mut spans = vec![
-        "Press ".into(),
-        key_hint::plain(KeyCode::Enter).into(),
-        " to confirm or ".into(),
-        key_hint::plain(KeyCode::Esc).into(),
-        " to cancel".into(),
+        "Нажмите ".into(),
+        "Enter".bold().into(),
+        " для подтверждения, или ".into(),
+        "Esc".bold().into(),
+        " для отмены".into(),
     ];
     if request.thread_label().is_some() {
         spans.extend([
-            " or ".into(),
-            key_hint::plain(KeyCode::Char('o')).into(),
-            " to open thread".into(),
+            " либо ".into(),
+            "O".bold().into(),
+            " чтобы открыть тред".into(),
         ]);
     }
+    spans.extend([
+        " | ".into(),
+        "Клик по варианту — выбрать".dim(),
+    ]);
     Line::from(spans)
 }
 
@@ -509,20 +513,20 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
             let mut header: Vec<Line<'static>> = Vec::new();
             if let Some(thread_label) = thread_label {
                 header.push(Line::from(vec![
-                    "Thread: ".into(),
+                    "Тред: ".into(),
                     thread_label.clone().bold(),
                 ]));
                 header.push(Line::from(""));
             }
             if let Some(reason) = reason {
-                header.push(Line::from(vec!["Reason: ".into(), reason.clone().italic()]));
+                header.push(Line::from(vec!["Причина: ".into(), reason.clone().italic()]));
                 header.push(Line::from(""));
             }
             if let Some(additional_permissions) = additional_permissions
                 && let Some(rule_line) = format_additional_permissions_rule(additional_permissions)
             {
                 header.push(Line::from(vec![
-                    "Permission rule: ".into(),
+                    "Правило доступа: ".into(),
                     rule_line.cyan(),
                 ]));
                 header.push(Line::from(""));
@@ -546,18 +550,18 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
             let mut header: Vec<Line<'static>> = Vec::new();
             if let Some(thread_label) = thread_label {
                 header.push(Line::from(vec![
-                    "Thread: ".into(),
+                    "Тред: ".into(),
                     thread_label.clone().bold(),
                 ]));
                 header.push(Line::from(""));
             }
             if let Some(reason) = reason {
-                header.push(Line::from(vec!["Reason: ".into(), reason.clone().italic()]));
+                header.push(Line::from(vec!["Причина: ".into(), reason.clone().italic()]));
                 header.push(Line::from(""));
             }
             if let Some(rule_line) = format_requested_permissions_rule(permissions) {
                 header.push(Line::from(vec![
-                    "Permission rule: ".into(),
+                    "Правило доступа: ".into(),
                     rule_line.cyan(),
                 ]));
             }
@@ -573,7 +577,7 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
             let mut header: Vec<Box<dyn Renderable>> = Vec::new();
             if let Some(thread_label) = thread_label {
                 header.push(Box::new(Line::from(vec![
-                    "Thread: ".into(),
+                    "Тред: ".into(),
                     thread_label.clone().bold(),
                 ])));
                 header.push(Box::new(Line::from("")));
@@ -583,7 +587,7 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
             {
                 header.push(Box::new(
                     Paragraph::new(Line::from_iter([
-                        "Reason: ".into(),
+                        "Причина: ".into(),
                         reason.clone().italic(),
                     ]))
                     .wrap(Wrap { trim: false }),
@@ -602,13 +606,13 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
             let mut lines = Vec::new();
             if let Some(thread_label) = thread_label {
                 lines.push(Line::from(vec![
-                    "Thread: ".into(),
+                    "Тред: ".into(),
                     thread_label.clone().bold(),
                 ]));
                 lines.push(Line::from(""));
             }
             lines.extend([
-                Line::from(vec!["Server: ".into(), server_name.clone().bold()]),
+                Line::from(vec!["Сервер: ".into(), server_name.clone().bold()]),
                 Line::from(""),
                 Line::from(message.clone()),
             ]);
@@ -650,9 +654,9 @@ fn exec_options(
         .filter_map(|decision| match decision {
             ReviewDecision::Approved => Some(ApprovalOption {
                 label: if network_approval_context.is_some() {
-                    "Yes, just this once".to_string()
+                    "Да, только сейчас".to_string()
                 } else {
-                    "Yes, proceed".to_string()
+                    "Да, выполнить".to_string()
                 },
                 decision: ApprovalDecision::Review(ReviewDecision::Approved),
                 display_shortcut: None,
@@ -669,7 +673,7 @@ fn exec_options(
 
                 Some(ApprovalOption {
                     label: format!(
-                        "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
+                        "Да, и больше не спрашивать для команд, начинающихся с `{rendered_prefix}`"
                     ),
                     decision: ApprovalDecision::Review(
                         ReviewDecision::ApprovedExecpolicyAmendment {
@@ -682,11 +686,11 @@ fn exec_options(
             }
             ReviewDecision::ApprovedForSession => Some(ApprovalOption {
                 label: if network_approval_context.is_some() {
-                    "Yes, and allow this host for this conversation".to_string()
+                    "Да, и разрешить этот хост до конца диалога".to_string()
                 } else if additional_permissions.is_some() {
-                    "Yes, and allow these permissions for this session".to_string()
+                    "Да, и выдать эти права до конца сессии".to_string()
                 } else {
-                    "Yes, and don't ask again for this command in this session".to_string()
+                    "Да, и больше не спрашивать для этой команды в этой сессии".to_string()
                 },
                 decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
                 display_shortcut: None,
@@ -697,11 +701,11 @@ fn exec_options(
             } => {
                 let (label, shortcut) = match network_policy_amendment.action {
                     NetworkPolicyRuleAction::Allow => (
-                        "Yes, and allow this host in the future".to_string(),
+                        "Да, и всегда разрешать этот хост".to_string(),
                         KeyCode::Char('p'),
                     ),
                     NetworkPolicyRuleAction::Deny => (
-                        "No, and block this host in the future".to_string(),
+                        "Нет, и блокировать этот хост в будущем".to_string(),
                         KeyCode::Char('d'),
                     ),
                 };
@@ -715,13 +719,13 @@ fn exec_options(
                 })
             }
             ReviewDecision::Denied => Some(ApprovalOption {
-                label: "No, continue without running it".to_string(),
+                label: "Нет, продолжить без запуска".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Denied),
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('d'))],
             }),
             ReviewDecision::Abort => Some(ApprovalOption {
-                label: "No, and tell Codex what to do differently".to_string(),
+                label: "Нет, и дать другое указание".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Abort),
                 display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
@@ -740,7 +744,7 @@ pub(crate) fn format_additional_permissions_rule(
         .and_then(|network| network.enabled)
         .unwrap_or(false)
     {
-        parts.push("network".to_string());
+        parts.push("сеть".to_string());
     }
     if let Some(file_system) = additional_permissions.file_system.as_ref() {
         if let Some(read) = file_system.read.as_ref() {
@@ -749,7 +753,7 @@ pub(crate) fn format_additional_permissions_rule(
                 .map(|path| format!("`{}`", path.display()))
                 .collect::<Vec<_>>()
                 .join(", ");
-            parts.push(format!("read {reads}"));
+            parts.push(format!("чтение {reads}"));
         }
         if let Some(write) = file_system.write.as_ref() {
             let writes = write
@@ -757,7 +761,7 @@ pub(crate) fn format_additional_permissions_rule(
                 .map(|path| format!("`{}`", path.display()))
                 .collect::<Vec<_>>()
                 .join(", ");
-            parts.push(format!("write {writes}"));
+            parts.push(format!("запись {writes}"));
         }
     }
     if parts.is_empty() {
@@ -776,19 +780,19 @@ pub(crate) fn format_requested_permissions_rule(
 fn patch_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
-            label: "Yes, proceed".to_string(),
+            label: "Да, применить".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Approved),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
-            label: "Yes, and don't ask again for these files".to_string(),
+            label: "Да, и больше не спрашивать для этих файлов".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
-            label: "No, and tell Codex what to do differently".to_string(),
+            label: "Нет, и дать другое указание".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Abort),
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
@@ -799,19 +803,19 @@ fn patch_options() -> Vec<ApprovalOption> {
 fn permissions_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
-            label: "Yes, grant these permissions".to_string(),
+            label: "Да, выдать эти разрешения".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Approved),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
-            label: "Yes, grant these permissions for this session".to_string(),
+            label: "Да, выдать эти разрешения до конца сессии".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
-            label: "No, continue without permissions".to_string(),
+            label: "Нет, продолжить без разрешений".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Denied),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
@@ -822,19 +826,19 @@ fn permissions_options() -> Vec<ApprovalOption> {
 fn elicitation_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
-            label: "Yes, provide the requested info".to_string(),
+            label: "Да, предоставить запрошенные данные".to_string(),
             decision: ApprovalDecision::McpElicitation(ElicitationAction::Accept),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
-            label: "No, but continue without it".to_string(),
+            label: "Нет, продолжить без этого".to_string(),
             decision: ApprovalDecision::McpElicitation(ElicitationAction::Decline),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
         ApprovalOption {
-            label: "Cancel this request".to_string(),
+            label: "Отменить этот запрос".to_string(),
             decision: ApprovalDecision::McpElicitation(ElicitationAction::Cancel),
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('c'))],
@@ -893,7 +897,7 @@ mod tests {
             thread_label: None,
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
-            reason: Some("reason".to_string()),
+            reason: Some("причина".to_string()),
             available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
             additional_permissions: None,
@@ -905,7 +909,7 @@ mod tests {
             thread_id: ThreadId::new(),
             thread_label: None,
             call_id: "test".to_string(),
-            reason: Some("need workspace access".to_string()),
+            reason: Some("нужен доступ к рабочей папке".to_string()),
             permissions: RequestPermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
@@ -1156,10 +1160,10 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "Yes, just this once".to_string(),
-                "Yes, and allow this host for this conversation".to_string(),
-                "Yes, and allow this host in the future".to_string(),
-                "No, and tell Codex what to do differently".to_string(),
+                "Да, только сейчас".to_string(),
+                "Да, и разрешить этот хост до конца диалога".to_string(),
+                "Да, и всегда разрешать этот хост".to_string(),
+                "Нет, и дать другое указание".to_string(),
             ]
         );
     }
@@ -1180,9 +1184,9 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "Yes, proceed".to_string(),
-                "Yes, and don't ask again for this command in this session".to_string(),
-                "No, and tell Codex what to do differently".to_string(),
+                "Да, выполнить".to_string(),
+                "Да, и больше не спрашивать для этой команды в этой сессии".to_string(),
+                "Нет, и дать другое указание".to_string(),
             ]
         );
     }
@@ -1206,8 +1210,8 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "Yes, proceed".to_string(),
-                "No, and tell Codex what to do differently".to_string(),
+                "Да, выполнить".to_string(),
+                "Нет, и дать другое указание".to_string(),
             ]
         );
     }
@@ -1221,9 +1225,9 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "Yes, grant these permissions".to_string(),
-                "Yes, grant these permissions for this session".to_string(),
-                "No, continue without permissions".to_string(),
+                "Да, выдать эти разрешения".to_string(),
+                "Да, выдать эти разрешения до конца сессии".to_string(),
+                "Нет, продолжить без разрешений".to_string(),
             ]
         );
     }
@@ -1296,11 +1300,11 @@ mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains("Permission rule:")),
+                .any(|line| line.contains("Правило доступа:")),
             "expected permission-rule line, got {rendered:?}"
         );
         assert!(
-            rendered.iter().any(|line| line.contains("network;")),
+            rendered.iter().any(|line| line.contains("сеть;")),
             "expected network permission text, got {rendered:?}"
         );
     }
@@ -1314,7 +1318,7 @@ mod tests {
             thread_label: None,
             id: "test".into(),
             command: vec!["cat".into(), "/tmp/readme.txt".into()],
-            reason: Some("need filesystem access".into()),
+            reason: Some("нужен доступ к файловой системе".into()),
             available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
             additional_permissions: Some(PermissionProfile {
@@ -1355,7 +1359,7 @@ mod tests {
             thread_label: None,
             id: "test".into(),
             command: vec!["curl".into(), "https://example.com".into()],
-            reason: Some("network request blocked".into()),
+            reason: Some("сетевой запрос заблокирован".into()),
             available_decisions: vec![
                 ReviewDecision::Approved,
                 ReviewDecision::ApprovedForSession,
@@ -1392,16 +1396,16 @@ mod tests {
 
         assert!(
             rendered.iter().any(|line| {
-                line.contains("Do you want to approve network access to \"example.com\"?")
+                line.contains("Разрешить сетевой доступ к \"example.com\"?")
             }),
-            "expected network title to include host, got {rendered:?}"
+            "ожидали заголовок с именем хоста, got {rendered:?}"
         );
         assert!(
             !rendered.iter().any(|line| line.contains("$ curl")),
             "network prompt should not show command line, got {rendered:?}"
         );
         assert!(
-            !rendered.iter().any(|line| line.contains("don't ask again")),
+            !rendered.iter().any(|line| line.contains("больше не спрашивать")),
             "network prompt should not show execpolicy option, got {rendered:?}"
         );
     }

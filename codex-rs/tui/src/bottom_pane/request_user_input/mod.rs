@@ -38,21 +38,44 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use unicode_width::UnicodeWidthStr;
 
-const NOTES_PLACEHOLDER: &str = "Add notes";
-const ANSWER_PLACEHOLDER: &str = "Type your answer (optional)";
+const NOTES_PLACEHOLDER: &str = "Добавить заметки";
+const ANSWER_PLACEHOLDER: &str = "Введите ответ (необязательно)";
 // Keep in sync with ChatComposer's minimum composer height.
 const MIN_COMPOSER_HEIGHT: u16 = 3;
-const SELECT_OPTION_PLACEHOLDER: &str = "Select an option to add notes";
+const SELECT_OPTION_PLACEHOLDER: &str = "Выберите вариант, чтобы добавить заметки";
 pub(super) const TIP_SEPARATOR: &str = " | ";
 pub(super) const DESIRED_SPACERS_BETWEEN_SECTIONS: u16 = 2;
-const OTHER_OPTION_LABEL: &str = "None of the above";
-const OTHER_OPTION_DESCRIPTION: &str = "Optionally, add details in notes (tab).";
-const UNANSWERED_CONFIRM_TITLE: &str = "Submit with unanswered questions?";
-const UNANSWERED_CONFIRM_GO_BACK: &str = "Go back";
-const UNANSWERED_CONFIRM_GO_BACK_DESC: &str = "Return to the first unanswered question.";
-const UNANSWERED_CONFIRM_SUBMIT: &str = "Proceed";
-const UNANSWERED_CONFIRM_SUBMIT_DESC_SINGULAR: &str = "question";
-const UNANSWERED_CONFIRM_SUBMIT_DESC_PLURAL: &str = "questions";
+const OTHER_OPTION_LABEL: &str = "Ни один из вариантов";
+const OTHER_OPTION_DESCRIPTION: &str = "Если нужно, добавьте детали в заметках (Tab).";
+const UNANSWERED_CONFIRM_TITLE: &str = "Отправить с вопросами без ответа?";
+const UNANSWERED_CONFIRM_GO_BACK: &str = "Вернуться";
+const UNANSWERED_CONFIRM_GO_BACK_DESC: &str = "Перейти к первому вопросу без ответа.";
+const UNANSWERED_CONFIRM_SUBMIT: &str = "Отправить";
+
+fn russian_question_word(count: usize) -> &'static str {
+    let mod100 = count % 100;
+    if (11..=14).contains(&mod100) {
+        return "вопросов";
+    }
+    match count % 10 {
+        1 => "вопрос",
+        2..=4 => "вопроса",
+        _ => "вопросов",
+    }
+}
+
+pub(super) fn russian_question_phrase(count: usize, adjective: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    parts.push(count.to_string());
+    if let Some(adj) = adjective {
+        if !adj.is_empty() {
+            parts.push(adj.to_string());
+        }
+    }
+    parts.push(russian_question_word(count).to_string());
+    parts.join(" ")
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -432,32 +455,32 @@ impl RequestUserInputOverlay {
         let notes_visible = self.notes_ui_visible();
         if self.has_options() {
             if self.selected_option_index().is_some() && !notes_visible {
-                tips.push(FooterTip::highlighted("tab to add notes"));
+                tips.push(FooterTip::highlighted("Tab — открыть заметки"));
             }
             if self.selected_option_index().is_some() && notes_visible {
-                tips.push(FooterTip::new("tab or esc to clear notes"));
+                tips.push(FooterTip::new("Tab или Esc — очистить заметки"));
             }
         }
 
         let question_count = self.question_count();
         let is_last_question = self.current_index().saturating_add(1) >= question_count;
         let enter_tip = if question_count == 1 {
-            FooterTip::highlighted("enter to submit answer")
+            FooterTip::highlighted("Enter — отправить ответ")
         } else if is_last_question {
-            FooterTip::highlighted("enter to submit all")
+            FooterTip::highlighted("Enter — отправить всё")
         } else {
-            FooterTip::new("enter to submit answer")
+            FooterTip::new("Enter — отправить ответ")
         };
         tips.push(enter_tip);
         if question_count > 1 {
             if self.has_options() && !self.focus_is_notes() {
-                tips.push(FooterTip::new("←/→ to navigate questions"));
+                tips.push(FooterTip::new("←/→ — переключить вопрос"));
             } else if !self.has_options() {
-                tips.push(FooterTip::new("ctrl + p / ctrl + n change question"));
+                tips.push(FooterTip::new("Ctrl+P / Ctrl+N — переключить вопрос"));
             }
         }
         if !(self.has_options() && notes_visible) {
-            tips.push(FooterTip::new("esc to interrupt"));
+            tips.push(FooterTip::new("Esc — прервать"));
         }
         tips
     }
@@ -785,12 +808,8 @@ impl RequestUserInputOverlay {
 
     fn unanswered_submit_description(&self) -> String {
         let count = self.unanswered_question_count();
-        let suffix = if count == 1 {
-            UNANSWERED_CONFIRM_SUBMIT_DESC_SINGULAR
-        } else {
-            UNANSWERED_CONFIRM_SUBMIT_DESC_PLURAL
-        };
-        format!("Submit with {count} unanswered {suffix}.")
+        let phrase = russian_question_phrase(count, None);
+        format!("Отправить, оставив {phrase} без ответа.")
     }
 
     fn first_unanswered_index(&self) -> Option<usize> {
@@ -1314,21 +1333,21 @@ mod tests {
         RequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
-            question: "Choose an option.".to_string(),
+            question: "Выберите вариант.".to_string(),
             is_other: false,
             is_secret: false,
             options: Some(vec![
                 RequestUserInputQuestionOption {
-                    label: "Option 1".to_string(),
-                    description: "First choice.".to_string(),
+                    label: "Вариант 1".to_string(),
+                    description: "Первый вариант.".to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "Option 2".to_string(),
-                    description: "Second choice.".to_string(),
+                    label: "Вариант 2".to_string(),
+                    description: "Второй вариант.".to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "Option 3".to_string(),
-                    description: "Third choice.".to_string(),
+                    label: "Вариант 3".to_string(),
+                    description: "Третий вариант.".to_string(),
                 },
             ]),
         }
@@ -1338,21 +1357,21 @@ mod tests {
         RequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
-            question: "Choose an option.".to_string(),
+            question: "Выберите вариант.".to_string(),
             is_other: true,
             is_secret: false,
             options: Some(vec![
                 RequestUserInputQuestionOption {
-                    label: "Option 1".to_string(),
-                    description: "First choice.".to_string(),
+                    label: "Вариант 1".to_string(),
+                    description: "Первый вариант.".to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "Option 2".to_string(),
-                    description: "Second choice.".to_string(),
+                    label: "Вариант 2".to_string(),
+                    description: "Второй вариант.".to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "Option 3".to_string(),
-                    description: "Third choice.".to_string(),
+                    label: "Вариант 3".to_string(),
+                    description: "Третий вариант.".to_string(),
                 },
             ]),
         }
@@ -1362,26 +1381,26 @@ mod tests {
         RequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
-            question: "Choose the next step for this task.".to_string(),
+            question: "Выберите следующий шаг для этой задачи.".to_string(),
             is_other: false,
             is_secret: false,
             options: Some(vec![
                 RequestUserInputQuestionOption {
-                    label: "Discuss a code change".to_string(),
+                    label: "Обсудить изменение кода".to_string(),
                     description:
-                        "Walk through a plan, then implement it together with careful checks."
+                        "Пройдёмся по плану, затем реализуем и тщательно проверим."
                             .to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "Run targeted tests".to_string(),
+                    label: "Запустить точечные тесты".to_string(),
                     description:
-                        "Pick the most relevant crate and validate the current behavior first."
+                        "Выберем самый подходящий пакет и сначала проверим текущее поведение."
                             .to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "Review the diff".to_string(),
+                    label: "Проверить дифф".to_string(),
                     description:
-                        "Summarize the changes and highlight the most important risks and gaps."
+                        "Суммируем изменения и выделим самые важные риски и пробелы."
                             .to_string(),
                 },
             ]),
@@ -1392,17 +1411,17 @@ mod tests {
         RequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
-            question: "Choose one option.".to_string(),
+            question: "Выберите один вариант.".to_string(),
             is_other: false,
             is_secret: false,
             options: Some(vec![
                 RequestUserInputQuestionOption {
-                    label: "Job: running/completed/failed/expired; Run/Experiment: succeeded/failed/unknown (Recommended when triaging long-running background work and status transitions)".to_string(),
-                    description: "Keep async job statuses for progress tracking and include enough context for debugging retries, stale workers, and unexpected expiration paths.".to_string(),
+                    label: "Задача: запущена/завершена/ошибка/просрочена; Запуск/эксперимент: успешно/ошибка/неизвестно (рекомендуется для разбора долгих фоновых задач и переходов статусов)".to_string(),
+                    description: "Оставляем подробные асинхронные статусы: так проще отслеживать прогресс и разбирать ретраи, зависшие воркеры и внезапные истечения срока.".to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "Add a short status model".to_string(),
-                    description: "Simpler labels with less detail for quick rollouts.".to_string(),
+                    label: "Добавить короткую модель статусов".to_string(),
+                    description: "Более простые ярлыки с минимумом деталей для быстрых релизов.".to_string(),
                 },
             ]),
         }
@@ -1413,27 +1432,27 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question:
-                "Choose one option; each hint is intentionally very long to test wrapped scrolling."
+                "Выберите один вариант: каждая подсказка намеренно длинная, чтобы проверить перенос строк и прокрутку."
                     .to_string(),
             is_other: false,
             is_secret: false,
             options: Some(vec![
                 RequestUserInputQuestionOption {
-                    label: "Use Detailed Hint A (Recommended)".to_string(),
-                    description: "Select this if you want a deliberately overextended explanatory hint that reads like a miniature specification, including context, rationale, expected behavior, and an explicit statement that this choice is mainly for testing how gracefully the interface wraps, truncates, and preserves readability under unusually verbose helper text conditions.".to_string(),
+                    label: "Использовать подробную подсказку A (рекомендуется)".to_string(),
+                    description: "Выберите это, если нужна намеренно перегруженная подсказка в стиле мини-спецификации: с контекстом, мотивацией, ожидаемым поведением и явным акцентом на проверку того, как интерфейс переносит, обрезает и сохраняет читаемость при очень длинных служебных текстах.".to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "Use Detailed Hint B".to_string(),
-                    description: "Select this if you want an equally verbose but differently phrased guidance block that emphasizes user-facing clarity, spacing tolerance, multiline wrapping, visual hierarchy interactions, and whether long descriptive metadata remains understandable when scanned quickly in a constrained layout where cognitive load is already high.".to_string(),
+                    label: "Использовать подробную подсказку B".to_string(),
+                    description: "Выберите это, если нужен такой же объёмный, но иначе сформулированный блок: с упором на понятность для пользователя, устойчивость к плотной вёрстке, многострочный перенос, визуальную иерархию и читаемость длинных описаний в тесном интерфейсе.".to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "Use Detailed Hint C".to_string(),
-                    description: "Select this when you specifically want to verify that navigating downward will keep the currently highlighted option visible, even when previous options consume many wrapped lines and would otherwise push the selection out of the viewport.".to_string(),
+                    label: "Использовать подробную подсказку C".to_string(),
+                    description: "Выберите это, если нужно проверить, что при движении вниз текущий выделенный вариант остаётся видимым, даже когда предыдущие пункты занимают много строк и обычно вытесняют выбор за пределы окна.".to_string(),
                 },
                 RequestUserInputQuestionOption {
-                    label: "None of the above".to_string(),
+                    label: "Ничего из перечисленного".to_string(),
                     description:
-                        "Use this only if the previous long-form options do not apply.".to_string(),
+                        "Выбирайте, только если предыдущие подробные варианты не подходят.".to_string(),
                 },
             ]),
         }
@@ -1443,7 +1462,7 @@ mod tests {
         RequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
-            question: "Share details.".to_string(),
+            question: "Опишите детали.".to_string(),
             is_other: false,
             is_secret: false,
             options: None,
@@ -1572,7 +1591,7 @@ mod tests {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+        assert_eq!(answer.answers, vec!["Вариант 1".to_string()]);
     }
 
     #[test]
@@ -1611,13 +1630,13 @@ mod tests {
         expected.insert(
             "q1".to_string(),
             RequestUserInputAnswer {
-                answers: vec!["Option 1".to_string()],
+                answers: vec!["Вариант 1".to_string()],
             },
         );
         expected.insert(
             "q2".to_string(),
             RequestUserInputAnswer {
-                answers: vec!["Option 1".to_string()],
+                answers: vec!["Вариант 1".to_string()],
             },
         );
         assert_eq!(response.answers, expected);
@@ -1641,7 +1660,7 @@ mod tests {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.answers, vec!["Option 2".to_string()]);
+        assert_eq!(answer.answers, vec!["Вариант 2".to_string()]);
     }
 
     #[test]
@@ -1761,10 +1780,10 @@ mod tests {
         assert_eq!(
             tip_texts,
             vec![
-                "tab to add notes",
-                "enter to submit answer",
-                "←/→ to navigate questions",
-                "esc to interrupt",
+                "Tab — открыть заметки",
+                "Enter — отправить ответ",
+                "←/→ — переключить вопрос",
+                "Esc — прервать",
             ]
         );
 
@@ -1773,7 +1792,7 @@ mod tests {
         let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
         assert_eq!(
             tip_texts,
-            vec!["tab or esc to clear notes", "enter to submit answer",]
+            vec!["Tab или Esc — очистить заметки", "Enter — отправить ответ",]
         );
     }
 
@@ -1800,9 +1819,9 @@ mod tests {
         assert_eq!(
             tip_texts,
             vec![
-                "enter to submit all",
-                "ctrl + p / ctrl + n change question",
-                "esc to interrupt",
+                "Enter — отправить всё",
+                "Ctrl+P / Ctrl+N — переключить вопрос",
+                "Esc — прервать",
             ]
         );
     }
@@ -1893,7 +1912,7 @@ mod tests {
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, Vec::<String>::new());
         let answer = response.answers.get("q2").expect("answer missing");
-        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+        assert_eq!(answer.answers, vec!["Вариант 1".to_string()]);
     }
 
     #[test]
@@ -2280,7 +2299,7 @@ mod tests {
         overlay.select_current_option(/*committed*/ false);
         overlay
             .composer
-            .set_text_content("Notes for option 2".to_string(), Vec::new(), Vec::new());
+            .set_text_content("Заметка для варианта 2".to_string(), Vec::new(), Vec::new());
         overlay.composer.move_cursor_to_end();
         let draft = overlay.capture_composer_draft();
         if let Some(answer) = overlay.current_answer_mut() {
@@ -2298,8 +2317,8 @@ mod tests {
         assert_eq!(
             answer.answers,
             vec![
-                "Option 2".to_string(),
-                "user_note: Notes for option 2".to_string(),
+                "Вариант 2".to_string(),
+                "user_note: Заметка для варианта 2".to_string(),
             ]
         );
     }
@@ -2352,7 +2371,7 @@ mod tests {
 
         let rows = overlay.option_rows();
         let other_row = rows.last().expect("expected none-of-the-above row");
-        assert_eq!(other_row.name, "  4. None of the above");
+        assert_eq!(other_row.name, "  4. Ничего из перечисленного");
         assert_eq!(
             other_row.description.as_deref(),
             Some(OTHER_OPTION_DESCRIPTION)
@@ -2670,7 +2689,7 @@ mod tests {
 
         let rendered = render_snapshot(&overlay, Rect::new(0, 0, 80, 20));
         assert!(
-            rendered.contains("› 3. Use Detailed Hint C"),
+            rendered.contains("› 3. Использовать подробную подсказку C"),
             "expected selected option to be visible in viewport\n{rendered}"
         );
     }
@@ -2712,29 +2731,29 @@ mod tests {
                 vec![RequestUserInputQuestion {
                     id: "q1".to_string(),
                     header: "Next Step".to_string(),
-                    question: "What would you like to do next?".to_string(),
+                    question: "Что делаем дальше?".to_string(),
                     is_other: false,
                     is_secret: false,
                     options: Some(vec![
                         RequestUserInputQuestionOption {
-                            label: "Discuss a code change (Recommended)".to_string(),
-                            description: "Walk through a plan and edit code together.".to_string(),
+                            label: "Обсудить изменение кода (рекомендуется)".to_string(),
+                            description: "Пройдёмся по плану и вместе внесём правки.".to_string(),
                         },
                         RequestUserInputQuestionOption {
-                            label: "Run tests".to_string(),
-                            description: "Pick a crate and run its tests.".to_string(),
+                            label: "Запустить тесты".to_string(),
+                            description: "Выбрать пакет и прогнать его тесты.".to_string(),
                         },
                         RequestUserInputQuestionOption {
-                            label: "Review a diff".to_string(),
-                            description: "Summarize or review current changes.".to_string(),
+                            label: "Проверить дифф".to_string(),
+                            description: "Кратко разобрать текущие изменения.".to_string(),
                         },
                         RequestUserInputQuestionOption {
-                            label: "Refactor".to_string(),
-                            description: "Tighten structure and remove dead code.".to_string(),
+                            label: "Рефакторинг".to_string(),
+                            description: "Подчистить структуру и убрать мёртвый код.".to_string(),
                         },
                         RequestUserInputQuestionOption {
-                            label: "Ship it".to_string(),
-                            description: "Finalize and open a PR.".to_string(),
+                            label: "Завершить и открыть PR".to_string(),
+                            description: "Финализировать и отправить в PR.".to_string(),
                         },
                     ]),
                 }],
@@ -2764,29 +2783,29 @@ mod tests {
                 vec![RequestUserInputQuestion {
                     id: "q1".to_string(),
                     header: "Next Step".to_string(),
-                    question: "What would you like to do next?".to_string(),
+                    question: "Что делаем дальше?".to_string(),
                     is_other: false,
                     is_secret: false,
                     options: Some(vec![
                         RequestUserInputQuestionOption {
-                            label: "Discuss a code change (Recommended)".to_string(),
-                            description: "Walk through a plan and edit code together.".to_string(),
+                            label: "Обсудить изменение кода (рекомендуется)".to_string(),
+                            description: "Пройдёмся по плану и вместе внесём правки.".to_string(),
                         },
                         RequestUserInputQuestionOption {
-                            label: "Run tests".to_string(),
-                            description: "Pick a crate and run its tests.".to_string(),
+                            label: "Запустить тесты".to_string(),
+                            description: "Выбрать пакет и прогнать его тесты.".to_string(),
                         },
                         RequestUserInputQuestionOption {
-                            label: "Review a diff".to_string(),
-                            description: "Summarize or review current changes.".to_string(),
+                            label: "Проверить дифф".to_string(),
+                            description: "Кратко разобрать текущие изменения.".to_string(),
                         },
                         RequestUserInputQuestionOption {
-                            label: "Refactor".to_string(),
-                            description: "Tighten structure and remove dead code.".to_string(),
+                            label: "Рефакторинг".to_string(),
+                            description: "Подчистить структуру и убрать мёртвый код.".to_string(),
                         },
                         RequestUserInputQuestionOption {
-                            label: "Ship it".to_string(),
-                            description: "Finalize and open a PR.".to_string(),
+                            label: "Завершить и открыть PR".to_string(),
+                            description: "Финализировать и отправить в PR.".to_string(),
                         },
                     ]),
                 }],

@@ -23,22 +23,22 @@ pub fn builtin_approval_presets() -> Vec<ApprovalPreset> {
     vec![
         ApprovalPreset {
             id: "read-only",
-            label: "Read Only",
-            description: "Codex can read files in the current workspace. Approval is required to edit files or access the internet.",
+            label: "Только чтение",
+            description: "Lavilas Codex может читать файлы в текущем рабочем каталоге. Для редактирования файлов или доступа в интернет требуется подтверждение.",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::new_read_only_policy(),
         },
         ApprovalPreset {
             id: "auto",
-            label: "Default",
-            description: "Codex can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files. (Identical to Agent mode)",
+            label: "По умолчанию",
+            description: "Lavilas Codex может читать и редактировать файлы в текущем рабочем каталоге и запускать команды. Для доступа в интернет или редактирования файлов вне рабочего каталога требуется подтверждение. (Соответствует режиму Agent.)",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::new_workspace_write_policy(),
         },
         ApprovalPreset {
             id: "full-access",
-            label: "Full Access",
-            description: "Codex can edit files outside this workspace and access the internet without asking for approval. Exercise caution when using.",
+            label: "Полный доступ",
+            description: "Lavilas Codex может редактировать файлы вне рабочего каталога и выходить в интернет без запроса подтверждения. Используйте с осторожностью.",
             approval: AskForApproval::Never,
             sandbox: SandboxPolicy::DangerFullAccess,
         },

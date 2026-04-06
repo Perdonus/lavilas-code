@@ -3,6 +3,7 @@ use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
 
 use super::CancellationEvent;
 
@@ -11,6 +12,9 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
     fn handle_key_event(&mut self, _key_event: KeyEvent) {}
+
+    /// Handle a mouse event while the view is active.
+    fn handle_mouse_event(&mut self, _mouse_event: MouseEvent) {}
 
     /// Return `true` if the view has finished and should be removed.
     fn is_complete(&self) -> bool {

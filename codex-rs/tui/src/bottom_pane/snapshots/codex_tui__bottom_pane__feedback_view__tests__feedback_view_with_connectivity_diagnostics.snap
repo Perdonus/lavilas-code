@@ -2,8 +2,8 @@
 source: tui/src/bottom_pane/feedback_view.rs
 expression: rendered
 ---
-▌ Tell us more (bug)
+▌ Опишите ошибку
 ▌
-▌ (optional) Write a short description to help us further
+▌ (необязательно) Расскажите, где и как повторяется сбой
 
-Press enter to confirm or esc to go back
+Нажмите Enter для подтверждения или Esc для возврата

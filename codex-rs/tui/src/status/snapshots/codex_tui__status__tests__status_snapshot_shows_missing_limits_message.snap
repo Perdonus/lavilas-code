@@ -5,17 +5,17 @@ expression: sanitized
 /status
 
 ╭───────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                                             │
+│  >_ Lavilas Codex (v0.0.0)                                             │
 │                                                                       │
-│ Visit https://chatgpt.com/codex/settings/usage for up-to-date         │
-│ information on rate limits and credits                                │
+│ Откройте https://chatgpt.com/codex/settings/usage для актуальной         │
+│ информации о лимитах и кредитах                                │
 │                                                                       │
-│  Model:            gpt-5.1-codex-max (reasoning none, summaries auto) │
-│  Directory: [[workspace]]                                             │
-│  Permissions:      Custom (read-only, on-request)                     │
-│  Agents.md:        <none>                                             │
+│  Модель:            gpt-5.1-codex-max (размышления выкл, сводки авто) │
+│  Каталог: [[workspace]]                                             │
+│  Доступ:      Пользовательский (Только чтение, по запросу)                     │
+│  AGENTS.md:        <нет>                                             │
 │                                                                       │
-│  Token usage:      750 total  (500 input + 250 output)                │
-│  Context window:   100% left (750 used / 272K)                        │
-│  Limits:           data not available yet                             │
+│  Токены:      750 всего  (500 вход + 250 выход)                │
+│  Контекстное окно:   100% осталось (750 использовано / 272K)                        │
+│  Лимиты:           данные пока недоступны                             │
 ╰───────────────────────────────────────────────────────────────────────╯

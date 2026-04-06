@@ -3,12 +3,12 @@ source: tui/src/bottom_pane/request_user_input/mod.rs
 expression: "render_snapshot(&overlay, area)"
 ---
                                                     
-  Question 1/2 (2 unanswered)                       
-  Choose an option.                                 
+  Вопрос 1/2 (2 вопроса без ответа)
+  Выберите вариант.                                 
                                                     
-    1. Option 1  First choice.                      
-  › 2. Option 2  Second choice.                     
-    3. Option 3  Third choice.                      
+    1. Вариант 1  Первый вариант.                      
+  › 2. Вариант 2  Второй вариант.                     
+    3. Вариант 3  Третий вариант.                      
                                                     
-  tab to add notes | enter to submit answer         
-  ←/→ to navigate questions | esc to interrupt
+  Tab — открыть заметки | Enter — отправить ответ         
+  ←/→ — переключить вопрос | Esc — прервать

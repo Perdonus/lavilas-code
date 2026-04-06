@@ -3,11 +3,11 @@ source: tui/src/bottom_pane/list_selection_view.rs
 expression: "render_lines_with_width(&view, 80)"
 ---
                                                                                 
-  Select Model and Effort                                                       
+  Каталог моделей                                                       
                                                                                 
-› 1. gpt-5.1-codex (current)  Optimized for Codex. Balance of reasoning         
-                              quality and coding ability.                       
-  2. gpt-5.1-codex-mini       Optimized for Codex. Cheaper, faster, but less    
-                              capable.                                          
-  3. gpt-4.1-codex            Legacy model. Use when you need compatibility     
-                              with older automations.
+› 1. gpt-5.1-codex (current)  Оптимизирована под Codex. Баланс качества
+                              рассуждений и навыков кодинга.                       
+  2. gpt-5.1-codex-mini       Оптимизирована под Codex: дешевле и быстрее, но  
+                              слабее по возможностям.                                          
+  3. gpt-4.1-codex            Устаревшая модель. Нужна для совместимости со    
+                              старыми автоматизациями.

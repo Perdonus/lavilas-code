@@ -19,6 +19,20 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
+const COMPATIBILITY_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
+const COMPATIBILITY_PROVIDER_HINTS: [&str; 11] = [
+    "anthropic",
+    "claude",
+    "deepseek",
+    "gemini",
+    "grok",
+    "kimi",
+    "llama",
+    "mistral",
+    "nova",
+    "openrouter",
+    "qwen",
+];
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
     if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries
@@ -59,6 +73,22 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
 /// Build a minimal fallback model descriptor for missing/unknown slugs.
 pub fn model_info_from_slug(slug: &str) -> ModelInfo {
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
+    generic_model_info_from_slug(slug, /*used_fallback_model_metadata*/ true)
+}
+
+/// Build a best-effort compatibility descriptor for common third-party
+/// provider slugs so they do not fall into the user-visible fallback warning
+/// path when the provider model catalog is unavailable.
+pub fn compatibility_model_info_from_slug(slug: &str) -> Option<ModelInfo> {
+    let compatibility_base = compatibility_base_slug(slug)?;
+    let mut model = generic_model_info_from_slug(slug, /*used_fallback_model_metadata*/ false);
+    model.display_name = compatibility_display_name(compatibility_base);
+    model.supports_parallel_tool_calls = slug_has_tool_variant(slug);
+    model.supports_search_tool = slug_has_tool_variant(slug);
+    Some(model)
+}
+
+fn generic_model_info_from_slug(slug: &str, used_fallback_model_metadata: bool) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
         display_name: slug.to_string(),
@@ -87,9 +117,65 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
-        used_fallback_model_metadata: true, // this is the fallback model metadata
+        used_fallback_model_metadata,
         supports_search_tool: false,
     }
+}
+
+fn compatibility_base_slug(slug: &str) -> Option<&str> {
+    let terminal_segment = slug.rsplit('/').next()?;
+    if terminal_segment.is_empty() {
+        return None;
+    }
+
+    let variant_base = COMPATIBILITY_VARIANT_SUFFIXES
+        .iter()
+        .find_map(|suffix| terminal_segment.strip_suffix(suffix))
+        .filter(|base| !base.is_empty());
+
+    let candidate = variant_base.unwrap_or(terminal_segment);
+    let looks_like_provider_slug = (candidate.contains('-') || candidate.contains('_'))
+        && COMPATIBILITY_PROVIDER_HINTS
+            .iter()
+            .any(|hint| candidate.contains(hint));
+    if variant_base.is_some() || looks_like_provider_slug {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+fn compatibility_display_name(base_slug: &str) -> String {
+    base_slug
+        .split(['-', '_'])
+        .filter(|segment| !segment.is_empty())
+        .map(title_case_slug_segment)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn title_case_slug_segment(segment: &str) -> String {
+    match segment {
+        "api" => "API".to_string(),
+        "cli" => "CLI".to_string(),
+        "vl" => "VL".to_string(),
+        other => {
+            let mut chars = other.chars();
+            let Some(first) = chars.next() else {
+                return String::new();
+            };
+            let mut output = String::new();
+            output.extend(first.to_uppercase());
+            output.push_str(chars.as_str());
+            output
+        }
+    }
+}
+
+fn slug_has_tool_variant(slug: &str) -> bool {
+    COMPATIBILITY_VARIANT_SUFFIXES[..2]
+        .iter()
+        .any(|suffix| slug.ends_with(suffix))
 }
 
 fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {

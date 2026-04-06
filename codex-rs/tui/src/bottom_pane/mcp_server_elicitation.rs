@@ -45,8 +45,8 @@ use crate::render::renderable::Renderable;
 use crate::text_formatting::format_json_compact;
 use crate::text_formatting::truncate_text;
 
-const ANSWER_PLACEHOLDER: &str = "Type your answer";
-const OPTIONAL_ANSWER_PLACEHOLDER: &str = "Type your answer (optional)";
+const ANSWER_PLACEHOLDER: &str = "Введите ответ";
+const OPTIONAL_ANSWER_PLACEHOLDER: &str = "Введите ответ (необязательно)";
 const FOOTER_SEPARATOR: &str = " | ";
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 const MIN_OVERLAY_HEIGHT: u16 = 8;
@@ -72,6 +72,25 @@ const TOOL_NAME_KEY: &str = "tool_name";
 const TOOL_SUGGEST_SUGGEST_TYPE_KEY: &str = "suggest_type";
 const TOOL_SUGGEST_REASON_KEY: &str = "suggest_reason";
 const TOOL_SUGGEST_INSTALL_URL_KEY: &str = "install_url";
+
+
+fn russian_question_word(count: usize) -> &'static str {
+    let mod100 = count % 100;
+    if (11..=14).contains(&mod100) {
+        return "вопросов";
+    }
+    match count % 10 {
+        1 => "вопрос",
+        2..=4 => "вопроса",
+        _ => "вопросов",
+    }
+}
+
+fn russian_required_question_phrase(count: usize) -> String {
+    let word = russian_question_word(count);
+    let adjective = if count == 1 { "обязательный" } else { "обязательных" };
+    format!("{count} {adjective} {word}")
+}
 
 #[derive(Clone, PartialEq, Default)]
 struct ComposerDraft {
@@ -292,8 +311,8 @@ impl McpServerElicitationFormRequest {
             (McpServerElicitationResponseMode::FormContent, Vec::new())
         } else if requested_schema.is_null() || (is_tool_approval && is_empty_object_schema) {
             let mut options = vec![McpServerElicitationOption {
-                label: "Allow".to_string(),
-                description: Some("Run the tool and continue.".to_string()),
+                label: "Разрешить".to_string(),
+                description: Some("Запустить инструмент и продолжить.".to_string()),
                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
             }];
             if is_tool_approval_action
@@ -303,9 +322,9 @@ impl McpServerElicitationFormRequest {
                 )
             {
                 options.push(McpServerElicitationOption {
-                    label: "Allow for this session".to_string(),
+                    label: "Разрешить до конца сессии".to_string(),
                     description: Some(
-                        "Run the tool and remember this choice for this session.".to_string(),
+                        "Запустить инструмент и запомнить выбор до конца текущей сессии.".to_string(),
                     ),
                     value: Value::String(APPROVAL_ACCEPT_SESSION_VALUE.to_string()),
                 });
@@ -314,29 +333,29 @@ impl McpServerElicitationFormRequest {
                 && tool_approval_supports_persist_mode(meta.as_ref(), APPROVAL_PERSIST_ALWAYS_VALUE)
             {
                 options.push(McpServerElicitationOption {
-                    label: "Always allow".to_string(),
+                    label: "Всегда разрешать".to_string(),
                     description: Some(
-                        "Run the tool and remember this choice for future tool calls.".to_string(),
+                        "Запустить инструмент и запомнить выбор для будущих вызовов.".to_string(),
                     ),
                     value: Value::String(APPROVAL_ACCEPT_ALWAYS_VALUE.to_string()),
                 });
             }
             if is_tool_approval_action {
                 options.push(McpServerElicitationOption {
-                    label: "Cancel".to_string(),
-                    description: Some("Cancel this tool call".to_string()),
+                    label: "Отменить".to_string(),
+                    description: Some("Отменить этот вызов инструмента.".to_string()),
                     value: Value::String(APPROVAL_CANCEL_VALUE.to_string()),
                 });
             } else {
                 options.extend([
                     McpServerElicitationOption {
-                        label: "Deny".to_string(),
-                        description: Some("Decline this tool call and continue.".to_string()),
+                        label: "Отклонить".to_string(),
+                        description: Some("Отклонить этот вызов и продолжить.".to_string()),
                         value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
                     },
                     McpServerElicitationOption {
-                        label: "Cancel".to_string(),
-                        description: Some("Cancel this tool call".to_string()),
+                        label: "Отменить".to_string(),
+                        description: Some("Отменить этот вызов инструмента.".to_string()),
                         value: Value::String(APPROVAL_CANCEL_VALUE.to_string()),
                     },
                 ]);
@@ -600,7 +619,7 @@ fn parse_field(
             let options = [true, false]
                 .into_iter()
                 .map(|value| {
-                    let label = if value { "True" } else { "False" }.to_string();
+                    let label = if value { "Да" } else { "Нет" }.to_string();
                     McpServerElicitationOption {
                         label,
                         description: None,
@@ -986,27 +1005,27 @@ impl McpServerElicitationOverlay {
         let is_last_field = self.current_index().saturating_add(1) >= self.field_count();
         if self.current_field_is_select() {
             if self.field_count() == 1 {
-                tips.push(FooterTip::highlighted("enter to submit"));
+                tips.push(FooterTip::highlighted("Enter — подтвердить"));
             } else if is_last_field {
-                tips.push(FooterTip::highlighted("enter to submit all"));
+                tips.push(FooterTip::highlighted("Enter — подтвердить всё"));
             } else {
-                tips.push(FooterTip::new("enter to submit answer"));
+                tips.push(FooterTip::new("Enter — отправить ответ"));
             }
         } else if self.field_count() == 1 {
-            tips.push(FooterTip::highlighted("enter to submit"));
+            tips.push(FooterTip::highlighted("Enter — подтвердить"));
         } else if is_last_field {
-            tips.push(FooterTip::highlighted("enter to submit all"));
+            tips.push(FooterTip::highlighted("Enter — подтвердить всё"));
         } else {
-            tips.push(FooterTip::new("enter to submit answer"));
+            tips.push(FooterTip::new("Enter — отправить ответ"));
         }
         if self.field_count() > 1 {
             if self.current_field_is_select() {
-                tips.push(FooterTip::new("←/→ to navigate fields"));
+                tips.push(FooterTip::new("←/→ — переключить поле"));
             } else {
-                tips.push(FooterTip::new("ctrl + p / ctrl + n change field"));
+                tips.push(FooterTip::new("Ctrl+P / Ctrl+N — переключить поле"));
             }
         }
-        tips.push(FooterTip::new("esc to cancel"));
+        tips.push(FooterTip::new("Esc — отменить"));
         tips
     }
 
@@ -1146,7 +1165,7 @@ impl McpServerElicitationOverlay {
     fn submit_answers(&mut self) {
         self.save_current_draft();
         if let Some(idx) = self.first_required_unanswered_index() {
-            self.validation_error = Some("Answer required fields before submitting.".to_string());
+            self.validation_error = Some("Заполните обязательные поля перед отправкой.".to_string());
             self.jump_to_field(idx);
             return;
         }
@@ -1302,7 +1321,7 @@ impl McpServerElicitationOverlay {
                 state.selected_idx = Some(0);
             }
             state.ensure_visible(rows.len(), area.height as usize);
-            render_rows(area, buf, &rows, &state, rows.len().max(1), "No options");
+            render_rows(area, buf, &rows, &state, rows.len().max(1), "Нет опций");
             return;
         }
         if self.current_field_is_secret() {
@@ -1322,7 +1341,7 @@ impl McpServerElicitationOverlay {
         let option_tip = if options_hidden {
             let selected = self.selected_option_index().unwrap_or(0).saturating_add(1);
             let total = self.options_len();
-            Some(FooterTip::new(format!("option {selected}/{total}")))
+            Some(FooterTip::new(format!("вариант {selected}/{total}")))
         } else {
             None
         };
@@ -1436,14 +1455,15 @@ impl Renderable for McpServerElicitationOverlay {
         let progress_line = if self.field_count() > 0 {
             let idx = self.current_index() + 1;
             let total = self.field_count();
-            let base = format!("Field {idx}/{total}");
+            let base = format!("Поле {idx}/{total}");
             if unanswered > 0 {
-                Line::from(format!("{base} ({unanswered} required unanswered)").dim())
+                let phrase = russian_required_question_phrase(unanswered);
+                Line::from(format!("{base} ({phrase} без ответа)").dim())
             } else {
                 Line::from(base.dim())
             }
         } else {
-            Line::from("No fields".dim())
+            Line::from("Нет полей".dim())
         };
         Paragraph::new(progress_line).render(progress_area, buf);
         self.render_prompt(prompt_area, buf);
@@ -1788,14 +1808,14 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             thread_id,
             form_request(
-                "Allow this request?",
+                "Разрешить этот запрос?",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
                         "confirmed": {
                             "type": "boolean",
-                            "title": "Confirm",
-                            "description": "Approve the pending action.",
+                            "title": "Подтвердить",
+                            "description": "Подтвердить ожидающее действие.",
                         }
                     },
                     "required": ["confirmed"],
@@ -1811,23 +1831,23 @@ mod tests {
                 thread_id,
                 server_name: "server-1".to_string(),
                 request_id: McpRequestId::String("request-1".to_string()),
-                message: "Allow this request?".to_string(),
+                message: "Разрешить этот запрос?".to_string(),
                 approval_display_params: Vec::new(),
                 response_mode: McpServerElicitationResponseMode::FormContent,
                 fields: vec![McpServerElicitationField {
                     id: "confirmed".to_string(),
-                    label: "Confirm".to_string(),
-                    prompt: "Approve the pending action.".to_string(),
+                    label: "Подтвердить".to_string(),
+                    prompt: "Подтвердить ожидающее действие.".to_string(),
                     required: true,
                     input: McpServerElicitationFieldInput::Select {
                         options: vec![
                             McpServerElicitationOption {
-                                label: "True".to_string(),
+                                label: "Да".to_string(),
                                 description: None,
                                 value: Value::Bool(true),
                             },
                             McpServerElicitationOption {
-                                label: "False".to_string(),
+                                label: "Нет".to_string(),
                                 description: None,
                                 value: Value::Bool(false),
                             },
@@ -1845,13 +1865,13 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Pick a number",
+                "Выберите число",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
                         "count": {
                             "type": "integer",
-                            "title": "Count",
+                            "title": "Количество",
                         }
                     },
                 }),
@@ -1867,7 +1887,7 @@ mod tests {
         let thread_id = ThreadId::default();
         let request = McpServerElicitationFormRequest::from_event(
             thread_id,
-            form_request("Allow this request?", Value::Null, /*meta*/ None),
+            form_request("Разрешить этот запрос?", Value::Null, /*meta*/ None),
         )
         .expect("expected approval fallback");
 
@@ -1877,7 +1897,7 @@ mod tests {
                 thread_id,
                 server_name: "server-1".to_string(),
                 request_id: McpRequestId::String("request-1".to_string()),
-                message: "Allow this request?".to_string(),
+                message: "Разрешить этот запрос?".to_string(),
                 approval_display_params: Vec::new(),
                 response_mode: McpServerElicitationResponseMode::ApprovalAction,
                 fields: vec![McpServerElicitationField {
@@ -1888,20 +1908,20 @@ mod tests {
                     input: McpServerElicitationFieldInput::Select {
                         options: vec![
                             McpServerElicitationOption {
-                                label: "Allow".to_string(),
-                                description: Some("Run the tool and continue.".to_string()),
+                                label: "Разрешить".to_string(),
+                                description: Some("Запустить инструмент и продолжить.".to_string()),
                                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
                             },
                             McpServerElicitationOption {
-                                label: "Deny".to_string(),
+                                label: "Отклонить".to_string(),
                                 description: Some(
-                                    "Decline this tool call and continue.".to_string(),
+                                    "Отклонить этот вызов и продолжить.".to_string(),
                                 ),
                                 value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
                             },
                             McpServerElicitationOption {
-                                label: "Cancel".to_string(),
-                                description: Some("Cancel this tool call".to_string()),
+                                label: "Отменить".to_string(),
+                                description: Some("Отменить этот вызов инструмента.".to_string()),
                                 value: Value::String(APPROVAL_CANCEL_VALUE.to_string()),
                             },
                         ],
@@ -1919,7 +1939,7 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             thread_id,
             form_request(
-                "Allow this request?",
+                "Разрешить этот запрос?",
                 empty_object_schema(),
                 tool_approval_meta(
                     &[],
@@ -1936,7 +1956,7 @@ mod tests {
                 thread_id,
                 server_name: "server-1".to_string(),
                 request_id: McpRequestId::String("request-1".to_string()),
-                message: "Allow this request?".to_string(),
+                message: "Разрешить этот запрос?".to_string(),
                 approval_display_params: Vec::new(),
                 response_mode: McpServerElicitationResponseMode::ApprovalAction,
                 fields: vec![McpServerElicitationField {
@@ -1947,13 +1967,13 @@ mod tests {
                     input: McpServerElicitationFieldInput::Select {
                         options: vec![
                             McpServerElicitationOption {
-                                label: "Allow".to_string(),
-                                description: Some("Run the tool and continue.".to_string()),
+                                label: "Разрешить".to_string(),
+                                description: Some("Запустить инструмент и продолжить.".to_string()),
                                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
                             },
                             McpServerElicitationOption {
-                                label: "Cancel".to_string(),
-                                description: Some("Cancel this tool call".to_string()),
+                                label: "Отменить".to_string(),
+                                description: Some("Отменить этот вызов инструмента.".to_string()),
                                 value: Value::String(APPROVAL_CANCEL_VALUE.to_string()),
                             },
                         ],
@@ -1970,13 +1990,13 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Suggest Google Calendar",
+                "Предложить Google Calendar",
                 empty_object_schema(),
                 Some(serde_json::json!({
                     "codex_approval_kind": "tool_suggestion",
                     "tool_type": "connector",
                     "suggest_type": "install",
-                    "suggest_reason": "Plan and reference events from your calendar",
+                    "suggest_reason": "Планировать события и ссылаться на ваш календарь",
                     "tool_id": "connector_2128aebfecb84f64a069897515042a44",
                     "tool_name": "Google Calendar",
                     "install_url": "https://example.test/google-calendar",
@@ -1990,7 +2010,7 @@ mod tests {
             Some(&ToolSuggestionRequest {
                 tool_type: ToolSuggestionToolType::Connector,
                 suggest_type: ToolSuggestionType::Install,
-                suggest_reason: "Plan and reference events from your calendar".to_string(),
+                suggest_reason: "Планировать события и ссылаться на ваш календарь".to_string(),
                 tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
                 tool_name: "Google Calendar".to_string(),
                 install_url: Some("https://example.test/google-calendar".to_string()),
@@ -2003,13 +2023,13 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Suggest Slack",
+                "Предложить Slack",
                 empty_object_schema(),
                 Some(serde_json::json!({
                     "codex_approval_kind": "tool_suggestion",
                     "tool_type": "plugin",
                     "suggest_type": "install",
-                    "suggest_reason": "Install the Slack plugin to search messages",
+                    "suggest_reason": "Установить плагин Slack для поиска по сообщениям",
                     "tool_id": "slack@openai-curated",
                     "tool_name": "Slack",
                 })),
@@ -2022,7 +2042,7 @@ mod tests {
             Some(&ToolSuggestionRequest {
                 tool_type: ToolSuggestionToolType::Plugin,
                 suggest_type: ToolSuggestionType::Install,
-                suggest_reason: "Install the Slack plugin to search messages".to_string(),
+                suggest_reason: "Установить плагин Slack для поиска по сообщениям".to_string(),
                 tool_id: "slack@openai-curated".to_string(),
                 tool_name: "Slack".to_string(),
                 install_url: None,
@@ -2034,7 +2054,7 @@ mod tests {
     fn empty_unmarked_schema_falls_back() {
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
-            form_request("Empty form", empty_object_schema(), /*meta*/ None),
+            form_request("Пустая форма", empty_object_schema(), /*meta*/ None),
         );
 
         assert_eq!(request, None);
@@ -2045,7 +2065,7 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Allow Calendar to create an event",
+                "Разрешить Календарю создать событие",
                 empty_object_schema(),
                 tool_approval_meta(
                     &[],
@@ -2057,12 +2077,12 @@ mod tests {
                         (
                             "calendar_id",
                             Value::String("primary".to_string()),
-                            "Calendar",
+                            "Календарь",
                         ),
                         (
                             "title",
-                            Value::String("Roadmap review".to_string()),
-                            "Title",
+                            Value::String("Обзор дорожной карты".to_string()),
+                            "Название",
                         ),
                     ]),
                 ),
@@ -2076,12 +2096,12 @@ mod tests {
                 McpToolApprovalDisplayParam {
                     name: "calendar_id".to_string(),
                     value: Value::String("primary".to_string()),
-                    display_name: "Calendar".to_string(),
+                    display_name: "Календарь".to_string(),
                 },
                 McpToolApprovalDisplayParam {
                     name: "title".to_string(),
-                    value: Value::String("Roadmap review".to_string()),
-                    display_name: "Title".to_string(),
+                    value: Value::String("Обзор дорожной карты".to_string()),
+                    display_name: "Название".to_string(),
                 },
             ]
         );
@@ -2094,14 +2114,14 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             thread_id,
             form_request(
-                "Allow this request?",
+                "Разрешить этот запрос?",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
                         "confirmed": {
                             "type": "boolean",
-                            "title": "Confirm",
-                            "description": "Approve the pending action.",
+                            "title": "Подтвердить",
+                            "description": "Подтвердить ожидающее действие.",
                         }
                     },
                     "required": ["confirmed"],
@@ -2148,7 +2168,7 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             thread_id,
             form_request(
-                "Allow this request?",
+                "Разрешить этот запрос?",
                 empty_object_schema(),
                 tool_approval_meta(
                     &[
@@ -2202,7 +2222,7 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             thread_id,
             form_request(
-                "Allow this request?",
+                "Разрешить этот запрос?",
                 empty_object_schema(),
                 tool_approval_meta(
                     &[
@@ -2256,14 +2276,14 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             thread_id,
             form_request(
-                "Allow this request?",
+                "Разрешить этот запрос?",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
                         "confirmed": {
                             "type": "boolean",
-                            "title": "Confirm",
-                            "description": "Approve the pending action.",
+                            "title": "Подтвердить",
+                            "description": "Подтвердить ожидающее действие.",
                         }
                     },
                     "required": ["confirmed"],
@@ -2306,13 +2326,13 @@ mod tests {
         let first = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "First",
+                "Первый",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
                         "confirmed": {
                             "type": "boolean",
-                            "title": "Confirm",
+                            "title": "Подтвердить",
                         }
                     },
                 }),
@@ -2323,13 +2343,13 @@ mod tests {
         let second = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Second",
+                "Второй",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
                         "confirmed": {
                             "type": "boolean",
-                            "title": "Confirm",
+                            "title": "Подтвердить",
                         }
                     },
                 }),
@@ -2340,13 +2360,13 @@ mod tests {
         let third = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Third",
+                "Третий",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
                         "confirmed": {
                             "type": "boolean",
-                            "title": "Confirm",
+                            "title": "Подтвердить",
                         }
                     },
                 }),
@@ -2364,12 +2384,12 @@ mod tests {
         overlay.select_current_option(/*committed*/ true);
         overlay.submit_answers();
 
-        assert_eq!(overlay.request.message, "Second");
+        assert_eq!(overlay.request.message, "Второй");
 
         overlay.select_current_option(/*committed*/ true);
         overlay.submit_answers();
 
-        assert_eq!(overlay.request.message, "Third");
+        assert_eq!(overlay.request.message, "Третий");
     }
 
     #[test]
@@ -2378,14 +2398,14 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Allow this request?",
+                "Разрешить этот запрос?",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
                         "confirmed": {
                             "type": "boolean",
-                            "title": "Confirm",
-                            "description": "Approve the pending action.",
+                            "title": "Подтвердить",
+                            "description": "Подтвердить ожидающее действие.",
                         }
                     },
                     "required": ["confirmed"],
@@ -2411,7 +2431,7 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Allow this request?",
+                "Разрешить этот запрос?",
                 empty_object_schema(),
                 tool_approval_meta(
                     &[],
@@ -2438,7 +2458,7 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Allow this request?",
+                "Разрешить этот запрос?",
                 empty_object_schema(),
                 tool_approval_meta(
                     &[
@@ -2468,36 +2488,36 @@ mod tests {
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
-                "Allow Calendar to create an event",
+                "Разрешить Календарю создать событие",
                 empty_object_schema(),
                 tool_approval_meta(
                     &[],
                     Some(serde_json::json!({
                         "calendar_id": "primary",
-                        "title": "Roadmap review",
-                        "notes": "This is a deliberately long note that should truncate before it turns the approval body into a giant wall of text in the TUI overlay.",
-                        "ignored_after_limit": "fourth param",
+                        "title": "Обзор дорожной карты",
+                        "notes": "Это специально длинная заметка: она должна обрезаться до того, как превратит тело окна подтверждения в гигантскую стену текста в TUI.",
+                        "ignored_after_limit": "четвёртый параметр",
                     })),
                     Some(vec![
                         (
                             "calendar_id",
                             Value::String("primary".to_string()),
-                            "Calendar",
+                            "Календарь",
                         ),
                         (
                             "title",
-                            Value::String("Roadmap review".to_string()),
-                            "Title",
+                            Value::String("Обзор дорожной карты".to_string()),
+                            "Название",
                         ),
                         (
                             "notes",
-                            Value::String("This is a deliberately long note that should truncate before it turns the approval body into a giant wall of text in the TUI overlay.".to_string()),
-                            "Notes",
+                            Value::String("Это специально длинная заметка: она должна обрезаться до того, как превратит тело окна подтверждения в гигантскую стену текста в TUI.".to_string()),
+                            "Заметки",
                         ),
                         (
                             "ignored_after_limit",
-                            Value::String("fourth param".to_string()),
-                            "Ignored",
+                            Value::String("четвёртый параметр".to_string()),
+                            "Скрыто",
                         ),
                     ]),
                 ),

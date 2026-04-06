@@ -126,7 +126,7 @@ pub(crate) async fn handle_mcp_tool_call(
             turn_context.as_ref(),
             &call_id,
             invocation,
-            "MCP tool call blocked by app configuration".to_string(),
+            "Вызов MCP-инструмента заблокирован настройками приложения".to_string(),
             /*already_started*/ false,
         )
         .await;
@@ -233,7 +233,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 (result, Some(duration))
             }
             McpToolApprovalDecision::Decline => {
-                let message = "user rejected MCP tool call".to_string();
+                let message = "пользователь отклонил вызов MCP-инструмента".to_string();
                 (
                     notify_mcp_tool_call_skip(
                         sess.as_ref(),
@@ -248,7 +248,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 )
             }
             McpToolApprovalDecision::Cancel => {
-                let message = "user cancelled MCP tool call".to_string();
+                let message = "пользователь отменил вызов MCP-инструмента".to_string();
                 (
                     notify_mcp_tool_call_skip(
                         sess.as_ref(),
@@ -635,15 +635,20 @@ struct McpToolApprovalElicitationRequest<'a> {
 }
 
 pub(crate) const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
-pub(crate) const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
-pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
+pub(crate) const MCP_TOOL_APPROVAL_ACCEPT: &str = "Разрешить";
+pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Разрешить на эту сессию";
 // Internal-only token used when guardian auto-reviews delegated MCP approvals on the
 // RequestUserInput compatibility path. That legacy MCP prompt has allow/cancel labels but no
 // real "Decline" answer, so this lets guardian denials round-trip distinctly from user cancel.
 // This is not a user-facing option.
 pub(crate) const MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC: &str = "__codex_mcp_decline__";
-const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
-const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
+const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Разрешить и больше не спрашивать";
+const MCP_TOOL_APPROVAL_CANCEL: &str = "Отмена";
+
+// Legacy labels kept for compatibility with older clients/responses.
+const MCP_TOOL_APPROVAL_ACCEPT_LEGACY: &str = "Allow";
+const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION_LEGACY: &str = "Allow for this session";
+const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER_LEGACY: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
 const MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
 const MCP_TOOL_APPROVAL_PERSIST_KEY: &str = "persist";
@@ -1068,28 +1073,28 @@ fn build_mcp_tool_approval_question(
 
     let mut options = vec![RequestUserInputQuestionOption {
         label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-        description: "Run the tool and continue.".to_string(),
+        description: "Запустить инструмент и продолжить.".to_string(),
     }];
     if prompt_options.allow_session_remember {
         options.push(RequestUserInputQuestionOption {
             label: MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
-            description: "Run the tool and remember this choice for this session.".to_string(),
+            description: "Запустить инструмент и запомнить выбор до конца текущей сессии.".to_string(),
         });
     }
     if prompt_options.allow_persistent_approval {
         options.push(RequestUserInputQuestionOption {
             label: MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string(),
-            description: "Run the tool and remember this choice for future tool calls.".to_string(),
+            description: "Запустить инструмент и запомнить выбор для будущих вызовов инструмента.".to_string(),
         });
     }
     options.push(RequestUserInputQuestionOption {
         label: MCP_TOOL_APPROVAL_CANCEL.to_string(),
-        description: "Cancel this tool call.".to_string(),
+        description: "Отменить этот вызов инструмента.".to_string(),
     });
 
     RequestUserInputQuestion {
         id: question_id,
-        header: "Approve app tool call?".to_string(),
+        header: "Подтвердить вызов инструмента приложения?".to_string(),
         question,
         is_other: false,
         is_secret: false,
@@ -1108,18 +1113,18 @@ fn build_mcp_tool_approval_fallback_message(
         .map(ToString::to_string)
         .unwrap_or_else(|| {
             if server == CODEX_APPS_MCP_SERVER_NAME {
-                "this app".to_string()
+                "этому приложению".to_string()
             } else {
-                format!("the {server} MCP server")
+                format!("MCP-серверу {server}")
             }
         });
-    format!("Allow {actor} to run tool \"{tool_name}\"?")
+    format!("Разрешить {actor} запустить инструмент \"{tool_name}\"?")
 }
 
 fn mcp_tool_approval_question_text(question: String, monitor_reason: Option<&str>) -> String {
     match monitor_reason.map(str::trim) {
         Some(reason) if !reason.is_empty() => {
-            format!("Tool call needs your approval. Reason: {reason}")
+            format!("Вызов инструмента требует подтверждения. Причина: {reason}")
         }
         _ => question,
     }
@@ -1128,9 +1133,9 @@ fn mcp_tool_approval_question_text(question: String, monitor_reason: Option<&str
 fn arc_monitor_interrupt_message(reason: &str) -> String {
     let reason = reason.trim();
     if reason.is_empty() {
-        "Tool call was cancelled because of safety risks.".to_string()
+        "Вызов инструмента был отменён из-за рисков безопасности.".to_string()
     } else {
-        format!("Tool call was cancelled because of safety risks: {reason}")
+        format!("Вызов инструмента был отменён из-за рисков безопасности: {reason}")
     }
 }
 
@@ -1367,19 +1372,19 @@ fn parse_mcp_tool_approval_response(
         .any(|answer| answer == MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC)
     {
         McpToolApprovalDecision::Decline
-    } else if answers
-        .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
-    {
+    } else if answers.iter().any(|answer| {
+        answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION
+            || answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION_LEGACY
+    }) {
         McpToolApprovalDecision::AcceptForSession
-    } else if answers
-        .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
-    {
+    } else if answers.iter().any(|answer| {
+        answer == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER
+            || answer == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER_LEGACY
+    }) {
         McpToolApprovalDecision::AcceptAndRemember
     } else if answers
         .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT)
+        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT || answer == MCP_TOOL_APPROVAL_ACCEPT_LEGACY)
     {
         McpToolApprovalDecision::Accept
     } else {
@@ -1505,7 +1510,7 @@ async fn persist_custom_mcp_tool_approval(
     } else {
         let servers = load_global_mcp_servers(&config.codex_home).await?;
         if !servers.contains_key(server) {
-            anyhow::bail!("MCP server `{server}` is not configured in config.toml");
+            anyhow::bail!("MCP-сервер `{server}` не настроен в config.toml. Добавьте его в список MCP-серверов перед сохранением разрешений.");
         }
         config.codex_home.clone()
     };

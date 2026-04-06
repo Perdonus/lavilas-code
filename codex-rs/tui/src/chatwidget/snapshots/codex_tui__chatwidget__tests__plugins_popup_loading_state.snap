@@ -2,8 +2,8 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Plugins
-  Loading available plugins...
-  This first pass shows the ChatGPT marketplace only.
+  Плагины
+  Загружаю список плагинов...
+  Пока показывается только маркетплейс ChatGPT.
 
-›    Loading plugins...  This updates when the marketplace list is ready.
+›    Загрузка плагинов...  Список обновится, когда маркетплейс ответит.

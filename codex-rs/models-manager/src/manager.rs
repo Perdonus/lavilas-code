@@ -387,6 +387,8 @@ impl ModelsManager {
                 used_fallback_model_metadata: false,
                 ..remote
             }
+        } else if let Some(compatibility) = model_info::compatibility_model_info_from_slug(model) {
+            compatibility
         } else {
             model_info::model_info_from_slug(model)
         };

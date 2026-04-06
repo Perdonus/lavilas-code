@@ -3,15 +3,14 @@ source: tui/src/bottom_pane/request_user_input/mod.rs
 expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                                         
-  Question 1/1 (1 unanswered)                                                                                           
-  Choose one option.                                                                                                    
+  Вопрос 1/1 (1 вопрос без ответа)
+  Выберите один вариант.                                                                                                    
                                                                                                                         
-  › 1. Job: running/completed/failed/expired; Run/Experiment: succeeded/failed/    Keep async job statuses for          
-       unknown (Recommended when triaging long-running background work and status  progress tracking and include        
-       transitions)                                                                enough context for debugging         
-                                                                                   retries, stale workers, and          
-                                                                                   unexpected expiration paths.         
-    2. Add a short status model                                                    Simpler labels with less detail for  
-                                                                                   quick rollouts.                      
+  › 1. Задача: запущена/завершена/ошибка/просрочена; Запуск/эксперимент:     Оставляем подробные асинхронные статусы:
+       успешно/ошибка/неизвестно (рекомендуется для разбора долгих            так проще отслеживать прогресс и разбирать
+       фоновых задач и переходов статусов)                                     ретраи, зависшие воркеры и внезапные      
+                                                                                истечения срока.                           
+    2. Добавить короткую модель статусов                                       Более простые ярлыки с минимумом деталей  
+                                                                                для быстрых релизов.                       
                                                                                                                         
-  tab to add notes | enter to submit answer | esc to interrupt
+  Tab — открыть заметки | Enter — отправить ответ | Esc — прервать

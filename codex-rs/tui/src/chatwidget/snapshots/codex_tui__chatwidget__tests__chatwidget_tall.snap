@@ -22,6 +22,6 @@ expression: term.backend().vt100().screen().contents()
   ↳ Hello, world! 14
   ↳ Hello, world! 15
 
-› Ask Codex to do anything
+› Спросите Lavilas Codex о чём угодно
 
   gpt-5.3-codex default · 100% left · /tmp/project

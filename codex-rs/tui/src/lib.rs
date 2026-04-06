@@ -148,6 +148,7 @@ mod theme_picker;
 mod tooltips;
 mod tui;
 mod ui_consts;
+mod ui_preferences;
 pub mod update_action;
 mod update_prompt;
 mod updates;

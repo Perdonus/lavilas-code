@@ -19,7 +19,7 @@ async fn realtime_error_closes_without_followup_closed_info() {
         .into_iter()
         .map(|lines| lines_to_single_string(&lines))
         .collect::<Vec<_>>();
-    insta::assert_snapshot!(rendered.join("\n\n"), @"■ Realtime voice error: boom");
+    insta::assert_snapshot!(rendered.join("\n\n"), @"■ Ошибка голосового режима: boom");
 }
 
 #[cfg(not(target_os = "linux"))]

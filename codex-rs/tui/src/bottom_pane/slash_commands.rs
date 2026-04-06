@@ -3,12 +3,33 @@
 //! The same sandbox- and feature-gating rules are used by both the composer
 //! and the command popup. Centralizing them here keeps those call sites small
 //! and ensures they stay in sync.
+use std::collections::HashSet;
 use std::str::FromStr;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 
 use codex_utils_fuzzy_match::fuzzy_match;
 
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
+
+static HIDDEN_COMMAND_KEYS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+pub(crate) fn set_hidden_command_keys(keys: impl IntoIterator<Item = String>) {
+    if let Ok(mut hidden) = HIDDEN_COMMAND_KEYS.lock() {
+        hidden.clear();
+        hidden.extend(keys.into_iter().map(|k| k.to_ascii_lowercase()));
+    }
+}
+
+fn is_hidden(cmd: SlashCommand) -> bool {
+    if let Ok(hidden) = HIDDEN_COMMAND_KEYS.lock() {
+        hidden.contains(cmd.command_en())
+    } else {
+        false
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct BuiltinCommandFlags {
@@ -36,7 +57,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.fast_command_enabled || *cmd != SlashCommand::Fast)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
-        .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
+        .filter(|(_, cmd)| !is_hidden(*cmd))
         .collect()
 }
 
@@ -49,11 +70,19 @@ pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Op
         .then_some(cmd)
 }
 
+fn builtin_matches_prefix(name: &str, cmd: SlashCommand) -> bool {
+    fuzzy_match(cmd.command(), name).is_some()
+        || cmd
+            .popup_aliases()
+            .iter()
+            .any(|alias| fuzzy_match(alias, name).is_some())
+}
+
 /// Whether any visible built-in fuzzily matches the provided prefix.
 pub(crate) fn has_builtin_prefix(name: &str, flags: BuiltinCommandFlags) -> bool {
     builtins_for_input(flags)
         .into_iter()
-        .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
+        .any(|(_, cmd)| builtin_matches_prefix(name, cmd))
 }
 
 #[cfg(test)]
@@ -97,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_command_alias_resolves_for_dispatch() {
+    fn clean_alias_resolves_for_dispatch() {
         assert_eq!(
             find_builtin_command("clean", all_enabled_flags()),
             Some(SlashCommand::Stop)
@@ -119,17 +148,23 @@ mod tests {
     }
 
     #[test]
-    fn settings_command_is_hidden_when_realtime_is_disabled() {
+    fn settings_command_stays_available_when_realtime_is_disabled() {
         let mut flags = all_enabled_flags();
         flags.realtime_conversation_enabled = false;
         flags.audio_device_selection_enabled = false;
-        assert_eq!(find_builtin_command("settings", flags), None);
+        assert_eq!(
+            find_builtin_command("settings", flags),
+            Some(SlashCommand::Settings)
+        );
     }
 
     #[test]
-    fn settings_command_is_hidden_when_audio_device_selection_is_disabled() {
+    fn settings_command_stays_available_when_audio_device_selection_is_disabled() {
         let mut flags = all_enabled_flags();
         flags.audio_device_selection_enabled = false;
-        assert_eq!(find_builtin_command("settings", flags), None);
+        assert_eq!(
+            find_builtin_command("settings", flags),
+            Some(SlashCommand::Settings)
+        );
     }
 }

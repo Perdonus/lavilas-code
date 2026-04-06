@@ -36,6 +36,7 @@ use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::MouseEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -81,10 +82,10 @@ mod experimental_features_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
-mod prompt_args;
+pub(crate) mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
-mod slash_commands;
+pub(crate) mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::SelectionViewParams;
@@ -364,6 +365,10 @@ impl BottomPane {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
     }
 
+    pub(crate) fn active_view_id(&self) -> Option<&'static str> {
+        self.view_stack.last().and_then(|view| view.view_id())
+    }
+
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.view_stack.push(view);
         self.request_redraw();
@@ -501,6 +506,30 @@ impl BottomPane {
         }
     }
 
+    pub fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        if self.view_stack.is_empty() {
+            let (_, needs_redraw) = self.composer.handle_mouse_event(mouse_event);
+            if needs_redraw {
+                self.request_redraw();
+            }
+            return;
+        }
+
+        let view_complete = {
+            let last_index = self.view_stack.len() - 1;
+            let view = &mut self.view_stack[last_index];
+            view.handle_mouse_event(mouse_event);
+            view.is_complete()
+        };
+
+        if view_complete {
+            self.view_stack.clear();
+            self.on_active_view_complete();
+        }
+
+        self.request_redraw();
+    }
+
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.composer.insert_str(text);
         self.composer.sync_popups();
@@ -624,7 +653,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Update the status indicator header (defaults to "Working") and details below it.
+    /// Update the status indicator header (defaults to "Выполняю") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
     pub(crate) fn update_status(
@@ -934,7 +963,7 @@ impl BottomPane {
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
             /*enabled*/ false,
-            Some("Answer the questions to continue.".to_string()),
+            Some("Ответьте на вопросы, чтобы продолжить.".to_string()),
         );
         self.push_view(Box::new(modal));
     }
@@ -975,10 +1004,10 @@ impl BottomPane {
                     description: None,
                     instructions: match suggestion_type {
                         AppLinkSuggestionType::Install => {
-                            "Install this app in your browser, then return here.".to_string()
+                            "Установите это приложение в браузере и вернитесь сюда.".to_string()
                         }
                         AppLinkSuggestionType::Enable => {
-                            "Enable this app to use it for the current request.".to_string()
+                            "Включите это приложение, чтобы использовать его в текущем запросе.".to_string()
                         }
                     },
                     url: install_url,
@@ -997,7 +1026,7 @@ impl BottomPane {
             self.pause_status_timer_for_modal();
             self.set_composer_input_enabled(
                 /*enabled*/ false,
-                Some("Respond to the tool suggestion to continue.".to_string()),
+                Some("Ответьте на предложение инструмента, чтобы продолжить.".to_string()),
             );
             self.push_view(Box::new(view));
             return;
@@ -1013,7 +1042,7 @@ impl BottomPane {
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
             /*enabled*/ false,
-            Some("Respond to the MCP server request to continue.".to_string()),
+            Some("Ответьте на запрос MCP-сервера, чтобы продолжить.".to_string()),
         );
         self.push_view(Box::new(modal));
     }
@@ -1286,7 +1315,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1309,7 +1338,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1328,7 +1357,7 @@ mod tests {
             r0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            !r0.contains("Working"),
+            !r0.contains("Выполняю"),
             "overlay should not render above modal"
         );
     }
@@ -1343,7 +1372,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1379,8 +1408,8 @@ mod tests {
             row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            row0.contains("Working"),
-            "expected Working header after denial on row 0: {row0:?}"
+            row0.contains("Выполняю"),
+            "ожидался заголовок «Выполняю» после отказа в строке 0: {row0:?}"
         );
 
         // Composer placeholder should be visible somewhere below.
@@ -1390,7 +1419,7 @@ mod tests {
             for x in 0..area.width {
                 row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
             }
-            if row.contains("Ask Codex") {
+            if row.contains("Lavilas Codex") {
                 found_composer = true;
                 break;
             }
@@ -1410,7 +1439,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1425,7 +1454,7 @@ mod tests {
         pane.render(area, &mut buf);
 
         let bufs = snapshot_buffer(&buf);
-        assert!(bufs.contains("• Working"), "expected Working header");
+        assert!(bufs.contains("• Выполняю"), "ожидался заголовок «Выполняю»");
     }
 
     #[test]
@@ -1437,7 +1466,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1468,7 +1497,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1491,7 +1520,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1520,7 +1549,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1528,7 +1557,7 @@ mod tests {
 
         pane.set_task_running(/*running*/ true);
         pane.update_status(
-            "Working".to_string(),
+            "Выполняю".to_string(),
             Some("First detail line\nSecond detail line".to_string()),
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
@@ -1557,7 +1586,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1589,7 +1618,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1620,7 +1649,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1649,7 +1678,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1672,7 +1701,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(vec![SkillMetadata {
@@ -1719,7 +1748,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1754,7 +1783,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1790,7 +1819,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1838,7 +1867,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1894,7 +1923,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1942,7 +1971,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -2020,7 +2049,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Спросите Lavilas Codex о чём угодно".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),

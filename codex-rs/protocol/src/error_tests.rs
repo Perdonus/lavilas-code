@@ -58,7 +58,7 @@ fn usage_limit_reached_error_formats_plus_plan() {
     };
     assert_eq!(
         err.to_string(),
-        "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later."
+        "Вы достигли лимита использования. Обновите план до Pro (https://chatgpt.com/explore/pro), перейдите на https://chatgpt.com/codex/settings/usage, чтобы купить дополнительные кредиты или повторите позже."
     );
 }
 
@@ -139,7 +139,7 @@ fn to_error_event_handles_response_stream_failed() {
 
     assert_eq!(
         event.message,
-        "prefix: Error while reading the server response: HTTP status client error (429 Too Many Requests) for url (http://example.com/), request id: req-123"
+        "prefix: Ошибка при чтении ответа сервера: HTTP status client error (429 Too Many Requests) for url (http://example.com/), id запроса: req-123"
     );
     assert_eq!(
         event.codex_error_info,
@@ -165,7 +165,7 @@ fn sandbox_denied_reports_exit_code_when_no_output_available() {
     });
     assert_eq!(
         get_error_message_ui(&err),
-        "command failed inside sandbox with exit code 13"
+        "команда в песочнице завершилась с кодом 13"
     );
 }
 
@@ -179,7 +179,7 @@ fn usage_limit_reached_error_formats_free_plan() {
     };
     assert_eq!(
         err.to_string(),
-        "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again later."
+        "Вы достигли лимита использования. Обновите план до Plus, чтобы продолжить работу в Lavilas Codex (https://chatgpt.com/explore/plus), или повторите позже."
     );
 }
 
@@ -193,7 +193,7 @@ fn usage_limit_reached_error_formats_go_plan() {
     };
     assert_eq!(
         err.to_string(),
-        "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again later."
+        "Вы достигли лимита использования. Обновите план до Plus, чтобы продолжить работу в Lavilas Codex (https://chatgpt.com/explore/plus), или повторите позже."
     );
 }
 
@@ -207,7 +207,7 @@ fn usage_limit_reached_error_formats_default_when_none() {
     };
     assert_eq!(
         err.to_string(),
-        "You've hit your usage limit. Try again later."
+        "Вы достигли лимита использования. Повторите позже."
     );
 }
 
@@ -224,7 +224,7 @@ fn usage_limit_reached_error_formats_team_plan() {
             promo_message: None,
         };
         let expected = format!(
-            "You've hit your usage limit. To get more access now, send a request to your admin or try again at {expected_time}."
+            "Вы достигли лимита использования. Чтобы получить больше доступа прямо сейчас, отправьте запрос администратору или повторите в {expected_time}."
         );
         assert_eq!(err.to_string(), expected);
     });
@@ -240,7 +240,7 @@ fn usage_limit_reached_error_formats_business_plan_without_reset() {
     };
     assert_eq!(
         err.to_string(),
-        "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
+        "Вы достигли лимита использования. Чтобы получить больше доступа прямо сейчас, отправьте запрос администратору или повторите позже."
     );
 }
 
@@ -254,7 +254,7 @@ fn usage_limit_reached_error_formats_self_serve_business_usage_based_plan() {
     };
     assert_eq!(
         err.to_string(),
-        "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
+        "Вы достигли лимита использования. Чтобы получить больше доступа прямо сейчас, отправьте запрос администратору или повторите позже."
     );
 }
 
@@ -268,7 +268,7 @@ fn usage_limit_reached_error_formats_enterprise_cbp_usage_based_plan() {
     };
     assert_eq!(
         err.to_string(),
-        "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
+        "Вы достигли лимита использования. Чтобы получить больше доступа прямо сейчас, отправьте запрос администратору или повторите позже."
     );
 }
 
@@ -282,7 +282,7 @@ fn usage_limit_reached_error_formats_default_for_other_plans() {
     };
     assert_eq!(
         err.to_string(),
-        "You've hit your usage limit. Try again later."
+        "Вы достигли лимита использования. Повторите позже."
     );
 }
 
@@ -299,7 +299,7 @@ fn usage_limit_reached_error_formats_pro_plan_with_reset() {
             promo_message: None,
         };
         let expected = format!(
-            "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
+            "Вы достигли лимита использования. Перейдите на https://chatgpt.com/codex/settings/usage, чтобы купить дополнительные кредиты или повторите в {expected_time}."
         );
         assert_eq!(err.to_string(), expected);
     });
@@ -320,12 +320,12 @@ fn usage_limit_reached_error_hides_upsell_for_non_codex_limit_name() {
                 ..rate_limit_snapshot()
             })),
             promo_message: Some(
-                "Visit https://chatgpt.com/codex/settings/usage to purchase more credits"
+                "Перейдите на https://chatgpt.com/codex/settings/usage, чтобы купить дополнительные кредиты"
                     .to_string(),
             ),
         };
         let expected = format!(
-            "You've hit your usage limit for codex_other. Switch to another model now, or try again at {expected_time}."
+            "Вы достигли лимита использования для codex_other. Переключитесь на другую модель или повторите в {expected_time}."
         );
         assert_eq!(err.to_string(), expected);
     });
@@ -343,7 +343,7 @@ fn usage_limit_reached_includes_minutes_when_available() {
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
         };
-        let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
+        let expected = format!("Вы достигли лимита использования. Повторите в {expected_time}.");
         assert_eq!(err.to_string(), expected);
     });
 }
@@ -383,7 +383,7 @@ fn unexpected_status_non_html_is_unchanged() {
     let url = "http://example.com/plain";
     assert_eq!(
         err.to_string(),
-        format!("unexpected status {status}: plain text error, url: {url}")
+        format!("неожиданный статус {status}: plain text error, url: {url}")
     );
 }
 
@@ -403,7 +403,7 @@ fn unexpected_status_prefers_error_message_when_present() {
     assert_eq!(
         err.to_string(),
         format!(
-            "unexpected status {status}: Workspace is not authorized in this region., url: https://chatgpt.com/backend-api/codex/responses, request id: req-123"
+            "неожиданный статус {status}: Workspace is not authorized in this region., url: https://chatgpt.com/backend-api/codex/responses, id запроса: req-123"
         )
     );
 }
@@ -425,7 +425,7 @@ fn unexpected_status_truncates_long_body_with_ellipsis() {
     assert_eq!(
         err.to_string(),
         format!(
-            "unexpected status {status}: {expected_body}, url: http://example.com/long, request id: req-long"
+            "неожиданный статус {status}: {expected_body}, url: http://example.com/long, id запроса: req-long"
         )
     );
 }
@@ -445,7 +445,7 @@ fn unexpected_status_includes_cf_ray_and_request_id() {
     assert_eq!(
         err.to_string(),
         format!(
-            "unexpected status {status}: plain text error, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: 9c81f9f18f2fa49d-LHR, request id: req-xyz"
+            "неожиданный статус {status}: plain text error, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: 9c81f9f18f2fa49d-LHR, id запроса: req-xyz"
         )
     );
 }
@@ -465,7 +465,7 @@ fn unexpected_status_includes_identity_auth_details() {
     assert_eq!(
         err.to_string(),
         format!(
-            "unexpected status {status}: plain text error, url: https://chatgpt.com/backend-api/codex/models, cf-ray: cf-ray-auth-401-test, request id: req-auth, auth error: missing_authorization_header, auth error code: token_expired"
+            "неожиданный статус {status}: plain text error, url: https://chatgpt.com/backend-api/codex/models, cf-ray: cf-ray-auth-401-test, id запроса: req-auth, ошибка авторизации: missing_authorization_header, код ошибки авторизации: token_expired"
         )
     );
 }
@@ -483,7 +483,7 @@ fn usage_limit_reached_includes_hours_and_minutes() {
             promo_message: None,
         };
         let expected = format!(
-            "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
+            "Вы достигли лимита использования. Обновите план до Pro (https://chatgpt.com/explore/pro), перейдите на https://chatgpt.com/codex/settings/usage, чтобы купить дополнительные кредиты или повторите в {expected_time}."
         );
         assert_eq!(err.to_string(), expected);
     });
@@ -502,7 +502,7 @@ fn usage_limit_reached_includes_days_hours_minutes() {
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
         };
-        let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
+        let expected = format!("Вы достигли лимита использования. Повторите в {expected_time}.");
         assert_eq!(err.to_string(), expected);
     });
 }
@@ -519,7 +519,7 @@ fn usage_limit_reached_less_than_minute() {
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
         };
-        let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
+        let expected = format!("Вы достигли лимита использования. Повторите в {expected_time}.");
         assert_eq!(err.to_string(), expected);
     });
 }
@@ -535,11 +535,11 @@ fn usage_limit_reached_with_promo_message() {
             resets_at: Some(resets_at),
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: Some(
-                "To continue using Codex, start a free trial of <PLAN> today".to_string(),
+                "Чтобы продолжить работу в Lavilas Codex, начните бесплатный пробный период <PLAN> уже сегодня".to_string(),
             ),
         };
         let expected = format!(
-            "You've hit your usage limit. To continue using Codex, start a free trial of <PLAN> today, or try again at {expected_time}."
+            "Вы достигли лимита использования. Чтобы продолжить работу в Lavilas Codex, начните бесплатный пробный период <PLAN> уже сегодня, или повторите в {expected_time}."
         );
         assert_eq!(err.to_string(), expected);
     });

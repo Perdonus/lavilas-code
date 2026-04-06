@@ -3,17 +3,17 @@ source: tui/src/bottom_pane/mcp_server_elicitation.rs
 expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
 ---
                                                                                                                         
-  Field 1/1 (1 required unanswered)                                                                                     
-  Allow this request?                                                                                                   
+  Поле 1/1 (1 обязательный вопрос без ответа)                                                                                     
+  Разрешить этот запрос?                                                                                                   
                                                                                                                         
-  Confirm                                                                                                               
-  Approve the pending action.                                                                                           
-  › 1. True                                                                                                             
-    2. False                                                                                                            
-                                                                                                                        
-                                                                                                                        
+  Подтвердить                                                                                                               
+  Подтвердить ожидающее действие.                                                                                           
+  › 1. Да                                                                                                             
+    2. Нет                                                                                                            
                                                                                                                         
                                                                                                                         
                                                                                                                         
                                                                                                                         
-  enter to submit | esc to cancel
+                                                                                                                        
+                                                                                                                        
+  Enter — подтвердить | Esc — отменить

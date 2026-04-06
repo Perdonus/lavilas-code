@@ -20,4 +20,4 @@ expression: popup
   The non-admin sandbox protects your files and prevents network access under
   most circumstances. However, it carries greater risk if prompt injected. To
   upgrade to the default sandbox, run /setup-default-sandbox.
-  Press enter to confirm or esc to go back
+  Нажмите enter для подтверждения или esc для возврата

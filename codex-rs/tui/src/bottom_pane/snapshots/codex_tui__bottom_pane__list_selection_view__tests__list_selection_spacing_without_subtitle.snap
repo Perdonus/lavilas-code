@@ -8,4 +8,4 @@ expression: render_lines(&view)
 › 1. Read Only (current)  Codex can read files  
   2. Full Access          Codex can edit files  
                                                 
-  Press enter to confirm or esc to go back
+  Нажмите enter для подтверждения или esc для возврата

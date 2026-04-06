@@ -32,7 +32,7 @@ const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024;
 pub enum SandboxErr {
     /// Error from sandbox execution
     #[error(
-        "sandbox denied exec error, exit code: {}, stdout: {}, stderr: {}",
+        "песочница запретила выполнение, код выхода: {}, stdout: {}, stderr: {}",
         .output.exit_code, .output.stdout.text, .output.stderr.text
     )]
     Denied {
@@ -42,30 +42,30 @@ pub enum SandboxErr {
 
     /// Error from linux seccomp filter setup
     #[cfg(target_os = "linux")]
-    #[error("seccomp setup error")]
+    #[error("ошибка настройки seccomp")]
     SeccompInstall(#[from] seccompiler::Error),
 
     /// Error from linux seccomp backend
     #[cfg(target_os = "linux")]
-    #[error("seccomp backend error")]
+    #[error("ошибка бэкенда seccomp")]
     SeccompBackend(#[from] seccompiler::BackendError),
 
     /// Command timed out
-    #[error("command timed out")]
+    #[error("время выполнения команды истекло")]
     Timeout { output: Box<ExecToolCallOutput> },
 
     /// Command was killed by a signal
-    #[error("command was killed by a signal")]
+    #[error("команда была завершена сигналом")]
     Signal(i32),
 
     /// Error from linux landlock
-    #[error("Landlock was not able to fully enforce all sandbox rules")]
+    #[error("Landlock не смог полностью применить все правила песочницы")]
     LandlockRestrict,
 }
 
 #[derive(Error, Debug)]
 pub enum CodexErr {
-    #[error("turn aborted. Something went wrong? Hit `/feedback` to report the issue.")]
+    #[error("ход прерван. Что-то пошло не так? Нажмите `/feedback`, чтобы отправить отчёт об ошибке.")]
     TurnAborted,
 
     /// Returned by ResponsesClient when the SSE stream disconnects or errors out **after** the HTTP
@@ -74,28 +74,28 @@ pub enum CodexErr {
     /// The Session loop treats this as a transient error and will automatically retry the turn.
     ///
     /// Optionally includes the requested delay before retrying the turn.
-    #[error("stream disconnected before completion: {0}")]
+    #[error("поток отключился до завершения: {0}")]
     Stream(String, Option<Duration>),
     #[error(
-        "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
+        "Lavilas Codex исчерпал доступное окно контекста модели. Начните новую ветку или очистите раннюю историю перед повтором."
     )]
     ContextWindowExceeded,
-    #[error("no thread with id: {0}")]
+    #[error("ветка с id {0} не найдена")]
     ThreadNotFound(ThreadId),
-    #[error("agent thread limit reached (max {max_threads})")]
+    #[error("достигнут лимит веток агента (макс. {max_threads})")]
     AgentLimitReached { max_threads: usize },
-    #[error("session configured event was not the first event in the stream")]
+    #[error("событие настройки сессии не было первым событием в потоке")]
     SessionConfiguredNotFirstEvent,
     /// Returned by run_command_stream when the spawned child process timed out (10s).
-    #[error("timeout waiting for child process to exit")]
+    #[error("таймаут ожидания завершения дочернего процесса")]
     Timeout,
     /// Returned by run_command_stream when the child could not be spawned (its stdout/stderr pipes
     /// could not be captured). Analogous to the previous `CodexError::Spawn` variant.
-    #[error("spawn failed: child stdout/stderr not captured")]
+    #[error("не удалось запустить процесс: stdout/stderr дочернего процесса не перехвачены")]
     Spawn,
     /// Returned by run_command_stream when the user pressed Ctrl-C (SIGINT). Session uses this to
     /// surface a polite FunctionCallOutput back to the model instead of crashing the CLI.
-    #[error("interrupted (Ctrl-C). Something went wrong? Hit `/feedback` to report the issue.")]
+    #[error("прервано (Ctrl-C). Что-то пошло не так? Нажмите `/feedback`, чтобы отправить отчёт об ошибке.")]
     Interrupted,
     /// Unexpected HTTP status code.
     #[error("{0}")]
@@ -104,40 +104,40 @@ pub enum CodexErr {
     #[error("{0}")]
     InvalidRequest(String),
     /// Invalid image.
-    #[error("Image poisoning")]
+    #[error("Некорректное изображение")]
     InvalidImageRequest(),
     #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
-    #[error("Selected model is at capacity. Please try a different model.")]
+    #[error("Выбранная модель перегружена. Попробуйте другую модель.")]
     ServerOverloaded,
     #[error("{0}")]
     ResponseStreamFailed(ResponseStreamFailed),
     #[error("{0}")]
     ConnectionFailed(ConnectionFailedError),
-    #[error("Quota exceeded. Check your plan and billing details.")]
+    #[error("Квота исчерпана. Проверьте тариф и биллинг.")]
     QuotaExceeded,
     #[error(
-        "To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus."
+        "Чтобы использовать Lavilas Codex с вашим тарифом ChatGPT, обновитесь до Plus: https://chatgpt.com/explore/plus."
     )]
     UsageNotIncluded,
-    #[error("We're currently experiencing high demand, which may cause temporary errors.")]
+    #[error("Сейчас наблюдается повышенная нагрузка, из-за чего возможны временные ошибки.")]
     InternalServerError,
     /// Retry limit exceeded.
     #[error("{0}")]
     RetryLimit(RetryLimitReachedError),
     /// Agent loop died unexpectedly
-    #[error("internal error; agent loop died unexpectedly")]
+    #[error("внутренняя ошибка: цикл агента завершился неожиданно")]
     InternalAgentDied,
     /// Sandbox error
-    #[error("sandbox error: {0}")]
+    #[error("ошибка песочницы: {0}")]
     Sandbox(#[from] SandboxErr),
-    #[error("codex-linux-sandbox was required but not provided")]
+    #[error("требуется codex-linux-sandbox, но он не предоставлен")]
     LandlockSandboxExecutableNotProvided,
-    #[error("unsupported operation: {0}")]
+    #[error("неподдерживаемая операция: {0}")]
     UnsupportedOperation(String),
     #[error("{0}")]
     RefreshTokenFailed(RefreshTokenFailedError),
-    #[error("Fatal error: {0}")]
+    #[error("Критическая ошибка: {0}")]
     Fatal(String),
     // -----------------------------------------------------------------
     // Automatic conversions for common external error types
@@ -269,7 +269,7 @@ pub struct ConnectionFailedError {
 
 impl std::fmt::Display for ConnectionFailedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Connection failed: {}", self.source)
+        write!(f, "Ошибка соединения: {}", self.source)
     }
 }
 
@@ -283,11 +283,11 @@ impl std::fmt::Display for ResponseStreamFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Error while reading the server response: {}{}",
+            "Ошибка при чтении ответа сервера: {}{}",
             self.source,
             self.request_id
                 .as_ref()
-                .map(|id| format!(", request id: {id}"))
+                .map(|id| format!(", id запроса: {id}"))
                 .unwrap_or_default()
         )
     }
@@ -305,7 +305,7 @@ pub struct UnexpectedResponseError {
 }
 
 const CLOUDFLARE_BLOCKED_MESSAGE: &str =
-    "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
+    "Доступ заблокирован Cloudflare. Обычно это происходит при подключении из ограниченного региона";
 const UNEXPECTED_RESPONSE_BODY_MAX_BYTES: usize = 1000;
 
 impl UnexpectedResponseError {
@@ -316,7 +316,7 @@ impl UnexpectedResponseError {
 
         let trimmed_body = self.body.trim();
         if trimmed_body.is_empty() {
-            return "Unknown error".to_string();
+            return "Неизвестная ошибка".to_string();
         }
 
         truncate_with_ellipsis(trimmed_body, UNEXPECTED_RESPONSE_BODY_MAX_BYTES)
@@ -354,13 +354,13 @@ impl UnexpectedResponseError {
             message.push_str(&format!(", cf-ray: {cf_ray}"));
         }
         if let Some(id) = &self.request_id {
-            message.push_str(&format!(", request id: {id}"));
+            message.push_str(&format!(", id запроса: {id}"));
         }
         if let Some(auth_error) = &self.identity_authorization_error {
-            message.push_str(&format!(", auth error: {auth_error}"));
+            message.push_str(&format!(", ошибка авторизации: {auth_error}"));
         }
         if let Some(error_code) = &self.identity_error_code {
-            message.push_str(&format!(", auth error code: {error_code}"));
+            message.push_str(&format!(", код ошибки авторизации: {error_code}"));
         }
 
         Some(message)
@@ -374,7 +374,7 @@ impl std::fmt::Display for UnexpectedResponseError {
         } else {
             let status = self.status;
             let body = self.display_body();
-            let mut message = format!("unexpected status {status}: {body}");
+            let mut message = format!("неожиданный статус {status}: {body}");
             if let Some(url) = &self.url {
                 message.push_str(&format!(", url: {url}"));
             }
@@ -382,13 +382,13 @@ impl std::fmt::Display for UnexpectedResponseError {
                 message.push_str(&format!(", cf-ray: {cf_ray}"));
             }
             if let Some(id) = &self.request_id {
-                message.push_str(&format!(", request id: {id}"));
+                message.push_str(&format!(", id запроса: {id}"));
             }
             if let Some(auth_error) = &self.identity_authorization_error {
-                message.push_str(&format!(", auth error: {auth_error}"));
+                message.push_str(&format!(", ошибка авторизации: {auth_error}"));
             }
             if let Some(error_code) = &self.identity_error_code {
-                message.push_str(&format!(", auth error code: {error_code}"));
+                message.push_str(&format!(", код ошибки авторизации: {error_code}"));
             }
             write!(f, "{message}")
         }
@@ -428,11 +428,11 @@ impl std::fmt::Display for RetryLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "exceeded retry limit, last status: {}{}",
+            "превышен лимит повторов, последний статус: {}{}",
             self.status,
             self.request_id
                 .as_ref()
-                .map(|id| format!(", request id: {id}"))
+                .map(|id| format!(", id запроса: {id}"))
                 .unwrap_or_default()
         )
     }
@@ -458,7 +458,7 @@ impl std::fmt::Display for UsageLimitReachedError {
         {
             return write!(
                 f,
-                "You've hit your usage limit for {limit_name}. Switch to another model now,{}",
+                "Вы достигли лимита использования для {limit_name}. Переключитесь на другую модель{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             );
         }
@@ -466,14 +466,14 @@ impl std::fmt::Display for UsageLimitReachedError {
         if let Some(promo_message) = &self.promo_message {
             return write!(
                 f,
-                "You've hit your usage limit. {promo_message},{}",
+                "Вы достигли лимита использования. {promo_message},{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             );
         }
 
         let message = match self.plan_type.as_ref() {
             Some(PlanType::Known(KnownPlan::Plus)) => format!(
-                "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
+                "Вы достигли лимита использования. Обновите план до Pro (https://chatgpt.com/explore/pro), перейдите на https://chatgpt.com/codex/settings/usage, чтобы купить дополнительные кредиты{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(
@@ -483,27 +483,27 @@ impl std::fmt::Display for UsageLimitReachedError {
                 | KnownPlan::EnterpriseCbpUsageBased,
             )) => {
                 format!(
-                    "You've hit your usage limit. To get more access now, send a request to your admin{}",
+                    "Вы достигли лимита использования. Чтобы получить больше доступа прямо сейчас, отправьте запрос администратору{}",
                     retry_suffix_after_or(self.resets_at.as_ref())
                 )
             }
             Some(PlanType::Known(KnownPlan::Free)) | Some(PlanType::Known(KnownPlan::Go)) => {
                 format!(
-                    "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus),{}",
+                    "Вы достигли лимита использования. Обновите план до Plus, чтобы продолжить работу в Lavilas Codex (https://chatgpt.com/explore/plus),{}",
                     retry_suffix_after_or(self.resets_at.as_ref())
                 )
             }
             Some(PlanType::Known(KnownPlan::Pro)) => format!(
-                "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
+                "Вы достигли лимита использования. Перейдите на https://chatgpt.com/codex/settings/usage, чтобы купить дополнительные кредиты{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(KnownPlan::Enterprise))
             | Some(PlanType::Known(KnownPlan::Edu)) => format!(
-                "You've hit your usage limit.{}",
+                "Вы достигли лимита использования.{}",
                 retry_suffix(self.resets_at.as_ref())
             ),
             Some(PlanType::Unknown(_)) | None => format!(
-                "You've hit your usage limit.{}",
+                "Вы достигли лимита использования.{}",
                 retry_suffix(self.resets_at.as_ref())
             ),
         };
@@ -515,18 +515,18 @@ impl std::fmt::Display for UsageLimitReachedError {
 fn retry_suffix(resets_at: Option<&DateTime<Utc>>) -> String {
     if let Some(resets_at) = resets_at {
         let formatted = format_retry_timestamp(resets_at);
-        format!(" Try again at {formatted}.")
+        format!(" Повторите в {formatted}.")
     } else {
-        " Try again later.".to_string()
+        " Повторите позже.".to_string()
     }
 }
 
 fn retry_suffix_after_or(resets_at: Option<&DateTime<Utc>>) -> String {
     if let Some(resets_at) = resets_at {
         let formatted = format_retry_timestamp(resets_at);
-        format!(" or try again at {formatted}.")
+        format!(" или повторите в {formatted}.")
     } else {
-        " or try again later.".to_string()
+        " или повторите позже.".to_string()
     }
 }
 
@@ -582,7 +582,7 @@ pub struct EnvVarError {
 
 impl std::fmt::Display for EnvVarError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Missing environment variable: `{}`.", self.var)?;
+        write!(f, "Отсутствует переменная окружения: `{}`.", self.var)?;
         if let Some(instructions) = &self.instructions {
             write!(f, " {instructions}")?;
         }
@@ -604,7 +604,7 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
                     (false, true) => output.stderr.text.clone(),
                     (true, false) => output.stdout.text.clone(),
                     (true, true) => format!(
-                        "command failed inside sandbox with exit code {}",
+                        "команда в песочнице завершилась с кодом {}",
                         output.exit_code
                     ),
                 }
@@ -613,7 +613,7 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
         // Timeouts are not sandbox errors from a UX perspective; present them plainly.
         CodexErr::Sandbox(SandboxErr::Timeout { output }) => {
             format!(
-                "error: command timed out after {} ms",
+                "ошибка: время выполнения команды истекло через {} мс",
                 output.duration.as_millis()
             )
         }

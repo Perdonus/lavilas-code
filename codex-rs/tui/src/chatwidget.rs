@@ -226,6 +226,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseEvent;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -240,7 +241,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 use tracing::warn;
 
-const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
+const DEFAULT_MODEL_DISPLAY_NAME: &str = "загрузка";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
@@ -253,7 +254,28 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
-const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
+const CUSTOM_SETTINGS_VIEW_ID: &str = "custom-settings";
+const LANGUAGE_PICKER_VIEW_ID: &str = "language-picker";
+const COMMAND_PREFIX_VIEW_ID: &str = "command-prefix-picker";
+const COMMAND_VISIBILITY_VIEW_ID: &str = "command-visibility-picker";
+const PROFILES_MANAGER_VIEW_ID: &str = "profiles-manager";
+const ADD_ACCOUNT_PROVIDER_VIEW_ID: &str = "add-account-provider";
+const PERSONALITY_VIEW_ID: &str = "personality-picker";
+const MODEL_PICKER_VIEW_ID: &str = "model-picker";
+const ALL_MODELS_VIEW_ID: &str = "all-models-picker";
+const REASONING_PICKER_VIEW_ID: &str = "reasoning-picker";
+const PLAN_REASONING_SCOPE_VIEW_ID: &str = "plan-reasoning-scope";
+const REALTIME_AUDIO_VIEW_ID: &str = "realtime-audio-settings";
+const REALTIME_AUDIO_MICROPHONE_VIEW_ID: &str = "realtime-audio-microphone";
+const REALTIME_AUDIO_SPEAKER_VIEW_ID: &str = "realtime-audio-speaker";
+const TUI_STUB_MESSAGE: &str = "Пока недоступно в TUI.";
+
+fn realtime_audio_device_view_id(kind: RealtimeAudioDeviceKind) -> &'static str {
+    match kind {
+        RealtimeAudioDeviceKind::Microphone => REALTIME_AUDIO_MICROPHONE_VIEW_ID,
+        RealtimeAudioDeviceKind::Speaker => REALTIME_AUDIO_SPEAKER_VIEW_ID,
+    }
+}
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -315,6 +337,9 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::bottom_pane::prompt_args::command_prefix;
+use crate::bottom_pane::prompt_args::set_command_prefix;
+use crate::bottom_pane::slash_commands;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text;
 use crate::collaboration_modes;
@@ -343,11 +368,22 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::built_in_slash_commands;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use crate::ui_preferences::UiLanguage;
+use crate::ui_preferences::default_profile_model as default_profile_model_for_provider;
+use crate::ui_preferences::ensure_profile_model_catalog as ensure_profile_model_catalog_for_profile;
+use crate::ui_preferences::load_ui_preferences;
+use crate::ui_preferences::profile_model_catalog_path as ui_profile_model_catalog_path;
+use crate::ui_preferences::profiles_dir as ui_profiles_dir;
+use crate::ui_preferences::save_command_prefix as save_ui_command_prefix;
+use crate::ui_preferences::save_hidden_commands as save_ui_hidden_commands;
+use crate::ui_preferences::save_ui_language;
+use crate::ui_preferences::settings_path as ui_settings_path;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod session_header;
@@ -384,8 +420,8 @@ use codex_utils_approval_presets::builtin_approval_presets;
 use strum::IntoEnumIterator;
 use unicode_segmentation::UnicodeSegmentation;
 
-const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
-const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
+const USER_SHELL_COMMAND_HELP_TITLE: &str = "Добавьте ! перед командой, чтобы запустить её локально";
+const USER_SHELL_COMMAND_HELP_HINT: &str = "Например: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const FAST_STATUS_MODEL: &str = "gpt-5.4";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
@@ -438,6 +474,14 @@ impl UnifiedExecWaitStreak {
         }
         self.command_display = command_display.filter(|display| !display.is_empty());
     }
+}
+
+struct ProfilePreview {
+    provider: Option<String>,
+    display_name: Option<String>,
+    model: Option<String>,
+    linked_catalog_path: Option<PathBuf>,
+    derived_catalog_path: Option<PathBuf>,
 }
 
 fn is_unified_exec_source(source: ExecCommandSource) -> bool {
@@ -644,14 +688,14 @@ struct StatusIndicatorState {
 impl StatusIndicatorState {
     fn working() -> Self {
         Self {
-            header: String::from("Working"),
+            header: String::from("В работе"),
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
         }
     }
 
     fn is_guardian_review(&self) -> bool {
-        self.header == "Reviewing approval request" || self.header.starts_with("Reviewing ")
+        self.header == "Проверка запроса на подтверждение" || self.header.starts_with("Проверка запросов на подтверждение")
     }
 }
 
@@ -704,15 +748,15 @@ impl PendingGuardianReviewStatus {
                 .collect::<Vec<_>>();
             let remaining = self.entries.len().saturating_sub(3);
             if remaining > 0 {
-                lines.push(format!("+{remaining} more"));
+                lines.push(format!("+{remaining} ещё"));
             }
             Some(lines.join("\n"))
         };
         let details = details?;
         let header = if self.entries.len() == 1 {
-            String::from("Reviewing approval request")
+            String::from("Проверка запроса на подтверждение")
         } else {
-            format!("Reviewing {} approval requests", self.entries.len())
+            format!("Проверка запросов на подтверждение: {}", self.entries.len())
         };
         let details_max_lines = if self.entries.len() == 1 { 1 } else { 4 };
         Some(StatusIndicatorState {
@@ -1677,7 +1721,7 @@ impl ChatWidget {
             self.set_status_header(header);
         } else if self.bottom_pane.is_task_running() {
             self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
-            self.set_status_header(String::from("Working"));
+            self.set_status_header(String::from("В работе"));
         }
     }
 
@@ -2294,7 +2338,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
         self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
-        self.set_status_header(String::from("Working"));
+        self.set_status_header(String::from("В работе"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
@@ -2402,9 +2446,10 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
+        let is_ru = self.ui_language().is_ru();
         let (implement_actions, implement_disabled_reason) = match default_mask {
             Some(mask) => {
-                let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
+                let user_text = if is_ru { "Реализуй этот план.".to_string() } else { PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string() };
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::SubmitUserMessageWithMode {
                         text: user_text.clone(),
@@ -2413,12 +2458,32 @@ impl ChatWidget {
                 })];
                 (actions, None)
             }
-            None => (Vec::new(), Some("Default mode unavailable".to_string())),
+            None => (
+                Vec::new(),
+                Some(if is_ru {
+                    "Обычный режим сейчас недоступен".to_string()
+                } else {
+                    "Default mode unavailable".to_string()
+                }),
+            ),
+        };
+        let title = if is_ru {
+            "Переходить к коду по этому плану?".to_string()
+        } else {
+            PLAN_IMPLEMENTATION_TITLE.to_string()
         };
         let items = vec![
             SelectionItem {
-                name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Default and start coding.".to_string()),
+                name: if is_ru {
+                    "Да, начать реализацию".to_string()
+                } else {
+                    PLAN_IMPLEMENTATION_YES.to_string()
+                },
+                description: Some(if is_ru {
+                    "Выйти из Plan, перейти в обычный режим и начать выполнять шаги плана.".to_string()
+                } else {
+                    "Switch to Default and start coding.".to_string()
+                }),
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
@@ -2427,8 +2492,16 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: PLAN_IMPLEMENTATION_NO.to_string(),
-                description: Some("Continue planning with the model.".to_string()),
+                name: if is_ru {
+                    "Пока остаться в Plan".to_string()
+                } else {
+                    PLAN_IMPLEMENTATION_NO.to_string()
+                },
+                description: Some(if is_ru {
+                    "Остаться в режиме Plan и ещё уточнить шаги перед переходом к коду.".to_string()
+                } else {
+                    "Continue planning with the model.".to_string()
+                }),
                 selected_description: None,
                 is_current: false,
                 actions: Vec::new(),
@@ -2438,15 +2511,17 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(PLAN_IMPLEMENTATION_TITLE.to_string()),
+            title: Some(title.clone()),
             subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
-        self.notify(Notification::PlanModePrompt {
-            title: PLAN_IMPLEMENTATION_TITLE.to_string(),
-        });
+        self.notify(Notification::PlanModePrompt { title });
+    }
+
+    fn has_queued_follow_up_messages(&self) -> bool {
+        !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
     }
 
     fn has_queued_follow_up_messages(&self) -> bool {
@@ -2501,34 +2576,62 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_multi_agent_enable_prompt(&mut self) {
+        let is_ru = self.ui_language().is_ru();
+        let notice = if is_ru {
+            "Сабагенты включатся после запуска новой сессии.".to_string()
+        } else {
+            MULTI_AGENT_ENABLE_NOTICE.to_string()
+        };
         let items = vec![
             SelectionItem {
-                name: MULTI_AGENT_ENABLE_YES.to_string(),
-                description: Some(
-                    "Save the setting now. You will need a new session to use it.".to_string(),
-                ),
-                actions: vec![Box::new(|tx| {
+                name: if is_ru {
+                    "Да, включить".to_string()
+                } else {
+                    MULTI_AGENT_ENABLE_YES.to_string()
+                },
+                description: Some(if is_ru {
+                    "Сохранить настройку сейчас. После запуска новой сессии станут доступны сабагенты.".to_string()
+                } else {
+                    "Save the setting now. You will need a new session to use it.".to_string()
+                }),
+                actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::UpdateFeatureFlags {
                         updates: vec![(Feature::Collab, true)],
                     });
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_warning_event(MULTI_AGENT_ENABLE_NOTICE.to_string()),
+                        history_cell::new_warning_event(notice.clone()),
                     )));
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: MULTI_AGENT_ENABLE_NO.to_string(),
-                description: Some("Keep subagents disabled.".to_string()),
+                name: if is_ru {
+                    "Не сейчас".to_string()
+                } else {
+                    MULTI_AGENT_ENABLE_NO.to_string()
+                },
+                description: Some(if is_ru {
+                    "Оставить сабагентов выключенными и вернуться к этому позже.".to_string()
+                } else {
+                    "Keep subagents disabled.".to_string()
+                }),
                 dismiss_on_select: true,
                 ..Default::default()
             },
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(MULTI_AGENT_ENABLE_TITLE.to_string()),
-            subtitle: Some("Subagents are currently disabled in your config.".to_string()),
+            title: Some(if is_ru {
+                "Включить сабагентов?".to_string()
+            } else {
+                MULTI_AGENT_ENABLE_TITLE.to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Сейчас эта возможность отключена в конфиге и не используется в текущей сессии.".to_string()
+            } else {
+                "Subagents are currently disabled in your config.".to_string()
+            }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -2724,7 +2827,7 @@ impl ChatWidget {
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
-            "Codex is currently experiencing high load.".to_string()
+            "Lavilas Codex сейчас испытывает высокую нагрузку.".to_string()
         } else {
             message
         };
@@ -2906,11 +3009,11 @@ impl ChatWidget {
                 }
                 let header = if total > 1 {
                     format!(
-                        "Starting MCP servers ({completed}/{total}): {}",
+                        "Запуск MCP-серверов ({completed}/{total}): {}",
                         to_show.join(", ")
                     )
                 } else {
-                    format!("Booting MCP server: {first}")
+                    format!("Запуск MCP-сервера: {first}")
                 };
                 self.set_status_header(header);
             }
@@ -2933,16 +3036,16 @@ impl ChatWidget {
     fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
         if !cancelled.is_empty() {
             self.on_warning(format!(
-                "MCP startup interrupted. The following servers were not initialized: {}",
+                "Запуск MCP был прерван. Следующие серверы не были инициализированы: {}",
                 cancelled.join(", ")
             ));
         }
         let mut parts = Vec::new();
         if !failed.is_empty() {
-            parts.push(format!("failed: {}", failed.join(", ")));
+            parts.push(format!("ошибки: {}", failed.join(", ")));
         }
         if !parts.is_empty() {
-            self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
+            self.on_warning(format!("Запуск MCP завершился не полностью ({})", parts.join("; ")));
         }
 
         self.mcp_startup_status = None;
@@ -3004,7 +3107,7 @@ impl ChatWidget {
             McpServerStartupState::Ready => McpStartupStatus::Ready,
             McpServerStartupState::Failed => McpStartupStatus::Failed {
                 error: notification.error.unwrap_or_else(|| {
-                    format!("MCP client for `{}` failed to start", notification.name)
+                    format!("Не удалось запустить MCP-клиент для `{}`", notification.name)
                 }),
             },
             McpServerStartupState::Cancelled => McpStartupStatus::Cancelled,
@@ -3027,12 +3130,12 @@ impl ChatWidget {
         if reason != TurnAbortReason::ReviewEnded {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(
-                    "Model interrupted to submit steer instructions.".to_owned(),
+                    "Модель прервана, чтобы отправить уточняющие инструкции.".to_owned(),
                     /*hint*/ None,
                 ));
             } else {
                 self.add_to_history(history_cell::new_error_event(
-                    "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
+                    "Диалог прерван. Укажите модели, что делать иначе. Если что-то сломалось, используйте `/feedback`, чтобы отправить отчёт.".to_owned(),
                 ));
             }
         }
@@ -3333,12 +3436,12 @@ impl ChatWidget {
                     status.details_max_lines,
                 );
             } else if self.current_status.is_guardian_review() {
-                self.set_status_header(String::from("Working"));
+                self.set_status_header(String::from("В работе"));
             }
         } else if self.pending_guardian_review_status.is_empty()
             && self.current_status.is_guardian_review()
         {
-            self.set_status_header(String::from("Working"));
+            self.set_status_header(String::from("В работе"));
         }
 
         if ev.status == GuardianAssessmentStatus::Approved {
@@ -3478,7 +3581,7 @@ impl ChatWidget {
                 .set_interrupt_hint_visible(/*visible*/ true);
             self.terminal_title_status_kind = TerminalTitleStatusKind::WaitingForBackgroundTerminal;
             self.set_status(
-                "Waiting for background terminal".to_string(),
+                "Ожидание фонового терминала".to_string(),
                 command_display.clone(),
                 StatusDetailsCapitalization::Preserve,
                 /*details_max_lines*/ 1,
@@ -3980,7 +4083,7 @@ impl ChatWidget {
             .set_interrupt_hint_visible(/*visible*/ false);
         let message = event
             .message
-            .unwrap_or_else(|| "Undo in progress...".to_string());
+            .unwrap_or_else(|| "Откат выполняется...".to_string());
         self.terminal_title_status_kind = TerminalTitleStatusKind::Undoing;
         self.set_status_header(message);
     }
@@ -3993,9 +4096,9 @@ impl ChatWidget {
         self.refresh_terminal_title();
         let message = message.unwrap_or_else(|| {
             if success {
-                "Undo completed successfully.".to_string()
+                "Откат успешно завершён.".to_string()
             } else {
-                "Undo failed.".to_string()
+                "Откат завершился ошибкой.".to_string()
             }
         });
         if success {
@@ -4748,6 +4851,7 @@ impl ChatWidget {
             .bottom_pane
             .set_connectors_enabled(widget.connectors_enabled());
         widget.refresh_status_surfaces();
+        widget.apply_ui_preferences_from_profiles();
 
         widget
     }
@@ -4883,7 +4987,7 @@ impl ChatWidget {
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
+                        self.set_status_header(String::from("В работе"));
                         self.submit_user_message(user_message);
                     } else {
                         self.queue_user_message(user_message);
@@ -4967,6 +5071,10 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        self.bottom_pane.handle_mouse_event(mouse_event);
+    }
+
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
     }
@@ -4982,7 +5090,7 @@ impl ChatWidget {
             return true;
         }
 
-        let message = "Ctrl+L is disabled while a task is in progress.".to_string();
+        let message = "Ctrl+L недоступен, пока задача ещё выполняется.".to_string();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
         false
@@ -4991,8 +5099,9 @@ impl ChatWidget {
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
-                "'/{}' is disabled while a task is in progress.",
-                cmd.command()
+                "Команда '{prefix}{}' недоступна, пока задача ещё выполняется.",
+                cmd.command(),
+                prefix = command_prefix()
             );
             self.add_to_history(history_cell::new_error_event(message));
             self.bottom_pane.drain_pending_submission_state();
@@ -5030,14 +5139,14 @@ impl ChatWidget {
                     Ok(path) => path,
                     Err(err) => {
                         self.add_error_message(format!(
-                            "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
+                            "Не удалось подготовить {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
                         ));
                         return;
                     }
                 };
                 if init_target.exists() {
                     let message = format!(
-                        "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
+                        "{DEFAULT_PROJECT_DOC_FILENAME} уже существует в этом каталоге. Пропускаю /init, чтобы не перезаписать файл."
                     );
                     self.add_info_message(message, /*hint*/ None);
                     return;
@@ -5064,10 +5173,10 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Profiles => {
-                self.show_profiles_summary();
+                self.open_profiles_manager_popup();
             }
             SlashCommand::Setlang => {
-                self.add_error_message("Использование: /setlang <ru|en>".to_string());
+                self.open_language_picker_popup();
             }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
@@ -5088,10 +5197,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Settings => {
-                if !self.realtime_audio_device_selection_enabled() {
-                    return;
-                }
-                self.open_realtime_audio_popup();
+                self.open_custom_settings_popup();
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -5099,8 +5205,8 @@ impl ChatWidget {
             SlashCommand::Plan => {
                 if !self.collaboration_modes_enabled() {
                     self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /plan.".to_string()),
+                        "Режимы совместной работы отключены.".to_string(),
+                        Some("Включите режимы совместной работы, чтобы использовать /plan.".to_string()),
                     );
                     return;
                 }
@@ -5108,7 +5214,7 @@ impl ChatWidget {
                     self.set_collaboration_mask(mask);
                 } else {
                     self.add_info_message(
-                        "Plan mode unavailable right now.".to_string(),
+                        "Режим планирования сейчас недоступен.".to_string(),
                         /*hint*/ None,
                     );
                 }
@@ -5116,8 +5222,8 @@ impl ChatWidget {
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
                     self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /collab.".to_string()),
+                        "Режимы совместной работы отключены.".to_string(),
+                        Some("Включите режимы совместной работы, чтобы использовать /collab.".to_string()),
                     );
                     return;
                 }
@@ -5225,7 +5331,7 @@ impl ChatWidget {
             SlashCommand::Copy => {
                 let Some(text) = self.last_copyable_output.as_deref() else {
                     self.add_info_message(
-                        "`/copy` is unavailable before the first Codex output or right after a rollback."
+                        "`/copy` is unavailable before the first Lavilas Codex output or right after a rollback."
                             .to_string(),
                         /*hint*/ None,
                     );
@@ -5241,7 +5347,7 @@ impl ChatWidget {
                                 .to_string(),
                         );
                         self.add_info_message(
-                            "Copied latest Codex output to clipboard.".to_string(),
+                            "Copied the latest Lavilas Codex output to the clipboard.".to_string(),
                             hint,
                         );
                     }
@@ -5306,12 +5412,12 @@ impl ChatWidget {
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
-                        format!("Current rollout path: {}", path.display()),
+                        format!("Текущий путь rollout: {}", path.display()),
                         /*hint*/ None,
                     );
                 } else {
                     self.add_info_message(
-                        "Rollout path is not available yet.".to_string(),
+                        "Путь rollout пока недоступен.".to_string(),
                         /*hint*/ None,
                     );
                 }
@@ -5362,8 +5468,9 @@ impl ChatWidget {
         }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
-                "'/{}' is disabled while a task is in progress.",
-                cmd.command()
+                "Команда '{prefix}{}' недоступна, пока задача ещё выполняется.",
+                cmd.command(),
+                prefix = command_prefix()
             );
             self.add_to_history(history_cell::new_error_event(message));
             self.request_redraw();
@@ -5387,10 +5494,7 @@ impl ChatWidget {
                         } else {
                             "off"
                         };
-                        self.add_info_message(
-                            format!("Fast-режим: {status}."),
-                            /*hint*/ None,
-                        );
+                        self.add_info_message(format!("Fast-режим: {status}."), /*hint*/ None);
                     }
                     _ => {
                         self.add_error_message("Использование: /fast [on|off|status]".to_string());
@@ -5405,18 +5509,7 @@ impl ChatWidget {
                     return;
                 };
                 let lang = prepared_args.trim().to_ascii_lowercase();
-                if lang != "ru" && lang != "en" {
-                    self.add_error_message("Использование: /setlang <ru|en>".to_string());
-                    return;
-                }
-                if let Err(err) = self.persist_profiles_language(&lang) {
-                    self.add_error_message(format!("Не удалось сохранить язык профилей: {err}"));
-                    return;
-                }
-                self.add_info_message(
-                    format!("Язык профилей сохранён: {lang}."),
-                    Some("Настройка записана в ~/.codex/Profiles/settings.json".to_string()),
-                );
+                self.apply_profiles_language(&lang);
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Profiles if !trimmed.is_empty() => {
@@ -5432,7 +5525,7 @@ impl ChatWidget {
                 let profile_name = parts.next().unwrap_or_default().trim().to_string();
                 if provider.is_empty() {
                     self.add_error_message(
-                        "Использование: /profiles <provider> [profile_name]".to_string(),
+                        "Использование: /profiles <провайдер> [имя_профиля]".to_string(),
                     );
                     return;
                 }
@@ -5447,7 +5540,7 @@ impl ChatWidget {
                 ];
                 if !supported.contains(&provider.as_str()) {
                     self.add_error_message(format!(
-                        "Неподдерживаемый provider: {provider}. Поддерживаются: {}",
+                        "Неподдерживаемый провайдер: {provider}. Доступны: {}",
                         supported.join(", ")
                     ));
                     return;
@@ -5455,7 +5548,7 @@ impl ChatWidget {
                 match self.create_profile_template(&provider, &profile_name) {
                     Ok(path) => self.add_info_message(
                         format!("Создан профиль: {}", path.display()),
-                        Some("Отредактируйте файл и добавьте ключи/API URL.".to_string()),
+                        Some(self.profile_setup_hint(path.as_path())),
                     ),
                     Err(err) => {
                         self.add_error_message(format!("Не удалось создать профиль: {err}"))
@@ -5473,7 +5566,11 @@ impl ChatWidget {
                     return;
                 };
                 let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
-                    self.add_error_message("Thread name cannot be empty.".to_string());
+                    self.add_error_message(if self.ui_language().is_ru() {
+                        "Название треда не может быть пустым.".to_string()
+                    } else {
+                        "Thread name cannot be empty.".to_string()
+                    });
                     return;
                 };
                 let cell = Self::rename_confirmation_cell(&name, self.thread_id);
@@ -5507,7 +5604,7 @@ impl ChatWidget {
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
                     self.full_reasoning_buffer.clear();
-                    self.set_status_header(String::from("Working"));
+                    self.set_status_header(String::from("В работе"));
                     self.submit_user_message(user_message);
                 } else {
                     self.queue_user_message(user_message);
@@ -5546,25 +5643,42 @@ impl ChatWidget {
     }
 
     fn show_rename_prompt(&mut self) {
+        let is_ru = self.ui_language().is_ru();
         let tx = self.app_event_tx.clone();
         let has_name = self
             .thread_name
             .as_ref()
             .is_some_and(|name| !name.is_empty());
         let title = if has_name {
-            "Rename thread"
+            if is_ru {
+                "Переименовать тред"
+            } else {
+                "Rename thread"
+            }
+        } else if is_ru {
+            "Назвать тред"
         } else {
             "Name thread"
+        };
+        let placeholder = if is_ru {
+            "Введите имя и нажмите Enter".to_string()
+        } else {
+            "Type a name and press Enter".to_string()
+        };
+        let empty_name_error = if is_ru {
+            "Название треда не может быть пустым.".to_string()
+        } else {
+            "Thread name cannot be empty.".to_string()
         };
         let thread_id = self.thread_id;
         let view = CustomPromptView::new(
             title.to_string(),
-            "Type a name and press Enter".to_string(),
+            placeholder,
             /*context_label*/ None,
             Box::new(move |name: String| {
                 let Some(name) = codex_core::util::normalize_thread_name(&name) else {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_error_event("Thread name cannot be empty.".to_string()),
+                        history_cell::new_error_event(empty_name_error.clone()),
                     )));
                     return;
                 };
@@ -5813,7 +5927,7 @@ impl ChatWidget {
         let effective_mode = self.effective_collaboration_mode();
         if effective_mode.model().trim().is_empty() {
             self.add_error_message(
-                "Thread model is unavailable. Wait for the thread to finish syncing or choose a model before sending input.".to_string(),
+                "Модель треда пока недоступна. Дождитесь завершения синхронизации или выберите модель перед отправкой ввода.".to_string(),
             );
             return;
         }
@@ -6276,7 +6390,7 @@ impl ChatWidget {
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
-                self.on_agent_message("Context compacted".to_owned());
+                self.on_agent_message("Контекст сжат".to_owned());
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
@@ -6964,7 +7078,7 @@ impl ChatWidget {
                     self.submit_pending_steers_after_interrupt = false;
                     self.pending_steers.clear();
                     self.refresh_pending_input_preview();
-                    self.on_error("Turn aborted: replaced by a new task".to_owned())
+                    self.on_error("Текущий ход прерван: его заменила новая задача".to_owned())
                 }
                 TurnAbortReason::ReviewEnded => {
                     self.on_interrupted_turn(ev.reason);
@@ -7035,7 +7149,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::ContextCompacted(_) => self.on_agent_message("Контекст сжат".to_owned()),
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
@@ -7532,7 +7646,7 @@ impl ChatWidget {
     fn clean_background_terminals(&mut self) {
         self.submit_op(AppCommand::clean_background_terminals());
         self.add_info_message(
-            "Stopping all background terminals.".to_string(),
+            "Останавливаю все фоновые терминалы.".to_string(),
             /*hint*/ None,
         );
     }
@@ -7664,7 +7778,8 @@ impl ChatWidget {
     }
 
     fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
-        let switch_model = preset.model;
+        let is_ru = self.ui_language().is_ru();
+        let switch_model = preset.model.clone();
         let switch_model_for_events = switch_model.clone();
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
 
@@ -7694,15 +7809,25 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateRateLimitSwitchPromptHidden(true));
             tx.send(AppEvent::PersistRateLimitSwitchPromptHidden);
         })];
-        let description = if preset.description.is_empty() {
-            Some("Uses fewer credits for upcoming turns.".to_string())
-        } else {
-            Some(preset.description)
-        };
+        let description = self.model_preset_description(&preset).or_else(|| {
+            if preset.description.is_empty() {
+                Some(if is_ru {
+                    "Для следующих запросов будет тратить меньше кредитов.".to_string()
+                } else {
+                    "Uses fewer credits for upcoming turns.".to_string()
+                })
+            } else {
+                Some(preset.description.clone())
+            }
+        });
 
         let items = vec![
             SelectionItem {
-                name: format!("Switch to {switch_model}"),
+                name: if is_ru {
+                    format!("Переключиться на {switch_model}")
+                } else {
+                    format!("Switch to {switch_model}")
+                },
                 description,
                 selected_description: None,
                 is_current: false,
@@ -7711,7 +7836,11 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "Keep current model".to_string(),
+                name: if is_ru {
+                    "Оставить текущую модель".to_string()
+                } else {
+                    "Keep current model".to_string()
+                },
                 description: None,
                 selected_description: None,
                 is_current: false,
@@ -7720,10 +7849,16 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "Keep current model (never show again)".to_string(),
-                description: Some(
-                    "Hide future rate limit reminders about switching models.".to_string(),
-                ),
+                name: if is_ru {
+                    "Оставить текущую модель и больше не напоминать".to_string()
+                } else {
+                    "Keep current model (never show again)".to_string()
+                },
+                description: Some(if is_ru {
+                    "Скрыть будущие напоминания о смене модели из-за лимитов.".to_string()
+                } else {
+                    "Hide future rate limit reminders about switching models.".to_string()
+                }),
                 selected_description: None,
                 is_current: false,
                 actions: never_actions,
@@ -7733,8 +7868,16 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Approaching rate limits".to_string()),
-            subtitle: Some(format!("Switch to {switch_model} for lower credit usage?")),
+            title: Some(if is_ru {
+                "Лимиты почти исчерпаны".to_string()
+            } else {
+                "Approaching rate limits".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                format!("Переключиться на {switch_model}, чтобы тратить меньше кредитов?")
+            } else {
+                format!("Switch to {switch_model} for lower credit usage?")
+            }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -7744,9 +7887,14 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "Все модели"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
         if !self.is_session_configured() {
             self.add_info_message(
-                "Выбор модели недоступен до завершения запуска.".to_string(),
+                if is_ru {
+                    "Выбор модели станет доступен после завершения запуска сессии.".to_string()
+                } else {
+                    "Model selection is unavailable until startup completes.".to_string()
+                },
                 /*hint*/ None,
             );
             return;
@@ -7756,7 +7904,13 @@ impl ChatWidget {
             Ok(models) => models,
             Err(_) => {
                 self.add_info_message(
-                    "Список моделей обновляется, повторите /model через пару секунд.".to_string(),
+                    if is_ru {
+                        "Каталог моделей ещё обновляется. Повторите /model через пару секунд."
+                            .to_string()
+                    } else {
+                        "The model catalog is still refreshing. Try /model again in a few seconds."
+                            .to_string()
+                    },
                     /*hint*/ None,
                 );
                 return;
@@ -7766,18 +7920,30 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_personality_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
         if !self.is_session_configured() {
             self.add_info_message(
-                "Personality selection is disabled until startup completes.".to_string(),
+                if is_ru {
+                    "Выбор стиля недоступен, пока сессия ещё запускается.".to_string()
+                } else {
+                    "Personality selection is disabled until startup completes.".to_string()
+                },
                 /*hint*/ None,
             );
             return;
         }
         if !self.current_model_supports_personality() {
             let current_model = self.current_model();
-            self.add_error_message(format!(
-                "Current model ({current_model}) doesn't support personalities. Try /model to pick a different model."
-            ));
+            let message = if is_ru {
+                format!(
+                    "Текущая модель ({current_model}) не умеет менять стиль общения. Откройте /model и выберите другую модель."
+                )
+            } else {
+                format!(
+                    "Current model ({current_model}) doesn't support personalities. Try /model to pick a different model."
+                )
+            };
+            self.add_error_message(message);
             return;
         }
         self.open_personality_popup_for_current_model();
@@ -7785,89 +7951,288 @@ impl ChatWidget {
 
     fn open_personality_popup_for_current_model(&mut self) {
         let current_personality = self.config.personality.unwrap_or(Personality::Friendly);
-        let personalities = [Personality::Friendly, Personality::Pragmatic];
+        let personalities = [
+            Personality::None,
+            Personality::Friendly,
+            Personality::Pragmatic,
+        ];
         let supports_personality = self.current_model_supports_personality();
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(PERSONALITY_VIEW_ID);
+        let remembered_selected_idx =
+            self.bottom_pane.selected_index_for_active_view(PERSONALITY_VIEW_ID);
 
-        let items: Vec<SelectionItem> = personalities
-            .into_iter()
-            .map(|personality| {
-                let name = Self::personality_label(personality).to_string();
-                let description = Some(Self::personality_description(personality).to_string());
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::CodexOp(
-                        AppCommand::override_turn_context(
-                            /*cwd*/ None,
-                            /*approval_policy*/ None,
-                            /*approvals_reviewer*/ None,
-                            /*sandbox_policy*/ None,
-                            /*windows_sandbox_level*/ None,
-                            /*model*/ None,
-                            /*effort*/ None,
-                            /*summary*/ None,
-                            /*service_tier*/ None,
-                            /*collaboration_mode*/ None,
-                            Some(personality),
-                        )
-                        .into_core(),
-                    ));
-                    tx.send(AppEvent::UpdatePersonality(personality));
-                    tx.send(AppEvent::PersistPersonalitySelection { personality });
-                })];
-                SelectionItem {
-                    name,
-                    description,
-                    is_current: current_personality == personality,
-                    is_disabled: !supports_personality,
-                    actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                }
-            })
-            .collect();
-
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Select Personality".bold()));
-        header.push(Line::from("Choose a communication style for Codex.".dim()));
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            header: Box::new(header),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
+        let mut items: Vec<SelectionItem> = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к единому центру настроек.".to_string()
+            } else {
+                "Return to the unified settings hub.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад настройки стиль ответы".to_string()
+            } else {
+                "back settings response style".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
             ..Default::default()
-        });
-    }
+        }];
 
-    pub(crate) fn open_realtime_audio_popup(&mut self) {
-        let items = [
-            RealtimeAudioDeviceKind::Microphone,
-            RealtimeAudioDeviceKind::Speaker,
-        ]
-        .into_iter()
-        .map(|kind| {
-            let description = Some(format!(
-                "Current: {}",
-                self.current_realtime_audio_selection_label(kind)
-            ));
+        items.extend(personalities.into_iter().map(|personality| {
+            let (name, description, search_value) = match (is_ru, personality) {
+                (true, Personality::None) => (
+                    "Без стиля".to_string(),
+                    "Нейтральный ответ без дополнительных указаний по тону.".to_string(),
+                    "без стиля нейтрально none тон".to_string(),
+                ),
+                (true, Personality::Friendly) => (
+                    "Дружелюбный".to_string(),
+                    "Более тёплый и поддерживающий тон без потери конкретики.".to_string(),
+                    "дружелюбный friendly мягко поддержка".to_string(),
+                ),
+                (true, Personality::Pragmatic) => (
+                    "Прагматичный".to_string(),
+                    "Коротко, прямо и с упором на действие, без лишней воды.".to_string(),
+                    "прагматичный pragmatic коротко по делу".to_string(),
+                ),
+                (false, Personality::None) => (
+                    "None".to_string(),
+                    "Neutral answers without extra tone instructions.".to_string(),
+                    "none neutral tone".to_string(),
+                ),
+                (false, Personality::Friendly) => (
+                    "Friendly".to_string(),
+                    "Warmer and more supportive without losing specificity.".to_string(),
+                    "friendly warm supportive".to_string(),
+                ),
+                (false, Personality::Pragmatic) => (
+                    "Pragmatic".to_string(),
+                    "Concise, direct, and focused on action.".to_string(),
+                    "pragmatic concise direct action".to_string(),
+                ),
+            };
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenRealtimeAudioDeviceSelection { kind });
+                tx.send(AppEvent::CodexOp(
+                    AppCommand::override_turn_context(
+                        /*cwd*/ None,
+                        /*approval_policy*/ None,
+                        /*approvals_reviewer*/ None,
+                        /*sandbox_policy*/ None,
+                        /*windows_sandbox_level*/ None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        Some(personality),
+                    )
+                    .into_core(),
+                ));
+                tx.send(AppEvent::UpdatePersonality(personality));
+                tx.send(AppEvent::PersistPersonalitySelection { personality });
             })];
             SelectionItem {
-                name: kind.title().to_string(),
-                description,
+                name,
+                description: Some(description),
+                search_value: Some(search_value),
+                is_current: current_personality == personality,
+                is_disabled: !supports_personality,
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()
             }
-        })
-        .collect();
+        }));
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Settings".to_string()),
-            subtitle: Some("Configure settings for Codex.".to_string()),
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(if is_ru {
+            "Стиль ответов".bold()
+        } else {
+            "Response style".bold()
+        }));
+        header.push(Line::from(if is_ru {
+            "Подберите манеру, с которой Lavilas Codex будет отвечать в этой сессии.".dim()
+        } else {
+            "Choose how Lavilas Codex should respond in this session.".dim()
+        }));
+
+        let initial_selected_idx = remembered_selected_idx
+            .or_else(|| items.iter().position(|item| item.is_current))
+            .or(Some(1));
+        let params = SelectionViewParams {
+            view_id: Some(PERSONALITY_VIEW_ID),
+            header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти стиль ответа".to_string()
+            } else {
+                "Find a response style".to_string()
+            }),
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
             ..Default::default()
-        });
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(PERSONALITY_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn prefetch_rate_limits(&mut self) {
+        self.stop_rate_limit_poller();
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn should_prefetch_rate_limits(&self) -> bool {
+        self.config.model_provider.requires_openai_auth && self.has_chatgpt_account
+    }
+
+    fn lower_cost_preset(&self) -> Option<ModelPreset> {
+        let models = self.model_catalog.try_list_models().ok()?;
+        models
+            .iter()
+            .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
+            .cloned()
+    }
+
+    fn rate_limit_switch_prompt_hidden(&self) -> bool {
+        self.config
+            .notices
+            .hide_rate_limit_model_nudge
+            .unwrap_or(false)
+    }
+
+    fn maybe_show_pending_rate_limit_prompt(&mut self) {
+        if self.rate_limit_switch_prompt_hidden() {
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+            return;
+        }
+        if !matches!(
+            self.rate_limit_switch_prompt,
+            RateLimitSwitchPromptState::Pending
+        ) {
+            return;
+        }
+        if let Some(preset) = self.lower_cost_preset() {
+            self.open_rate_limit_switch_prompt(preset);
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Shown;
+        } else {
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+        }
+    }
+
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn open_realtime_audio_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(REALTIME_AUDIO_VIEW_ID);
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(REALTIME_AUDIO_VIEW_ID)
+            .or(Some(1));
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к общим настройкам модели, профилей и команд.".to_string()
+            } else {
+                "Return to the main settings hub.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад настройки звук".to_string()
+            } else {
+                "back settings audio".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.extend(
+            [
+                RealtimeAudioDeviceKind::Microphone,
+                RealtimeAudioDeviceKind::Speaker,
+            ]
+            .into_iter()
+            .map(|kind| {
+                let current_label = self.current_realtime_audio_selection_label(kind);
+                let description = Some(if is_ru {
+                    format!("Сейчас используется: {current_label}")
+                } else {
+                    format!("Current: {current_label}")
+                });
+                let search_value = if is_ru {
+                    format!(
+                        "{} {} голос звук",
+                        self.realtime_audio_device_title(kind),
+                        current_label
+                    )
+                } else {
+                    format!(
+                        "{} {} voice audio",
+                        self.realtime_audio_device_title(kind),
+                        current_label
+                    )
+                };
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenRealtimeAudioDeviceSelection { kind });
+                })];
+                SelectionItem {
+                    name: self.realtime_audio_device_title(kind).to_string(),
+                    description,
+                    search_value: Some(search_value),
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            }),
+        );
+
+        let params = SelectionViewParams {
+            view_id: Some(REALTIME_AUDIO_VIEW_ID),
+            title: Some(if is_ru {
+                "Голос и звук".to_string()
+            } else {
+                "Audio settings".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Настройте микрофон и вывод для голосового режима.".to_string()
+            } else {
+                "Choose devices for realtime voice.".to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти настройку звука".to_string()
+            } else {
+                "Find an audio setting".to_string()
+            }),
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            ..Default::default()
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(REALTIME_AUDIO_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -7877,10 +8242,17 @@ impl ChatWidget {
                 self.open_realtime_audio_device_selection_with_names(kind, device_names);
             }
             Err(err) => {
-                self.add_error_message(format!(
-                    "Failed to load realtime {} devices: {err}",
-                    kind.noun()
-                ));
+                self.add_error_message(if self.ui_language().is_ru() {
+                    format!(
+                        "Не удалось загрузить устройства для {}: {err}",
+                        self.realtime_audio_device_noun(kind)
+                    )
+                } else {
+                    format!(
+                        "Failed to load realtime {} devices: {err}",
+                        self.realtime_audio_device_noun(kind)
+                    )
+                });
             }
         }
     }
@@ -7896,13 +8268,62 @@ impl ChatWidget {
         kind: RealtimeAudioDeviceKind,
         device_names: Vec<String>,
     ) {
+        let is_ru = self.ui_language().is_ru();
+        let view_id = realtime_audio_device_view_id(kind);
+        let replace_active = self.bottom_pane.active_view_id() == Some(view_id);
+        let remembered_selected_idx = self.bottom_pane.selected_index_for_active_view(view_id);
         let current_selection = self.current_realtime_audio_device_name(kind);
         let current_available = current_selection
             .as_deref()
             .is_some_and(|name| device_names.iter().any(|device_name| device_name == name));
+        let default_selected_idx = if current_selection.is_none() {
+            Some(1)
+        } else if !current_available {
+            Some(2)
+        } else {
+            current_selection.as_deref().and_then(|selection| {
+                device_names
+                    .iter()
+                    .position(|device_name| device_name == selection)
+                    .map(|idx| idx + 2)
+            })
+        };
+
         let mut items = vec![SelectionItem {
-            name: "System default".to_string(),
-            description: Some("Use your operating system default device.".to_string()),
+            name: if is_ru {
+                "← Назад к голосу и звуку".to_string()
+            } else {
+                "← Back to audio settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к выбору микрофона и вывода для голосового режима.".to_string()
+            } else {
+                "Return to realtime audio settings.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад голос звук".to_string()
+            } else {
+                "back voice audio".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenRealtimeAudioPopup))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }, SelectionItem {
+            name: if is_ru {
+                "По умолчанию в системе".to_string()
+            } else {
+                "System default".to_string()
+            },
+            description: Some(if is_ru {
+                "Использовать устройство, которое сейчас выбрано в системе.".to_string()
+            } else {
+                "Use your operating system default device.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "по умолчанию система устройство".to_string()
+            } else {
+                "system default device".to_string()
+            }),
             is_current: current_selection.is_none(),
             actions: vec![Box::new(move |tx| {
                 tx.send(AppEvent::PersistRealtimeAudioDeviceSelection { kind, name: None });
@@ -7915,17 +8336,31 @@ impl ChatWidget {
             && !current_available
         {
             items.push(SelectionItem {
-                name: format!("Unavailable: {selection}"),
-                description: Some("Configured device is not currently available.".to_string()),
+                name: if is_ru {
+                    format!("Недоступно: {selection}")
+                } else {
+                    format!("Unavailable: {selection}")
+                },
+                description: Some(if is_ru {
+                    "Сохранённое устройство сейчас не видно системе.".to_string()
+                } else {
+                    "Configured device is not currently available.".to_string()
+                }),
+                search_value: Some(selection.to_string()),
                 is_current: true,
                 is_disabled: true,
-                disabled_reason: Some("Reconnect the device or choose another one.".to_string()),
+                disabled_reason: Some(if is_ru {
+                    "Подключите его снова или выберите другой вариант.".to_string()
+                } else {
+                    "Reconnect the device or choose another one.".to_string()
+                }),
                 ..Default::default()
             });
         }
 
         items.extend(device_names.into_iter().map(|device_name| {
             let persisted_name = device_name.clone();
+            let search_value = device_name.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::PersistRealtimeAudioDeviceSelection {
                     kind,
@@ -7935,6 +8370,7 @@ impl ChatWidget {
             SelectionItem {
                 is_current: current_selection.as_deref() == Some(device_name.as_str()),
                 name: device_name,
+                search_value: Some(search_value),
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -7942,47 +8378,98 @@ impl ChatWidget {
         }));
 
         let mut header = ColumnRenderable::new();
-        header.push(Line::from(format!("Select {}", kind.title()).bold()));
         header.push(Line::from(
-            "Saved devices apply to realtime voice only.".dim(),
+            if is_ru {
+                format!("Устройство: {}", self.realtime_audio_device_title(kind)).bold()
+            } else {
+                format!("Select {}", self.realtime_audio_device_title(kind)).bold()
+            },
         ));
+        header.push(Line::from(if is_ru {
+            "Сохранённый выбор влияет только на голосовой режим.".dim()
+        } else {
+            "Saved devices apply to realtime voice only.".dim()
+        }));
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
+        let params = SelectionViewParams {
+            view_id: Some(view_id),
             header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                format!("Найти устройство: {}", self.realtime_audio_device_title(kind))
+            } else {
+                format!("Search {}", self.realtime_audio_device_title(kind).to_lowercase())
+            }),
+            initial_selected_idx: remembered_selected_idx.or(default_selected_idx),
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenRealtimeAudioPopup))),
             ..Default::default()
-        });
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(view_id, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
     }
 
     pub(crate) fn open_realtime_audio_restart_prompt(&mut self, kind: RealtimeAudioDeviceKind) {
+        let is_ru = self.ui_language().is_ru();
         let restart_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::RestartRealtimeAudioDevice { kind });
         })];
         let items = vec![
             SelectionItem {
-                name: "Restart now".to_string(),
-                description: Some(format!("Restart local {} audio now.", kind.noun())),
+                name: if is_ru {
+                    "Перезапустить сейчас".to_string()
+                } else {
+                    "Restart now".to_string()
+                },
+                description: Some(if is_ru {
+                    format!("Перезапустить локальный звук и сразу переключиться на новый {}.", self.realtime_audio_device_noun(kind))
+                } else {
+                    format!("Restart local {} audio now.", self.realtime_audio_device_noun(kind))
+                }),
                 actions: restart_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Apply later".to_string(),
-                description: Some(format!(
-                    "Keep the current {} until local audio starts again.",
-                    kind.noun()
-                )),
+                name: if is_ru {
+                    "Применить позже".to_string()
+                } else {
+                    "Apply later".to_string()
+                },
+                description: Some(if is_ru {
+                    format!(
+                        "Оставить текущее устройство до следующего запуска локального звука: {}.",
+                        self.realtime_audio_device_noun(kind)
+                    )
+                } else {
+                    format!(
+                        "Keep the current {} until local audio starts again.",
+                        self.realtime_audio_device_noun(kind)
+                    )
+                }),
                 dismiss_on_select: true,
                 ..Default::default()
             },
         ];
 
         let mut header = ColumnRenderable::new();
-        header.push(Line::from(format!("Restart {} now?", kind.title()).bold()));
-        header.push(Line::from(
-            "Configuration is saved. Restart local audio to use it immediately.".dim(),
-        ));
+        header.push(Line::from(if is_ru {
+            format!("Применить новый {} сейчас?", self.realtime_audio_device_noun(kind)).bold()
+        } else {
+            format!("Restart {} now?", self.realtime_audio_device_title(kind)).bold()
+        }));
+        header.push(Line::from(if is_ru {
+            "Выбор уже сохранён. Чтобы применить его сразу, перезапустите локальное аудио.".dim()
+        } else {
+            "Configuration is saved. Restart local audio to use it immediately.".dim()
+        }));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
@@ -8006,10 +8493,76 @@ impl ChatWidget {
 
     fn model_menu_warning_line(&self) -> Option<Line<'static>> {
         let base_url = self.custom_openai_base_url()?;
-        let warning = format!(
-            "Warning: OpenAI base URL is overridden to {base_url}. Selecting models may not be supported or work properly."
-        );
+        let warning = if self.ui_language().is_ru() {
+            format!(
+                "Внимание: для OpenAI указан нестандартный адрес API ({base_url}). Каталог моделей может отображаться не полностью."
+            )
+        } else {
+            format!(
+                "Warning: OpenAI is using a custom API base URL ({base_url}). The model catalog may be incomplete."
+            )
+        };
         Some(Line::from(warning.red()))
+    }
+
+    fn model_picker_label(preset: &ModelPreset) -> String {
+        let display_name = preset.display_name.trim();
+        if display_name.is_empty() || display_name == preset.model {
+            preset.model.clone()
+        } else {
+            display_name.to_string()
+        }
+    }
+
+    fn localized_builtin_model_description(description: &str) -> Option<&'static str> {
+        match description {
+            "Broad world knowledge with strong general reasoning." => {
+                Some("Сильная общая эрудиция и уверенное рассуждение на широком круге задач.")
+            }
+            "Codex-optimized flagship for deep and fast reasoning." => {
+                Some("Флагманская модель Lavilas Codex для сложного кода и длинных цепочек рассуждений.")
+            }
+            "Frontier agentic coding model." => {
+                Some("Сильная агентная модель для разработки и рабочих сценариев с кодом.")
+            }
+            "Latest frontier agentic coding model." => {
+                Some("Самая свежая агентная модель для разработки и сложных кодовых задач.")
+            }
+            "Latest frontier model with improvements across knowledge, reasoning and coding" => {
+                Some("Свежая флагманская модель с заметным усилением в знаниях, рассуждениях и работе с кодом.")
+            }
+            "OpenAI OSS model, 120B parameters." => {
+                Some("Открытая OSS-модель OpenAI на 120 млрд параметров.")
+            }
+            "OpenAI OSS model, 20B parameters." => {
+                Some("Открытая OSS-модель OpenAI на 20 млрд параметров.")
+            }
+            "Optimized for codex." => {
+                Some("Оптимизирована под сценарии Lavilas Codex и агентную работу с кодом.")
+            }
+            "Optimized for codex. Cheaper, faster, but less capable." => {
+                Some("Упор на скорость и цену: отвечает быстрее и дешевле, но слабее на тяжёлых задачах.")
+            }
+            _ => None,
+        }
+    }
+
+    fn localized_reasoning_description(description: &str) -> Option<&'static str> {
+        match description {
+            "Fast responses with lighter reasoning" => {
+                Some("Самый быстрый режим: минимум паузы, минимум размышлений.")
+            }
+            "Balances speed and reasoning depth for everyday tasks" => {
+                Some("Повседневный режим с нормальным балансом скорости и качества.")
+            }
+            "Greater reasoning depth for complex problems" => {
+                Some("Больше времени на разбор сложных, неоднозначных и многошаговых задач.")
+            }
+            "Extra high reasoning depth for complex problems" => {
+                Some("Максимальный запас на тяжёлые задачи, длинные цепочки решений и риск ошибки.")
+            }
+            _ => None,
+        }
     }
 
     fn custom_openai_base_url(&self) -> Option<String> {
@@ -8031,58 +8584,227 @@ impl ChatWidget {
         Some(trimmed.to_string())
     }
 
+    fn model_preset_description(&self, preset: &ModelPreset) -> Option<String> {
+        let is_ru = self.ui_language().is_ru();
+        if !preset.description.is_empty() {
+            if is_ru
+                && let Some(localized) = Self::localized_builtin_model_description(
+                    preset.description.as_str(),
+                )
+            {
+                return Some(localized.to_string());
+            }
+            return Some(preset.description.clone());
+        }
+
+        if self.config.model_provider.is_openai() {
+            return None;
+        }
+
+        let provider_name = self.config.model_provider.name.as_str();
+        let reasoning_levels = preset.supported_reasoning_efforts.len();
+        let variant_hint = if preset.model.ends_with("-with-tools")
+            || preset.model.ends_with("-tools")
+        {
+            if is_ru {
+                Some(format!(
+                    "Вариант {provider_name} для рабочих сценариев с инструментами, MCP и командами терминала."
+                ))
+            } else {
+                Some(format!(
+                    "{provider_name} variant tuned for tool use, MCP, and exec-heavy turns."
+                ))
+            }
+        } else if preset.model.ends_with("-latest") {
+            if is_ru {
+                Some(format!(
+                    "Основной свежий вариант {provider_name} для повседневной работы."
+                ))
+            } else {
+                Some(format!(
+                    "Current general-purpose {provider_name} variant for everyday work."
+                ))
+            }
+        } else if preset.model.ends_with("-fast") {
+            if is_ru {
+                Some(format!(
+                    "Быстрый вариант {provider_name} для черновых проходов, быстрых правок и частых итераций."
+                ))
+            } else {
+                Some(format!(
+                    "Lower-latency {provider_name} variant optimized for speed and cost."
+                ))
+            }
+        } else {
+            None
+        };
+
+        match (variant_hint, reasoning_levels) {
+            (Some(hint), 0 | 1) => Some(hint),
+            (Some(hint), _) if is_ru => Some(format!(
+                "{hint} Доступно режимов размышлений: {reasoning_levels}."
+            )),
+            (Some(hint), _) => Some(format!(
+                "{hint} Available reasoning budget levels: {reasoning_levels}."
+            )),
+            (None, 0 | 1) => None,
+            (None, _) if is_ru => Some(format!(
+                "Доступно режимов размышлений: {reasoning_levels}."
+            )),
+            (None, _) => Some(format!(
+                "Available reasoning budget levels: {reasoning_levels}."
+            )),
+        }
+    }
+
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
         let presets: Vec<ModelPreset> = presets
             .into_iter()
             .filter(|preset| preset.show_in_picker)
             .collect();
+        let all_presets = presets.clone();
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(MODEL_PICKER_VIEW_ID);
+        let remembered_selected_idx = self.bottom_pane.selected_index_for_active_view(MODEL_PICKER_VIEW_ID);
 
         let current_model = self.current_model();
-        let current_label = presets
+        let current_label = all_presets
             .iter()
             .find(|preset| preset.model.as_str() == current_model)
-            .map(|preset| preset.model.to_string())
+            .map(Self::model_picker_label)
             .unwrap_or_else(|| self.model_display_name().to_string());
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
             .into_iter()
             .partition(|preset| Self::is_auto_model(&preset.model));
 
-        if auto_presets.is_empty() {
-            self.open_all_models_popup(other_presets);
-            return;
-        }
+        let (quick_items, all_models_presets, subtitle): (
+            Vec<SelectionItem>,
+            Vec<ModelPreset>,
+            String,
+        ) = if auto_presets.is_empty() {
+            let provider_quick_presets = Self::provider_quick_presets(&all_presets);
+            if provider_quick_presets.is_empty() {
+                self.open_all_models_popup(all_presets);
+                return;
+            }
 
-        auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
-        let mut items: Vec<SelectionItem> = auto_presets
-            .into_iter()
-            .map(|preset| {
-                let description =
-                    (!preset.description.is_empty()).then_some(preset.description.clone());
-                let model = preset.model.clone();
-                let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
-                    model.as_str(),
-                    Some(preset.default_reasoning_effort),
-                );
-                let actions = Self::model_selection_actions(
-                    model.clone(),
-                    Some(preset.default_reasoning_effort),
-                    should_prompt_plan_mode_scope,
-                );
-                SelectionItem {
-                    name: model.clone(),
-                    description,
-                    is_current: model.as_str() == current_model,
-                    is_default: preset.is_default,
-                    actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                }
-            })
-            .collect();
+            let items = provider_quick_presets
+                .into_iter()
+                .map(|(kind, preset)| {
+                    let item_label = self.provider_quick_preset_label(kind);
+                    let model_label = Self::model_picker_label(&preset);
+                    let description = self.provider_quick_preset_description(kind, &preset);
+                    let model = preset.model.clone();
+                    let preset_for_action = preset.clone();
+                    let search_tags = match (is_ru, kind) {
+                        (true, "fast") => "быстрый fast скорость",
+                        (true, "latest") => "основной latest актуальный",
+                        (true, "tools") => "инструменты tools mcp exec",
+                        (false, "fast") => "fast quick speed",
+                        (false, "latest") => "latest primary default",
+                        (false, "tools") => "tools mcp exec",
+                        _ => "model",
+                    };
+                    let search_value =
+                        format!("{item_label} {model_label} {model} {search_tags} {description}");
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenReasoningPopup {
+                            model: preset_for_action.clone(),
+                        });
+                    })];
+                    SelectionItem {
+                        name: item_label,
+                        description: Some(description),
+                        search_value: Some(search_value),
+                        is_current: model.as_str() == current_model,
+                        is_default: preset.is_default,
+                        actions,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    }
+                })
+                .collect::<Vec<_>>();
 
-        if !other_presets.is_empty() {
-            let all_models = other_presets;
+            (
+                items,
+                all_presets,
+                if is_ru {
+                    "Быстрые пресеты под текущего провайдера: сначала тип сценария, затем выбор бюджета размышлений.".to_string()
+                } else {
+                    "Provider-aware quick presets: choose the scenario first, then pick a reasoning budget.".to_string()
+                },
+            )
+        } else {
+            auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
+            let items = auto_presets
+                .into_iter()
+                .map(|preset| {
+                    let description = self.model_preset_description(&preset);
+                    let item_label = Self::model_picker_label(&preset);
+                    let model = preset.model.clone();
+                    let search_value = description.as_ref().map_or_else(
+                        || format!("{} {}", item_label, model),
+                        |desc| format!("{} {} {}", item_label, model, desc),
+                    );
+                    let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
+                        model.as_str(),
+                        Some(preset.default_reasoning_effort),
+                    );
+                    let actions = Self::model_selection_actions(
+                        model.clone(),
+                        Some(preset.default_reasoning_effort),
+                        should_prompt_plan_mode_scope,
+                    );
+                    SelectionItem {
+                        name: item_label,
+                        description,
+                        search_value: Some(search_value),
+                        is_current: model.as_str() == current_model,
+                        is_default: preset.is_default,
+                        actions,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            (
+                items,
+                other_presets,
+                if is_ru {
+                    "Сначала быстрые пресеты для старта, затем полный каталог с ручной настройкой модели и режима размышлений.".to_string()
+                } else {
+                    "Choose a quick auto preset or open the full model catalog.".to_string()
+                },
+            )
+        };
+
+        let mut items: Vec<SelectionItem> = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к единому центру настроек.".to_string()
+            } else {
+                "Return to the unified settings hub.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад настройки модель".to_string()
+            } else {
+                "back settings model".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        items.extend(quick_items);
+
+        if !all_models_presets.is_empty() {
+            let all_models = all_models_presets;
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenAllModelsPopup {
                     models: all_models.clone(),
@@ -8090,13 +8812,28 @@ impl ChatWidget {
             })];
 
             let is_current = !items.iter().any(|item| item.is_current);
-            let description = Some(format!(
-                "Choose a specific model and reasoning level (current: {current_label})"
-            ));
+            let description = Some(if is_ru {
+                format!(
+                    "Открыть весь каталог и вручную подобрать модель и режим размышлений. Сейчас активна: {current_label}"
+                )
+            } else {
+                format!(
+                    "Open the full model catalog and choose a reasoning budget. Current: {current_label}"
+                )
+            });
 
             items.push(SelectionItem {
-                name: "Все модели".to_string(),
+                name: if is_ru {
+                    "Весь каталог".to_string()
+                } else {
+                    "All models".to_string()
+                },
                 description,
+                search_value: Some(if is_ru {
+                    "весь каталог все модели reasoning".to_string()
+                } else {
+                    "all models full catalog reasoning".to_string()
+                }),
                 is_current,
                 actions,
                 dismiss_on_select: true,
@@ -8105,15 +8842,39 @@ impl ChatWidget {
         }
 
         let header = self.model_menu_header(
-            "Выбор модели",
-            "Выберите быстрый авто-режим или откройте полный список моделей.",
+            if is_ru {
+                "Выбор модели"
+            } else {
+                "Select Model"
+            },
+            &subtitle,
         );
-        self.bottom_pane.show_selection_view(SelectionViewParams {
+        let initial_selected_idx = remembered_selected_idx
+            .or_else(|| items.iter().position(|item| item.is_current))
+            .or(Some(1));
+        let params = SelectionViewParams {
+            view_id: Some(MODEL_PICKER_VIEW_ID),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти модель или пресет".to_string()
+            } else {
+                "Find a model or preset".to_string()
+            }),
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
             ..Default::default()
-        });
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(MODEL_PICKER_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
     }
 
     fn is_auto_model(model: &str) -> bool {
@@ -8129,21 +8890,179 @@ impl ChatWidget {
         }
     }
 
+    fn looks_like_tool_model(model: &str) -> bool {
+        let slug = model.to_ascii_lowercase();
+        slug.contains("with-tools")
+            || slug.ends_with("-tools")
+            || slug.contains("-tools-")
+            || slug.contains("tool-use")
+            || slug.contains("tool_use")
+    }
+
+    fn looks_like_fast_model(model: &str) -> bool {
+        let slug = model.to_ascii_lowercase();
+        ["fast", "flash", "small", "mini", "instant", "haiku", "lite", "turbo"]
+            .iter()
+            .any(|needle| slug.contains(needle))
+    }
+
+    fn looks_like_latest_model(model: &str) -> bool {
+        let slug = model.to_ascii_lowercase();
+        slug.ends_with("-latest")
+            || slug.contains(":latest")
+            || slug.contains("/latest")
+            || slug.contains("@latest")
+    }
+
+    fn provider_quick_presets(presets: &[ModelPreset]) -> Vec<(&'static str, ModelPreset)> {
+        let mut quick_presets = Vec::new();
+        let mut used_models = HashSet::new();
+
+        if let Some(preset) = presets
+            .iter()
+            .filter(|preset| !Self::looks_like_tool_model(preset.model.as_str()))
+            .filter(|preset| Self::looks_like_fast_model(preset.model.as_str()))
+            .min_by_key(|preset| {
+                (
+                    Self::looks_like_latest_model(preset.model.as_str()),
+                    !preset.is_default,
+                )
+            })
+            .cloned()
+        {
+            used_models.insert(preset.model.clone());
+            quick_presets.push(("fast", preset));
+        }
+
+        if let Some(preset) = presets
+            .iter()
+            .filter(|preset| !used_models.contains(preset.model.as_str()))
+            .min_by_key(|preset| {
+                (
+                    !Self::looks_like_latest_model(preset.model.as_str()),
+                    Self::looks_like_fast_model(preset.model.as_str()),
+                    Self::looks_like_tool_model(preset.model.as_str()),
+                    !preset.is_default,
+                )
+            })
+            .cloned()
+        {
+            used_models.insert(preset.model.clone());
+            quick_presets.push(("latest", preset));
+        }
+
+        if let Some(preset) = presets
+            .iter()
+            .filter(|preset| !used_models.contains(preset.model.as_str()))
+            .filter(|preset| Self::looks_like_tool_model(preset.model.as_str()))
+            .min_by_key(|preset| {
+                (
+                    !Self::looks_like_latest_model(preset.model.as_str()),
+                    Self::looks_like_fast_model(preset.model.as_str()),
+                    !preset.is_default,
+                )
+            })
+            .cloned()
+        {
+            quick_presets.push(("tools", preset));
+        }
+
+        if quick_presets.is_empty() {
+            if let Some(preset) = presets.first().cloned() {
+                quick_presets.push(("latest", preset));
+            }
+        }
+
+        quick_presets
+    }
+
+    fn provider_quick_preset_label(&self, kind: &str) -> String {
+        match (self.ui_language(), kind) {
+            (UiLanguage::Ru, "fast") => "Быстрый".to_string(),
+            (UiLanguage::Ru, "latest") => "Основной".to_string(),
+            (UiLanguage::Ru, "tools") => "С инструментами".to_string(),
+            (UiLanguage::En, "fast") => "Fast".to_string(),
+            (UiLanguage::En, "latest") => "Latest".to_string(),
+            (UiLanguage::En, "tools") => "With tools".to_string(),
+            (_, other) => other.to_string(),
+        }
+    }
+
+    fn provider_quick_preset_description(&self, kind: &str, preset: &ModelPreset) -> String {
+        let is_ru = self.ui_language().is_ru();
+        let provider_name = self.config.model_provider.name.as_str();
+        let model_label = Self::model_picker_label(preset);
+        let reasoning_label = self.reasoning_effort_label(preset.default_reasoning_effort);
+
+        match (is_ru, kind) {
+            (true, "fast") => format!(
+                "Быстрый профиль {provider_name}: {model_label}. Следом откроется выбор размышлений, рекомендован режим: {reasoning_label}."
+            ),
+            (true, "latest") => format!(
+                "Основной актуальный профиль {provider_name}: {model_label}. После выбора можно уточнить бюджет размышлений."
+            ),
+            (true, "tools") => format!(
+                "Профиль {provider_name} для ходов с MCP, терминалом и инструментами: {model_label}. Затем выберите бюджет размышлений."
+            ),
+            (false, "fast") => format!(
+                "Lower-latency {provider_name} profile: {model_label}. Next you'll pick a reasoning budget; recommended: {reasoning_label}."
+            ),
+            (false, "latest") => format!(
+                "Current default {provider_name} profile: {model_label}. You can refine the reasoning budget next."
+            ),
+            (false, "tools") => format!(
+                "{provider_name} profile for MCP, terminal, and tool-heavy turns: {model_label}. Choose the reasoning budget next."
+            ),
+            _ => model_label,
+        }
+    }
+
     pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
+        let is_ru = self.ui_language().is_ru();
         if presets.is_empty() {
             self.add_info_message(
-                "Сейчас нет дополнительных моделей.".to_string(),
+                if is_ru {
+                    "Сейчас для этого провайдера нет дополнительных моделей.".to_string()
+                } else {
+                    "No additional models are currently available for this provider.".to_string()
+                },
                 /*hint*/ None,
             );
             return;
         }
 
-        let mut items: Vec<SelectionItem> = Vec::new();
+        let replace_active = self.bottom_pane.active_view_id() == Some(ALL_MODELS_VIEW_ID);
+        let remembered_selected_idx = self.bottom_pane.selected_index_for_active_view(ALL_MODELS_VIEW_ID);
+        let mut items: Vec<SelectionItem> = vec![SelectionItem {
+            name: if is_ru {
+                "← К быстрым пресетам".to_string()
+            } else {
+                "← Back to quick presets".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к быстрым режимам выбора модели.".to_string()
+            } else {
+                "Return to quick model presets.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад быстрые пресеты модели".to_string()
+            } else {
+                "back quick presets models".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelPopup))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
         for preset in presets.into_iter() {
-            let description =
-                (!preset.description.is_empty()).then_some(preset.description.to_string());
+            let description = self.model_preset_description(&preset);
+            let item_label = Self::model_picker_label(&preset);
             let is_current = preset.model.as_str() == self.current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            let search_value = description.as_ref().map_or_else(
+                || format!("{} {}", item_label, preset.model),
+                |desc| format!("{} {} {}", item_label, preset.model, desc),
+            );
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
@@ -8152,8 +9071,9 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: preset.model.clone(),
+                name: item_label,
                 description,
+                search_value: Some(search_value),
                 is_current,
                 is_default: preset.is_default,
                 actions,
@@ -8163,28 +9083,77 @@ impl ChatWidget {
         }
 
         let subtitle = if self.config.model_provider.is_openai() {
-            "Для ручного выбора можно использовать codex -m <model_name> или config.toml"
-                .to_string()
+            if is_ru {
+                "Полный каталог моделей. Для ручного выбора можно использовать профиль провайдера или изменить модель в конфиге."
+                    .to_string()
+            } else {
+                "Full model catalog. For manual selection, use a provider profile or update the configured model."
+                    .to_string()
+            }
+        } else if is_ru {
+            format!(
+                "Провайдер: {} ({}). Сначала выберите модель, затем подберите режим размышлений под задачу.",
+                self.config.model_provider.name, self.config.model_provider_id
+            )
         } else {
             format!(
-                "Провайдер: {} ({}). Выберите модель и бюджет размышлений для этого провайдера.",
+                "Provider: {} ({}). Choose a model and reasoning budget for this provider.",
                 self.config.model_provider.name, self.config.model_provider_id
             )
         };
-        let header = self.model_menu_header("Выбор модели и бюджета", &subtitle);
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            footer_hint: Some("Нажмите Enter для выбора бюджета размышлений или Esc для выхода.".into()),
+        let header = self.model_menu_header(
+            if is_ru {
+                "Все модели"
+            } else {
+                "Select Model"
+            },
+            &subtitle,
+        );
+        let initial_selected_idx = remembered_selected_idx
+            .or_else(|| items.iter().position(|item| item.is_current))
+            .or(Some(1));
+        let params = SelectionViewParams {
+            view_id: Some(ALL_MODELS_VIEW_ID),
+            footer_hint: Some(
+                if is_ru {
+                    "Enter открывает выбор размышлений для модели, Esc закрывает окно."
+                } else {
+                    "Press Enter to choose a reasoning budget, or Esc to dismiss."
+                }
+                .into(),
+            ),
             items,
             header,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти модель в каталоге".to_string()
+            } else {
+                "Find a model in the catalog".to_string()
+            }),
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenModelPopup))),
             ..Default::default()
-        });
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(ALL_MODELS_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
     }
 
     pub(crate) fn open_collaboration_modes_popup(&mut self) {
         let presets = collaboration_modes::presets_for_tui(self.model_catalog.as_ref());
+        let is_ru = self.ui_language().is_ru();
         if presets.is_empty() {
             self.add_info_message(
-                "No collaboration modes are available right now.".to_string(),
+                if is_ru {
+                    "Сейчас режимы совместной работы недоступны.".to_string()
+                } else {
+                    "No collaboration modes are available right now.".to_string()
+                },
                 /*hint*/ None,
             );
             return;
@@ -8201,7 +9170,17 @@ impl ChatWidget {
         let items: Vec<SelectionItem> = presets
             .into_iter()
             .map(|mask| {
-                let name = mask.name.clone();
+                let name = if is_ru {
+                    match mask.mode {
+                        Some(ModeKind::Default) => "Обычный режим".to_string(),
+                        Some(ModeKind::Plan) => "Режим планирования".to_string(),
+                        Some(ModeKind::PairProgramming) => "Парное программирование".to_string(),
+                        Some(ModeKind::Execute) => "Режим исполнения".to_string(),
+                        None => mask.name.clone(),
+                    }
+                } else {
+                    mask.name.clone()
+                };
                 let is_current = current_kind == mask.mode;
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::UpdateCollaborationMode(mask.clone()));
@@ -8217,8 +9196,16 @@ impl ChatWidget {
             .collect();
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Collaboration Mode".to_string()),
-            subtitle: Some("Pick a collaboration preset.".to_string()),
+            title: Some(if is_ru {
+                "Режим совместной работы".to_string()
+            } else {
+                "Collaboration mode".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Выберите, в каком режиме вести текущую сессию.".to_string()
+            } else {
+                "Choose how Lavilas Codex should approach the current session".to_string()
+            }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -8260,9 +9247,6 @@ impl ChatWidget {
             return false;
         }
 
-        // Prompt whenever the selection is not a true no-op for both:
-        // 1) the active Plan-mode effective reasoning, and
-        // 2) the stored global defaults that would be updated by the fallback path.
         selected_effort != self.effective_reasoning_effort()
             || selected_model != self.current_collaboration_mode.model()
             || selected_effort != self.current_collaboration_mode.reasoning_effort()
@@ -8273,40 +9257,112 @@ impl ChatWidget {
         model: String,
         effort: Option<ReasoningEffortConfig>,
     ) {
+        let is_ru = self.ui_language().is_ru();
+        let reasoning_back_preset = self
+            .model_catalog
+            .try_list_models()
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.show_in_picker && preset.model == model)
+            });
         let reasoning_phrase = match effort {
-            Some(ReasoningEffortConfig::None) => "no reasoning".to_string(),
-            Some(selected_effort) => {
-                format!(
-                    "{} reasoning",
-                    Self::reasoning_effort_label(selected_effort).to_lowercase()
-                )
+            Some(ReasoningEffortConfig::None) => {
+                if is_ru {
+                    "без размышлений".to_string()
+                } else {
+                    "no reasoning".to_string()
+                }
             }
-            None => "the selected reasoning".to_string(),
+            Some(selected_effort) => {
+                if is_ru {
+                    format!(
+                        "режим '{}'",
+                        self.reasoning_effort_label(selected_effort).to_lowercase()
+                    )
+                } else {
+                    format!(
+                        "{} reasoning",
+                        self.reasoning_effort_label(selected_effort).to_lowercase()
+                    )
+                }
+            }
+            None => {
+                if is_ru {
+                    "выбранный бюджет размышлений".to_string()
+                } else {
+                    "the selected reasoning".to_string()
+                }
+            }
         };
-        let plan_only_description = format!("Always use {reasoning_phrase} in Plan mode.");
+        let plan_only_description = if is_ru {
+            format!("Оставить {reasoning_phrase} только для режима Plan. Остальные режимы не менять.")
+        } else {
+            format!("Keep {reasoning_phrase} only inside Plan mode.")
+        };
         let plan_reasoning_source = if let Some(plan_override) =
             self.config.plan_mode_reasoning_effort
         {
-            format!(
-                "user-chosen Plan override ({})",
-                Self::reasoning_effort_label(plan_override).to_lowercase()
-            )
+            if is_ru {
+                format!(
+                    "текущий пользовательский режим Plan: {}",
+                    self.reasoning_effort_label(plan_override).to_lowercase()
+                )
+            } else {
+                format!(
+                    "user-chosen Plan override ({})",
+                    self.reasoning_effort_label(plan_override).to_lowercase()
+                )
+            }
         } else if let Some(plan_mask) = collaboration_modes::plan_mask(self.model_catalog.as_ref())
         {
             match plan_mask.reasoning_effort.flatten() {
+                Some(plan_effort) if is_ru => format!(
+                    "встроенный режим Plan: {}",
+                    self.reasoning_effort_label(plan_effort).to_lowercase()
+                ),
                 Some(plan_effort) => format!(
                     "built-in Plan default ({})",
-                    Self::reasoning_effort_label(plan_effort).to_lowercase()
+                    self.reasoning_effort_label(plan_effort).to_lowercase()
                 ),
+                None if is_ru => "встроенный режим Plan без размышлений".to_string(),
                 None => "built-in Plan default (no reasoning)".to_string(),
             }
+        } else if is_ru {
+            "встроенный режим Plan".to_string()
         } else {
             "built-in Plan default".to_string()
         };
-        let all_modes_description = format!(
-            "Set the global default reasoning level and the Plan mode override. This replaces the current {plan_reasoning_source}."
-        );
-        let subtitle = format!("Choose where to apply {reasoning_phrase}.");
+        let all_modes_description = if is_ru {
+            format!(
+                "Сделать {reasoning_phrase} общим значением по умолчанию и сразу обновить режим Plan. Сейчас у Plan: {plan_reasoning_source}."
+            )
+        } else {
+            format!(
+                "Set the global default reasoning level and the Plan mode override. This replaces the current {plan_reasoning_source}."
+            )
+        };
+        let subtitle = if is_ru {
+            format!("Решите, менять только Plan или все режимы: {reasoning_phrase}.")
+        } else {
+            format!("Choose where to apply {reasoning_phrase}.")
+        };
+        let title = if is_ru {
+            "Где использовать новый режим размышлений".to_string()
+        } else {
+            PLAN_MODE_REASONING_SCOPE_TITLE.to_string()
+        };
+        let plan_only_label = if is_ru {
+            "Только для Plan".to_string()
+        } else {
+            PLAN_MODE_REASONING_SCOPE_PLAN_ONLY.to_string()
+        };
+        let all_modes_label = if is_ru {
+            "Для всех режимов".to_string()
+        } else {
+            PLAN_MODE_REASONING_SCOPE_ALL_MODES.to_string()
+        };
 
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
@@ -8327,39 +9383,77 @@ impl ChatWidget {
             });
         })];
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(PLAN_MODE_REASONING_SCOPE_TITLE.to_string()),
-            subtitle: Some(subtitle),
-            footer_hint: Some(standard_popup_hint_line()),
-            items: vec![
-                SelectionItem {
-                    name: PLAN_MODE_REASONING_SCOPE_PLAN_ONLY.to_string(),
-                    description: Some(plan_only_description),
-                    actions: plan_only_actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
+        let mut items = Vec::new();
+        if let Some(preset) = reasoning_back_preset.clone() {
+            items.push(SelectionItem {
+                name: if is_ru {
+                    "← Назад к бюджету размышлений".to_string()
+                } else {
+                    "← Back to reasoning levels".to_string()
                 },
-                SelectionItem {
-                    name: PLAN_MODE_REASONING_SCOPE_ALL_MODES.to_string(),
-                    description: Some(all_modes_description),
-                    actions: all_modes_actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            ],
+                description: Some(if is_ru {
+                    "Вернуться к выбору бюджета размышлений для этой модели.".to_string()
+                } else {
+                    "Return to the reasoning budget picker for this model.".to_string()
+                }),
+                search_value: Some(if is_ru {
+                    "назад размышления модель".to_string()
+                } else {
+                    "back reasoning model".to_string()
+                }),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenReasoningPopup {
+                        model: preset.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+        items.push(SelectionItem {
+            name: plan_only_label,
+            description: Some(plan_only_description),
+            actions: plan_only_actions,
+            dismiss_on_select: true,
             ..Default::default()
         });
-        self.notify(Notification::PlanModePrompt {
-            title: PLAN_MODE_REASONING_SCOPE_TITLE.to_string(),
+        items.push(SelectionItem {
+            name: all_modes_label,
+            description: Some(all_modes_description),
+            actions: all_modes_actions,
+            dismiss_on_select: true,
+            ..Default::default()
         });
+
+        let on_cancel = reasoning_back_preset.clone().map(|preset| {
+            Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::OpenReasoningPopup {
+                    model: preset.clone(),
+                });
+            }) as Box<dyn Fn(&AppEventSender) + Send + Sync>
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(PLAN_REASONING_SCOPE_VIEW_ID),
+            title: Some(title.clone()),
+            subtitle: Some(subtitle),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: Some(usize::from(reasoning_back_preset.is_some())),
+            on_cancel,
+            ..Default::default()
+        });
+        self.notify(Notification::PlanModePrompt { title });
     }
 
-    /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
         let in_plan_mode =
             self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(REASONING_PICKER_VIEW_ID);
+        let remembered_selected_idx = self.bottom_pane.selected_index_for_active_view(REASONING_PICKER_VIEW_ID);
 
         let warn_effort = if supported
             .iter()
@@ -8376,14 +9470,22 @@ impl ChatWidget {
         };
         let provider_is_openai = self.config.model_provider.is_openai();
         let warning_text = warn_effort.map(|effort| {
-            let effort_label = Self::reasoning_effort_label(effort);
-            if provider_is_openai {
+            let effort_label = self.reasoning_effort_label(effort);
+            if provider_is_openai && is_ru {
                 format!(
-                    "⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits."
+                    "{effort_label}: такой режим может быстро расходовать лимиты плана Plus."
+                )
+            } else if provider_is_openai {
+                format!(
+                    "{effort_label}: high reasoning effort can quickly consume Plus plan rate limits."
+                )
+            } else if is_ru {
+                format!(
+                    "{effort_label}: этот режим заметно повышает задержку ответа и расход токенов у провайдера."
                 )
             } else {
                 format!(
-                    "⚠ {effort_label} reasoning budget can increase latency and token usage for this provider."
+                    "{effort_label}: a larger reasoning budget can increase latency and token usage for this provider."
                 )
             }
         });
@@ -8413,7 +9515,7 @@ impl ChatWidget {
         }
 
         if choices.len() == 1 {
-            let selected_effort = choices.first().and_then(|c| c.stored);
+            let selected_effort = choices.first().and_then(|choice| choice.stored);
             let selected_model = preset.model;
             if self.should_prompt_plan_mode_reasoning_scope(&selected_model, selected_effort) {
                 self.app_event_tx
@@ -8435,6 +9537,7 @@ impl ChatWidget {
             .or_else(|| choices.iter().find_map(|choice| choice.stored))
             .or(Some(default_effort));
 
+        let model_label = Self::model_picker_label(&preset);
         let model_slug = preset.model.to_string();
         let is_current_model = self.current_model() == preset.model.as_str();
         let highlight_choice = if is_current_model {
@@ -8449,19 +9552,62 @@ impl ChatWidget {
             default_choice
         };
         let selection_choice = highlight_choice.or(default_choice);
-        let initial_selected_idx = choices
+        let choice_idx = choices
             .iter()
             .position(|choice| choice.stored == selection_choice)
             .or_else(|| {
                 selection_choice
                     .and_then(|effort| choices.iter().position(|choice| choice.display == effort))
             });
+        let back_models = self
+            .model_catalog
+            .try_list_models()
+            .ok()
+            .map(|models| {
+                models
+                    .into_iter()
+                    .filter(|candidate| {
+                        candidate.show_in_picker && !Self::is_auto_model(candidate.model.as_str())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|models| !models.is_empty());
         let mut items: Vec<SelectionItem> = Vec::new();
-        for choice in choices.iter() {
+        if let Some(models) = back_models.clone() {
+            items.push(SelectionItem {
+                name: if is_ru {
+                    "← К списку моделей".to_string()
+                } else {
+                    "← Back to model list".to_string()
+                },
+                description: Some(if is_ru {
+                    "Вернуться к каталогу моделей текущего провайдера.".to_string()
+                } else {
+                    "Return to the provider model catalog.".to_string()
+                }),
+                search_value: Some(if is_ru {
+                    "назад модели каталог".to_string()
+                } else {
+                    "back models catalog".to_string()
+                }),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenAllModelsPopup {
+                        models: models.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+        for choice in &choices {
             let effort = choice.display;
-            let mut effort_label = Self::reasoning_effort_label(effort).to_string();
+            let mut effort_label = self.reasoning_effort_label(effort).to_string();
             if choice.stored == default_choice {
-                effort_label.push_str(" (default)");
+                effort_label.push_str(if is_ru {
+                    " (рекомендуется)"
+                } else {
+                    " (default)"
+                });
             }
 
             let description = choice
@@ -8470,7 +9616,15 @@ impl ChatWidget {
                     supported
                         .iter()
                         .find(|option| option.effort == effort)
-                        .map(|option| option.description.to_string())
+                        .map(|option| {
+                            if is_ru {
+                                Self::localized_reasoning_description(option.description.as_str())
+                                    .unwrap_or(option.description.as_str())
+                                    .to_string()
+                            } else {
+                                option.description.to_string()
+                            }
+                        })
                 })
                 .filter(|text| !text.is_empty());
 
@@ -8483,7 +9637,12 @@ impl ChatWidget {
                 warning_text.as_ref().map(|warning_message| {
                     description.as_ref().map_or_else(
                         || warning_message.clone(),
-                        |d| format!("{d}\n{warning_message}"),
+                        |desc| {
+                            format!(
+                                "{desc}
+{warning_message}"
+                            )
+                        },
                     )
                 })
             } else {
@@ -8510,9 +9669,14 @@ impl ChatWidget {
                 }
             })];
 
+            let search_value = description.as_ref().map_or_else(
+                || effort_label.clone(),
+                |desc| format!("{} {}", effort_label, desc),
+            );
             items.push(SelectionItem {
                 name: effort_label,
                 description,
+                search_value: Some(search_value),
                 selected_description,
                 is_current: is_current_model && choice.stored == highlight_choice,
                 actions,
@@ -8522,27 +9686,74 @@ impl ChatWidget {
         }
 
         let mut header = ColumnRenderable::new();
-        header.push(Line::from(
-            format!("Выбор бюджета размышлений для {model_slug}").bold(),
-        ));
+        header.push(Line::from(if is_ru {
+            format!("Режим размышлений для {model_label}").bold()
+        } else {
+            format!("Select Reasoning Level for {model_slug}").bold()
+        }));
+        header.push(Line::from(if is_ru {
+            format!(
+                "Провайдер: {}. Подберите баланс между скоростью ответа, качеством и расходом токенов.",
+                self.config.model_provider.name
+            )
+            .dim()
+        } else {
+            format!(
+                "Provider: {}. Choose the balance between quality, latency, and token usage.",
+                self.config.model_provider.name
+            )
+            .dim()
+        }));
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
+        let default_initial_selected_idx = choice_idx
+            .map(|idx| idx + usize::from(back_models.is_some()))
+            .or(Some(usize::from(back_models.is_some())));
+        let on_cancel = back_models.clone().map(|models| {
+            Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::OpenAllModelsPopup {
+                    models: models.clone(),
+                });
+            }) as Box<dyn Fn(&AppEventSender) + Send + Sync>
+        });
+        let params = SelectionViewParams {
+            view_id: Some(REASONING_PICKER_VIEW_ID),
             header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
-            initial_selected_idx,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти режим размышлений".to_string()
+            } else {
+                "Find a reasoning level".to_string()
+            }),
+            initial_selected_idx: remembered_selected_idx.or(default_initial_selected_idx),
+            on_cancel,
             ..Default::default()
-        });
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(REASONING_PICKER_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
     }
 
-    fn reasoning_effort_label(effort: ReasoningEffortConfig) -> &'static str {
-        match effort {
-            ReasoningEffortConfig::None => "None",
-            ReasoningEffortConfig::Minimal => "Minimal",
-            ReasoningEffortConfig::Low => "Low",
-            ReasoningEffortConfig::Medium => "Medium",
-            ReasoningEffortConfig::High => "High",
-            ReasoningEffortConfig::XHigh => "Extra high",
+    fn reasoning_effort_label(&self, effort: ReasoningEffortConfig) -> &'static str {
+        match (self.ui_language(), effort) {
+            (UiLanguage::Ru, ReasoningEffortConfig::None) => "Без размышлений",
+            (UiLanguage::Ru, ReasoningEffortConfig::Minimal) => "Быстрый",
+            (UiLanguage::Ru, ReasoningEffortConfig::Low) => "Лёгкий",
+            (UiLanguage::Ru, ReasoningEffortConfig::Medium) => "Стандартный",
+            (UiLanguage::Ru, ReasoningEffortConfig::High) => "Глубокий",
+            (UiLanguage::Ru, ReasoningEffortConfig::XHigh) => "Максимальный",
+            (UiLanguage::En, ReasoningEffortConfig::None) => "None",
+            (UiLanguage::En, ReasoningEffortConfig::Minimal) => "Minimal",
+            (UiLanguage::En, ReasoningEffortConfig::Low) => "Low",
+            (UiLanguage::En, ReasoningEffortConfig::Medium) => "Medium",
+            (UiLanguage::En, ReasoningEffortConfig::High) => "High",
+            (UiLanguage::En, ReasoningEffortConfig::XHigh) => "Extra high",
         }
     }
 
@@ -8563,70 +9774,1215 @@ impl ChatWidget {
     }
 
     fn profiles_dir(&self) -> PathBuf {
-        self.config.codex_home.join("Profiles")
+        ui_profiles_dir(self.config.codex_home.as_path())
     }
 
-    fn show_profiles_summary(&mut self) {
-        let profiles_dir = self.profiles_dir();
-        if let Err(err) = std::fs::create_dir_all(&profiles_dir) {
-            self.add_error_message(format!(
-                "Не удалось подготовить каталог профилей {}: {err}",
-                profiles_dir.display()
-            ));
+    fn profiles_settings_path(&self) -> PathBuf {
+        ui_settings_path(self.config.codex_home.as_path())
+    }
+
+    fn profile_model_catalog_path_for_profile(
+        &self,
+        profile_path: &std::path::Path,
+    ) -> Option<PathBuf> {
+        self.profile_json_value(profile_path)
+            .and_then(|value| {
+                value
+                    .get("model_catalog_json")
+                    .and_then(serde_json::Value::as_str)
+                    .map(PathBuf::from)
+            })
+            .or_else(|| {
+                let stem = profile_path.file_stem()?.to_str()?;
+                Some(ui_profile_model_catalog_path(
+                    self.config.codex_home.as_path(),
+                    stem,
+                ))
+            })
+    }
+
+    fn profile_json_value(&self, profile_path: &std::path::Path) -> Option<serde_json::Value> {
+        let extension = profile_path.extension()?.to_str()?;
+        if extension != "json" {
+            return None;
+        }
+        let contents = std::fs::read_to_string(profile_path).ok()?;
+        serde_json::from_str::<serde_json::Value>(&contents).ok()
+    }
+
+    fn profile_preview(&self, profile_path: &std::path::Path) -> ProfilePreview {
+        let json = self.profile_json_value(profile_path);
+        let derived_catalog_path = profile_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(|stem| ui_profile_model_catalog_path(self.config.codex_home.as_path(), stem));
+
+        ProfilePreview {
+            provider: json
+                .as_ref()
+                .and_then(|value| value.get("provider"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            display_name: json
+                .as_ref()
+                .and_then(|value| value.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            model: json
+                .as_ref()
+                .and_then(|value| value.get("model"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            linked_catalog_path: json
+                .as_ref()
+                .and_then(|value| value.get("model_catalog_json"))
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from),
+            derived_catalog_path,
+        }
+    }
+
+    fn is_profile_template_path(path: &std::path::Path) -> bool {
+        if !path.is_file() {
+            return false;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            return false;
+        };
+        if name == "settings.json" || name.ends_with(".models.json") {
+            return false;
+        }
+        name.ends_with(".json") || name.ends_with(".toml")
+    }
+
+    fn ui_language_label(&self, language: UiLanguage) -> &'static str {
+        match (self.ui_language().is_ru(), language) {
+            (true, UiLanguage::Ru) => "Русский",
+            (true, UiLanguage::En) => "Английский",
+            (false, UiLanguage::Ru) => "Russian",
+            (false, UiLanguage::En) => "English",
+        }
+    }
+
+    fn current_hidden_command_count(&self) -> usize {
+        self.current_hidden_commands().len()
+    }
+
+    fn current_model_settings_summary(&self) -> String {
+        let provider = self.config.model_provider.name.as_str();
+        let model = self.current_model();
+        let reasoning = self
+            .effective_reasoning_effort()
+            .map(|effort| self.reasoning_effort_label(effort).to_string())
+            .unwrap_or_else(|| {
+                if self.ui_language().is_ru() {
+                    "Авто".to_string()
+                } else {
+                    "Auto".to_string()
+                }
+            });
+        if self.ui_language().is_ru() {
+            format!("{provider} • {model} • размышления: {reasoning}")
+        } else {
+            format!("{provider} • {model} • reasoning: {reasoning}")
+        }
+    }
+
+    fn profile_setup_hint(&self, profile_path: &std::path::Path) -> String {
+        let prefix = self.current_command_prefix();
+        let catalog_path = self.profile_model_catalog_path_for_profile(profile_path);
+        if self.ui_language().is_ru() {
+            match catalog_path {
+                Some(path) => format!(
+                    "Откройте профиль, добавьте ключ и при необходимости поправьте каталог моделей {}. Он уже подключён к профилю, поэтому метаданные кастомных моделей сохранятся. Вернуться сюда можно через {prefix}settings.",
+                    path.display()
+                ),
+                None => format!(
+                    "Откройте профиль и заполните ключ, адрес API и модель. Вернуться сюда можно через {prefix}settings."
+                ),
+            }
+        } else {
+            match catalog_path {
+                Some(path) => format!(
+                    "Open the profile, add the API key, and adjust the seeded model catalog at {} if needed. It is already attached to the profile, so custom model metadata stays intact. You can jump back here through {prefix}settings.",
+                    path.display()
+                ),
+                None => format!(
+                    "Open the profile and fill in the API key, API base URL, and model. You can jump back here through {prefix}settings."
+                ),
+            }
+        }
+    }
+
+    fn ui_preferences(&self) -> crate::ui_preferences::UiPreferences {
+        load_ui_preferences(self.config.codex_home.as_path())
+    }
+
+    fn ui_language(&self) -> UiLanguage {
+        self.ui_preferences().language
+    }
+
+    fn current_hidden_commands(&self) -> Vec<String> {
+        self.ui_preferences().hidden_commands
+    }
+
+    fn current_command_prefix(&self) -> char {
+        self.ui_preferences().command_prefix
+    }
+
+    fn current_profiles_language(&self) -> String {
+        self.ui_language().code().to_string()
+    }
+
+    fn apply_ui_preferences_from_profiles(&mut self) {
+        let preferences = self.ui_preferences();
+        set_command_prefix(preferences.command_prefix);
+        slash_commands::set_hidden_command_keys(preferences.hidden_commands);
+    }
+
+    pub(crate) fn apply_profiles_language(&mut self, lang: &str) {
+        let normalized = lang.trim().to_ascii_lowercase();
+        let language = match normalized.as_str() {
+            "ru" => UiLanguage::Ru,
+            "en" => UiLanguage::En,
+            _ => {
+                self.add_error_message("Использование: /setlang <ru|en>".to_string());
+                return;
+            }
+        };
+        if let Err(err) = save_ui_language(self.config.codex_home.as_path(), language) {
+            let message = if self.ui_language().is_ru() {
+                format!("Не удалось сохранить язык интерфейса: {err}")
+            } else {
+                format!("Failed to save interface language: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+        let settings_path = self.profiles_settings_path();
+        let prefix = self.current_command_prefix();
+        match language {
+            UiLanguage::Ru => self.add_info_message(
+                "Интерфейс переведен на русский.".to_string(),
+                Some(format!(
+                    "Сохранено в {}. Экраны /model, /profiles и /settings теперь откроются на русском. Точка входа: {prefix}settings.",
+                    settings_path.display()
+                )),
+            ),
+            UiLanguage::En => self.add_info_message(
+                "Interface language switched to English.".to_string(),
+                Some(format!(
+                    "Saved to {}. /model, /profiles, and /settings now open in English. Entry point: {prefix}settings.",
+                    settings_path.display()
+                )),
+            ),
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn apply_command_prefix(&mut self, prefix: char) {
+        if !prefix.is_ascii() || prefix.is_ascii_whitespace() {
+            let message = if self.ui_language().is_ru() {
+                "Префикс должен быть одним ASCII-символом без пробела.".to_string()
+            } else {
+                "Command prefix must be a single non-space ASCII character.".to_string()
+            };
+            self.add_error_message(message);
+            return;
+        }
+        if let Err(err) = save_ui_command_prefix(self.config.codex_home.as_path(), prefix) {
+            let message = if self.ui_language().is_ru() {
+                format!("Не удалось сохранить префикс: {err}")
+            } else {
+                format!("Failed to save command prefix: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+        set_command_prefix(prefix);
+        let hidden_count = self.current_hidden_command_count();
+        if self.ui_language().is_ru() {
+            self.add_info_message(
+                format!("Префикс команд сохранен: {prefix}"),
+                Some(format!(
+                    "Подсказки и ручной ввод уже принимают новый префикс. Сейчас скрыто команд: {hidden_count}."
+                )),
+            );
+        } else {
+            self.add_info_message(
+                format!("Command prefix saved: {prefix}"),
+                Some(format!(
+                    "Menus and manual input already use the new prefix. Hidden commands: {hidden_count}."
+                )),
+            );
+        }
+    }
+
+    pub(crate) fn toggle_command_visibility(&mut self, command_key: &str) {
+        let key = command_key.trim().to_ascii_lowercase();
+        if key.is_empty() {
             return;
         }
 
-        let mut profile_files: Vec<String> = Vec::new();
-        match std::fs::read_dir(&profiles_dir) {
-            Ok(entries) => {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if !path.is_file() {
-                        continue;
-                    }
-                    if let Some(name) = path.file_name().and_then(|v| v.to_str()) {
-                        if name.ends_with(".json") || name.ends_with(".toml") {
-                            profile_files.push(name.to_string());
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                self.add_error_message(format!(
-                    "Не удалось прочитать каталог профилей {}: {err}",
-                    profiles_dir.display()
-                ));
-                return;
-            }
-        }
-        profile_files.sort();
-
-        let list_text = if profile_files.is_empty() {
-            "(пока нет файлов профилей)".to_string()
+        let mut hidden = self.current_hidden_commands();
+        if let Some(idx) = hidden.iter().position(|value| value == &key) {
+            hidden.remove(idx);
         } else {
-            profile_files.join("\n")
-        };
+            hidden.push(key.clone());
+            hidden.sort();
+            hidden.dedup();
+        }
 
-        self.add_info_message(
-            format!(
-                "Профили аккаунтов ({}):
-{}",
-                profiles_dir.display(),
-                list_text
-            ),
-            Some(
-                "Добавить аккаунт: создайте JSON/TOML в этой папке. Провайдеры: openai, openrouter, gemini, anthropic, mistral, groq, ollama."
-                    .to_string(),
-            ),
-        );
+        if let Err(err) = save_ui_hidden_commands(self.config.codex_home.as_path(), &hidden) {
+            let message = if self.ui_language().is_ru() {
+                format!("Не удалось сохранить видимость команд: {err}")
+            } else {
+                format!("Failed to save command visibility: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+
+        slash_commands::set_hidden_command_keys(hidden.clone());
+        if self.bottom_pane.active_view_id() == Some(COMMAND_VISIBILITY_VIEW_ID) {
+            self.open_command_visibility_picker_popup();
+            return;
+        }
+
+        let now_hidden = hidden.contains(&key);
+        let prefix = self.current_command_prefix();
+        if self.ui_language().is_ru() {
+            let status = if now_hidden {
+                "убрана"
+            } else {
+                "возвращена"
+            };
+            self.add_info_message(
+                format!("Команда '{key}' {status} во всплывающем списке."),
+                Some(format!("Ручной вызов по-прежнему работает: {prefix}{key}")),
+            );
+        } else {
+            let status = if now_hidden { "hidden" } else { "shown" };
+            self.add_info_message(
+                format!("Command '{key}' is now {status} in the popup list."),
+                Some(format!("Manual invocation still works: {prefix}{key}")),
+            );
+        }
     }
 
-    fn persist_profiles_language(&self, lang: &str) -> std::io::Result<()> {
+    pub(crate) fn open_custom_settings_popup(&mut self) {
+        let prefix = self.current_command_prefix();
+        let hidden_count = self.current_hidden_command_count();
+        let lang_label = self.ui_language_label(self.ui_language());
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(CUSTOM_SETTINGS_VIEW_ID);
+        let initial_selected_idx =
+            self.bottom_pane.selected_index_for_active_view(CUSTOM_SETTINGS_VIEW_ID);
+        let has_picker_models = if self.is_session_configured() {
+            self.model_catalog
+                .try_list_models()
+                .ok()
+                .is_some_and(|models| models.into_iter().any(|preset| preset.show_in_picker))
+        } else {
+            false
+        };
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+        if has_picker_models {
+            items.push(SelectionItem {
+                name: if is_ru {
+                    "Модель и размышления".to_string()
+                } else {
+                    "Model and reasoning".to_string()
+                },
+                description: Some(self.current_model_settings_summary()),
+                search_value: Some(if is_ru {
+                    "модель анализ reasoning провайдер effort".to_string()
+                } else {
+                    "model reasoning provider effort".to_string()
+                }),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelPopup))],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        } else {
+            items.push(SelectionItem {
+                name: if is_ru {
+                    "Модель и размышления".to_string()
+                } else {
+                    "Model and reasoning".to_string()
+                },
+                description: Some(if is_ru {
+                    "Полный каталог моделей откроется после инициализации сессии.".to_string()
+                } else {
+                    "The full model catalog becomes available after session startup.".to_string()
+                }),
+                search_value: Some(if is_ru {
+                    "модель анализ reasoning провайдер effort".to_string()
+                } else {
+                    "model reasoning provider effort".to_string()
+                }),
+                is_disabled: true,
+                disabled_reason: Some(if is_ru {
+                    "Сессия ещё не готова или каталог моделей не успел обновиться.".to_string()
+                } else {
+                    "The session is still starting or the model catalog has not refreshed yet."
+                        .to_string()
+                }),
+                ..Default::default()
+            });
+        }
+
+        items.extend(vec![
+            SelectionItem {
+                name: if is_ru {
+                    "Профили аккаунтов".to_string()
+                } else {
+                    "Account profiles".to_string()
+                },
+                description: Some(if is_ru {
+                    format!(
+                        "Шаблоны провайдеров, API-ключи и каталоги моделей. Быстрый вход: {prefix}profiles"
+                    )
+                } else {
+                    format!(
+                        "Provider templates, API keys, and model catalogs. Quick entry: {prefix}profiles"
+                    )
+                }),
+                search_value: Some(if is_ru {
+                    "профили аккаунты api ключи провайдеры модели".to_string()
+                } else {
+                    "profiles accounts api keys providers models".to_string()
+                }),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: if is_ru {
+                    "Язык интерфейса".to_string()
+                } else {
+                    "Interface language".to_string()
+                },
+                description: Some(if is_ru {
+                    format!("Сейчас: {lang_label}. Влияет на /model, /profiles, /settings и служебные подсказки.")
+                } else {
+                    format!("Current: {lang_label}. Affects /model, /profiles, and system prompts.")
+                }),
+                search_value: Some(if is_ru {
+                    "язык интерфейс english русский locale".to_string()
+                } else {
+                    "language interface english russian locale".to_string()
+                }),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenLanguagePicker))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: if is_ru {
+                    "Префикс команд".to_string()
+                } else {
+                    "Command prefix".to_string()
+                },
+                description: Some(if is_ru {
+                    format!("Сейчас: {prefix}. Пример: {prefix}model")
+                } else {
+                    format!("Current: {prefix}. Example: {prefix}model")
+                }),
+                search_value: Some(if is_ru {
+                    "префикс команд slash prefix".to_string()
+                } else {
+                    "command prefix slash".to_string()
+                }),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCommandPrefixPicker))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: if is_ru {
+                    "Команды во всплывающем списке".to_string()
+                } else {
+                    "Commands in the popup".to_string()
+                },
+                description: Some(if is_ru {
+                    format!(
+                        "Скрыто: {hidden_count}. Можно быстро убрать лишние команды и вернуть их обратно без потери ручного вызова."
+                    )
+                } else {
+                    format!(
+                        "Hidden: {hidden_count}. Hide noisy commands from the popup without disabling manual invocation."
+                    )
+                }),
+                search_value: Some(if is_ru {
+                    "команды popup скрыть показать алиасы".to_string()
+                } else {
+                    "commands popup hide show aliases".to_string()
+                }),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenCommandVisibilityPicker)
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ]);
+
+        if self.config.features.enabled(Feature::Personality) {
+            let current_personality = match self.config.personality.unwrap_or(Personality::Friendly) {
+                Personality::None => {
+                    if is_ru {
+                        "без дополнительного стиля"
+                    } else {
+                        "None"
+                    }
+                }
+                Personality::Friendly => {
+                    if is_ru {
+                        "дружелюбный"
+                    } else {
+                        "Friendly"
+                    }
+                }
+                Personality::Pragmatic => {
+                    if is_ru {
+                        "прагматичный"
+                    } else {
+                        "Pragmatic"
+                    }
+                }
+            };
+            items.push(SelectionItem {
+                name: if is_ru {
+                    "Стиль ответов".to_string()
+                } else {
+                    "Response style".to_string()
+                },
+                description: Some(if is_ru {
+                    format!("Сейчас: {current_personality}. Управляет тоном ответов в этой сессии.")
+                } else {
+                    format!("Current: {current_personality}. Controls the tone of this session.")
+                }),
+                search_value: Some(if is_ru {
+                    "стиль ответы тон personality".to_string()
+                } else {
+                    "personality response style tone".to_string()
+                }),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenPersonalityPopup))],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Доступ и подтверждения".to_string()
+            } else {
+                "Permissions and approvals".to_string()
+            },
+            description: Some(if is_ru {
+                "Что можно делать без запроса, а что требует подтверждения.".to_string()
+            } else {
+                "Choose what can run immediately and what still needs approval.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "разрешения подтверждения доступ sandbox approvals".to_string()
+            } else {
+                "permissions approvals sandbox access".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenPermissionsPopup))],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        if self.realtime_audio_device_selection_enabled() {
+            items.push(SelectionItem {
+                name: if is_ru {
+                    "Голос и звук".to_string()
+                } else {
+                    "Voice and audio".to_string()
+                },
+                description: Some(if is_ru {
+                    "Микрофон и вывод для голосового режима".to_string()
+                } else {
+                    "Microphone and output device for realtime".to_string()
+                }),
+                search_value: Some(if is_ru {
+                    "голос звук микрофон realtime".to_string()
+                } else {
+                    "voice audio microphone realtime".to_string()
+                }),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenRealtimeAudioPopup))],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        let params = SelectionViewParams {
+            view_id: Some(CUSTOM_SETTINGS_VIEW_ID),
+            title: Some(if is_ru {
+                "Настройки".to_string()
+            } else {
+                "Settings".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                format!(
+                    "Единый центр для модели, аккаунтов и поведения команд. Префикс: {prefix}, скрыто команд: {hidden_count}."
+                )
+            } else {
+                format!(
+                    "One place for model choice, profiles, and command behavior. Current prefix: {prefix}, hidden commands: {hidden_count}."
+                )
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти раздел настроек".to_string()
+            } else {
+                "Search settings sections".to_string()
+            }),
+            initial_selected_idx,
+            ..Default::default()
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(CUSTOM_SETTINGS_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_language_picker_popup(&mut self) {
+        let current = self.current_profiles_language();
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(LANGUAGE_PICKER_VIEW_ID);
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(LANGUAGE_PICKER_VIEW_ID)
+            .or(Some(1));
+        let mk =
+            |code: &'static str, title: &'static str, description: String, current: &str| {
+                SelectionItem {
+                    name: title.to_string(),
+                    description: Some(description),
+                    search_value: Some(format!("{code} {title}")),
+                    is_current: current == code,
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::SetProfilesLanguage {
+                            lang: code.to_string(),
+                        });
+                        tx.send(AppEvent::OpenCustomSettings);
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            };
+
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к общим настройкам модели, профилей и команд.".to_string()
+            } else {
+                "Return to the main settings hub.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад настройки".to_string()
+            } else {
+                "back settings".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.extend([
+            mk(
+                "ru",
+                "Русский",
+                if is_ru {
+                    "Меню, всплывающие окна и системные сообщения будут на русском.".to_string()
+                } else {
+                    "Menus, popups, and system messages in Russian.".to_string()
+                },
+                &current,
+            ),
+            mk(
+                "en",
+                "English",
+                if is_ru {
+                    "Меню, всплывающие окна и системные сообщения будут на английском.".to_string()
+                } else {
+                    "Menus, popups, and system messages in English.".to_string()
+                },
+                &current,
+            ),
+        ]);
+
+        let params = SelectionViewParams {
+            view_id: Some(LANGUAGE_PICKER_VIEW_ID),
+            title: Some(if is_ru {
+                "Язык интерфейса".to_string()
+            } else {
+                "Interface language".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Выберите язык для /model, /profiles, /settings и служебных подсказок".to_string()
+            } else {
+                "Choose the language for /model, /profiles, /settings, and system prompts"
+                    .to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            ..Default::default()
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(LANGUAGE_PICKER_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_command_prefix_picker_popup(&mut self) {
+        let current = command_prefix();
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(COMMAND_PREFIX_VIEW_ID);
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(COMMAND_PREFIX_VIEW_ID)
+            .or(Some(1));
+        let presets = ['/', '!', '.', ';'];
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к общим настройкам.".to_string()
+            } else {
+                "Return to the main settings hub.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад настройки".to_string()
+            } else {
+                "back settings".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.extend(presets.into_iter().map(|prefix| SelectionItem {
+            name: prefix.to_string(),
+            description: Some(if is_ru {
+                format!("Например: {prefix}model, {prefix}profiles")
+            } else {
+                format!("Examples: {prefix}model, {prefix}profiles")
+            }),
+            search_value: Some(if is_ru {
+                format!("{prefix} префикс команд")
+            } else {
+                format!("{prefix} command prefix")
+            }),
+            is_current: current == prefix,
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::SetCommandPrefix { prefix });
+                tx.send(AppEvent::OpenCustomSettings);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }));
+
+        let params = SelectionViewParams {
+            view_id: Some(COMMAND_PREFIX_VIEW_ID),
+            title: Some(if is_ru {
+                "Префикс команд".to_string()
+            } else {
+                "Command prefix".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Выберите символ, с которого начинаются команды и всплывающий список".to_string()
+            } else {
+                "Choose the character that opens commands and the popup menu".to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            ..Default::default()
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(COMMAND_PREFIX_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_command_visibility_picker_popup(&mut self) {
+        let hidden = self.current_hidden_commands();
+        let prefix = self.current_command_prefix();
+        let is_ru = self.ui_language().is_ru();
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(COMMAND_VISIBILITY_VIEW_ID);
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(COMMAND_VISIBILITY_VIEW_ID)
+            .or(Some(1));
+        let mut seen = HashSet::new();
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к общим настройкам.".to_string()
+            } else {
+                "Return to the main settings hub.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад настройки".to_string()
+            } else {
+                "back settings".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        items.extend(
+            built_in_slash_commands()
+                .into_iter()
+                .filter(|(_, cmd)| seen.insert(cmd.command_en().to_string()))
+                .map(|(_, cmd)| {
+                    let key = cmd.command_en().to_string();
+                    let aliases = cmd.popup_aliases();
+                    let alias_suffix = if aliases.is_empty() {
+                        String::new()
+                    } else if is_ru {
+                        format!(
+                            " Алиасы: {}",
+                            aliases
+                                .iter()
+                                .map(|alias| format!("{prefix}{alias}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    } else {
+                        format!(
+                            " Aliases: {}",
+                            aliases
+                                .iter()
+                                .map(|alias| format!("{prefix}{alias}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    };
+                    let is_hidden = hidden.contains(&key);
+                    let visibility_text = if is_hidden {
+                        if is_ru {
+                            format!("Скрыта только из меню. Ручной вызов: {prefix}{key}")
+                        } else {
+                            format!("Hidden only in the popup. Manual invocation: {prefix}{key}")
+                        }
+                    } else if is_ru {
+                        format!("Видна в меню и вызывается вручную как {prefix}{key}")
+                    } else {
+                        format!("Visible in the popup and callable as {prefix}{key}")
+                    };
+                    let description = format!("{visibility_text}.{alias_suffix}");
+                    let search_value = if aliases.is_empty() {
+                        format!("{key} {}", cmd.description())
+                    } else {
+                        format!("{key} {} {}", aliases.join(" "), cmd.description())
+                    };
+                    SelectionItem {
+                        name: key.clone(),
+                        description: Some(description),
+                        search_value: Some(search_value),
+                        is_current: !is_hidden,
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::ToggleCommandVisibility {
+                                command_key: key.clone(),
+                            })
+                        })],
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    }
+                }),
+        );
+
+        let footer_hint = if is_ru {
+            Line::from(vec![
+                "Нажмите ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " чтобы скрыть или вернуть команду, ".into(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " для возврата".into(),
+            ])
+        } else {
+            Line::from(vec![
+                "Press ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to hide or restore a command, ".into(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to go back".into(),
+            ])
+        };
+
+        let params = SelectionViewParams {
+            view_id: Some(COMMAND_VISIBILITY_VIEW_ID),
+            title: Some(if is_ru {
+                "Команды в списке".to_string()
+            } else {
+                "Commands in the popup".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                format!(
+                    "Фильтруйте по названию, алиасу или описанию. Текущий префикс: {prefix}"
+                )
+            } else {
+                format!(
+                    "Filter by command name, alias, or description. Current prefix: {prefix}"
+                )
+            }),
+            footer_hint: Some(footer_hint),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти команду или алиас".to_string()
+            } else {
+                "Find a command or alias".to_string()
+            }),
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            ..Default::default()
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(COMMAND_VISIBILITY_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_profiles_manager_popup(&mut self) {
         let profiles_dir = self.profiles_dir();
-        std::fs::create_dir_all(&profiles_dir)?;
-        let settings_path = profiles_dir.join("settings.json");
-        let payload = format!("{{\n  \"language\": \"{lang}\"\n}}\n");
-        std::fs::write(settings_path, payload)
+        let prefix = self.current_command_prefix();
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(PROFILES_MANAGER_VIEW_ID);
+        let initial_selected_idx =
+            self.bottom_pane.selected_index_for_active_view(PROFILES_MANAGER_VIEW_ID);
+        let _ = std::fs::create_dir_all(&profiles_dir);
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "Добавить аккаунт".to_string()
+            } else {
+                "Add account".to_string()
+            },
+            description: Some(if is_ru {
+                "Создать профиль провайдера и сразу подготовить каталог моделей".to_string()
+            } else {
+                "Create a provider profile and seed its model catalog".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "добавить аккаунт профиль провайдер".to_string()
+            } else {
+                "add account profile provider".to_string()
+            }),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenAddAccountProviderPicker)
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }, SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к общим настройкам.".to_string()
+            } else {
+                "Return to the main settings hub.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад настройки".to_string()
+            } else {
+                "back settings".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        let mut profile_files = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&profiles_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if Self::is_profile_template_path(path.as_path()) {
+                    let name = path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    profile_files.push((name, path));
+                }
+            }
+        }
+        profile_files.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for (file_name, path) in profile_files {
+            let display_path = path.display().to_string();
+            let preview = self.profile_preview(path.as_path());
+            let catalog_path = preview
+                .linked_catalog_path
+                .clone()
+                .or_else(|| preview.derived_catalog_path.clone());
+            let provider = preview.provider.unwrap_or_else(|| {
+                if is_ru {
+                    "провайдер не указан".to_string()
+                } else {
+                    "provider missing".to_string()
+                }
+            });
+            let model = preview.model.unwrap_or_else(|| {
+                if is_ru {
+                    "модель не указана".to_string()
+                } else {
+                    "model missing".to_string()
+                }
+            });
+            let display_name = preview.display_name.unwrap_or(file_name);
+            let catalog_status = match catalog_path.as_ref() {
+                Some(path) if path.exists() && is_ru => format!("каталог: {}", path.display()),
+                Some(path) if path.exists() => format!("catalog: {}", path.display()),
+                Some(path) if is_ru => format!("каталог не найден: {}", path.display()),
+                Some(path) => format!("catalog missing: {}", path.display()),
+                None if is_ru => "каталог не привязан".to_string(),
+                None => "catalog not linked".to_string(),
+            };
+            let info_title = if is_ru {
+                format!("Профиль: {display_path}")
+            } else {
+                format!("Profile: {display_path}")
+            };
+            let extra_hint = if is_ru {
+                format!("Провайдер: {provider}\nМодель: {model}\n{catalog_status}")
+            } else {
+                format!("Provider: {provider}\nModel: {model}\n{catalog_status}")
+            };
+            let hint = format!("{extra_hint}\n\n{}", self.profile_setup_hint(path.as_path()));
+            let description = format!("{provider} • {model} • {catalog_status}");
+            let search_value = format!("{display_name} {provider} {model} {display_path}");
+            items.push(SelectionItem {
+                name: display_name,
+                description: Some(description),
+                search_value: Some(search_value),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(info_title.clone(), Some(hint.clone())),
+                    )))
+                })],
+                dismiss_on_select: false,
+                ..Default::default()
+            });
+        }
+
+        let footer_hint = if is_ru {
+            Line::from(vec![
+                "Нажмите ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " чтобы открыть подсказку по профилю, ".into(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " для возврата".into(),
+            ])
+        } else {
+            Line::from(vec![
+                "Press ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to inspect a profile, ".into(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to go back".into(),
+            ])
+        };
+
+        let params = SelectionViewParams {
+            view_id: Some(PROFILES_MANAGER_VIEW_ID),
+            title: Some(if is_ru {
+                "Профили аккаунтов".to_string()
+            } else {
+                "Profiles".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                format!(
+                    "Папка профилей: {}. Быстрый вызов: {prefix}profiles",
+                    profiles_dir.display()
+                )
+            } else {
+                format!(
+                    "Profiles directory: {}. Quick entry: {prefix}profiles",
+                    profiles_dir.display()
+                )
+            }),
+            footer_hint: Some(footer_hint),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти профиль, модель или провайдера".to_string()
+            } else {
+                "Find a profile, model, or provider".to_string()
+            }),
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            ..Default::default()
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(PROFILES_MANAGER_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_add_account_provider_popup(&mut self) {
+        let providers = [
+            "openai",
+            "openrouter",
+            "gemini",
+            "anthropic",
+            "mistral",
+            "groq",
+            "ollama",
+        ];
+        let is_ru = self.ui_language().is_ru();
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(ADD_ACCOUNT_PROVIDER_VIEW_ID);
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(ADD_ACCOUNT_PROVIDER_VIEW_ID)
+            .or(Some(1));
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад к профилям".to_string()
+            } else {
+                "← Back to profiles".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к списку профилей и шаблонов аккаунтов.".to_string()
+            } else {
+                "Return to the profiles manager.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад профили".to_string()
+            } else {
+                "back profiles".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.extend(providers.into_iter().map(|provider| SelectionItem {
+            name: provider.to_string(),
+            description: Some(if is_ru {
+                format!(
+                    "Создать профиль и стартовый каталог моделей. По умолчанию: {}",
+                    default_profile_model_for_provider(provider)
+                )
+            } else {
+                format!(
+                    "Create a profile and seed its model catalog. Default: {}",
+                    default_profile_model_for_provider(provider)
+                )
+            }),
+            search_value: Some(format!(
+                "{provider} {}",
+                default_profile_model_for_provider(provider)
+            )),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::CreateProfileTemplate {
+                    provider: provider.to_string(),
+                })
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }));
+
+        let params = SelectionViewParams {
+            view_id: Some(ADD_ACCOUNT_PROVIDER_VIEW_ID),
+            title: Some(if is_ru {
+                "Добавить аккаунт".to_string()
+            } else {
+                "Add account".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Выберите провайдера: будут созданы и профиль, и каталог моделей"
+                    .to_string()
+            } else {
+                "Choose a provider to create both the profile and its model catalog"
+                    .to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти провайдера".to_string()
+            } else {
+                "Find a provider".to_string()
+            }),
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))),
+            ..Default::default()
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(ADD_ACCOUNT_PROVIDER_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn create_profile_template_for_provider(&mut self, provider: &str) {
+        match self.create_profile_template(provider, "") {
+            Ok(path) => {
+                if self.ui_language().is_ru() {
+                    self.add_info_message(
+                        format!("Создан профиль: {}", path.display()),
+                        Some(self.profile_setup_hint(path.as_path())),
+                    );
+                } else {
+                    self.add_info_message(
+                        format!("Created profile: {}", path.display()),
+                        Some(self.profile_setup_hint(path.as_path())),
+                    );
+                }
+                self.open_profiles_manager_popup();
+            }
+            Err(err) => {
+                if self.ui_language().is_ru() {
+                    self.add_error_message(format!("Не удалось создать профиль: {err}"));
+                } else {
+                    self.add_error_message(format!("Failed to create profile: {err}"));
+                }
+            }
+        }
     }
 
     fn create_profile_template(
@@ -8651,8 +11007,14 @@ impl ChatWidget {
                 })
                 .collect::<String>()
         };
-        let file_name = format!("{}.json", sanitized.to_ascii_lowercase());
+        let profile_key = sanitized.to_ascii_lowercase();
+        let file_name = format!("{profile_key}.json");
         let path = profiles_dir.join(file_name);
+        let model_catalog_path = ensure_profile_model_catalog_for_profile(
+            self.config.codex_home.as_path(),
+            &profile_key,
+            provider,
+        )?;
 
         if path.exists() {
             return Ok(path);
@@ -8670,14 +11032,18 @@ impl ChatWidget {
         };
 
         let env_key = provider.to_ascii_uppercase() + "_API_KEY";
-        let payload = format!(
-            "{{\n  \"provider\": \"{}\",\n  \"name\": \"{}\",\n  \"base_url\": \"{}\",\n  \"env_key\": \"{}\",\n  \"model\": \"change-me\"\n}}\n",
-            provider,
-            sanitized,
-            base_url,
-            env_key
-        );
-        std::fs::write(&path, payload)?;
+        let payload = serde_json::json!({
+            "provider": provider,
+            "name": sanitized,
+            "base_url": base_url,
+            "env_key": env_key,
+            "model": default_profile_model_for_provider(provider),
+            "model_catalog_json": model_catalog_path.display().to_string(),
+        });
+        let body = serde_json::to_string_pretty(&payload)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?
+            + "\n";
+        std::fs::write(&path, body)?;
         Ok(path)
     }
 
@@ -8688,6 +11054,7 @@ impl ChatWidget {
 
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
     pub(crate) fn open_permissions_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
         let include_read_only = cfg!(target_os = "windows");
         let current_approval = self.config.permissions.approval_policy.value();
         let current_sandbox = self.config.permissions.sandbox_policy.get();
@@ -8722,13 +11089,31 @@ impl ChatWidget {
             if !include_read_only && preset.id == "read-only" {
                 continue;
             }
-            let base_name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
+            let base_name = if is_ru {
+                match preset.id {
+                    "read-only" => "Только чтение".to_string(),
+                    "auto" if windows_degraded_sandbox_enabled => {
+                        "По умолчанию (песочница без прав администратора)".to_string()
+                    }
+                    "auto" => "По умолчанию".to_string(),
+                    "full-access" => "Полный доступ".to_string(),
+                    _ => preset.label.to_string(),
+                }
+            } else if preset.id == "auto" && windows_degraded_sandbox_enabled {
                 "Default (non-admin sandbox)".to_string()
             } else {
                 preset.label.to_string()
             };
-            let base_description =
-                Some(preset.description.replace(" (Identical to Agent mode)", ""));
+            let base_description = Some(if is_ru {
+                match preset.id {
+                    "read-only" => "Lavilas Codex сможет читать файлы в текущей рабочей директории. Для редактирования файлов и доступа в интернет потребуется подтверждение.".to_string(),
+                    "auto" => "Lavilas Codex сможет читать и изменять файлы в текущей рабочей директории, а также запускать команды. Для доступа в интернет и изменения файлов вне рабочей директории потребуется подтверждение.".to_string(),
+                    "full-access" => "Lavilas Codex сможет изменять файлы вне текущей рабочей директории и выходить в интернет без подтверждений. Используйте этот режим осторожно.".to_string(),
+                    _ => preset.description.replace(" (Identical to Agent mode)", ""),
+                }
+            } else {
+                preset.description.replace(" (Identical to Agent mode)", "")
+            });
             let approval_disabled_reason = match self
                 .config
                 .permissions
@@ -8831,12 +11216,18 @@ impl ChatWidget {
                 });
 
                 if guardian_approval_enabled {
+                    let guardian_label = if is_ru {
+                        "Подтверждения Guardian".to_string()
+                    } else {
+                        "Guardian Approvals".to_string()
+                    };
                     items.push(SelectionItem {
-                        name: "Guardian Approvals".to_string(),
-                        description: Some(
-                            "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the guardian reviewer subagent."
-                                .to_string(),
-                        ),
+                        name: guardian_label.clone(),
+                        description: Some(if is_ru {
+                            "Те же права, что и у режима «По умолчанию», но подходящие подтверждения `on-request` будут отправляться сабагенту Guardian.".to_string()
+                        } else {
+                            "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the guardian reviewer subagent.".to_string()
+                        }),
                         is_current: current_review_policy == ApprovalsReviewer::GuardianSubagent
                             && Self::preset_matches_current(
                                 current_approval,
@@ -8846,7 +11237,7 @@ impl ChatWidget {
                         actions: Self::approval_preset_actions(
                             preset.approval,
                             preset.sandbox.clone(),
-                            "Guardian Approvals".to_string(),
+                            guardian_label,
                             ApprovalsReviewer::GuardianSubagent,
                         ),
                         dismiss_on_select: true,
@@ -8873,16 +11264,29 @@ impl ChatWidget {
         }
 
         let footer_note = show_elevate_sandbox_hint.then(|| {
-            vec![
-                "The non-admin sandbox protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected. To upgrade to the default sandbox, run ".dim(),
-                "/setup-default-sandbox".cyan(),
-                ".".dim(),
-            ]
-            .into()
+            if is_ru {
+                vec![
+                    "Песочница без прав администратора обычно защищает файлы и блокирует сеть, но хуже держит ситуацию, если в контекст попала вредная инструкция. Чтобы перейти на стандартную песочницу, выполните ".dim(),
+                    "/setup-default-sandbox".cyan(),
+                    ".".dim(),
+                ]
+                .into()
+            } else {
+                vec![
+                    "The non-admin sandbox protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected. To upgrade to the default sandbox, run ".dim(),
+                    "/setup-default-sandbox".cyan(),
+                    ".".dim(),
+                ]
+                .into()
+            }
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Update Model Permissions".to_string()),
+            title: Some(if is_ru {
+                "Доступ и подтверждения".to_string()
+            } else {
+                "Update Model Permissions".to_string()
+            }),
             footer_note,
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -8938,10 +11342,7 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(
-                    format!("Permissions updated to {label}"),
-                    /*hint*/ None,
-                ),
+                history_cell::new_info_event(format!("→ {label}"), /*hint*/ None),
             )));
         })]
     }
@@ -9016,16 +11417,32 @@ impl ChatWidget {
         preset: ApprovalPreset,
         return_to_permissions: bool,
     ) {
-        let selected_name = preset.label.to_string();
+        let is_ru = self.ui_language().is_ru();
+        let selected_name = if is_ru && preset.id == "full-access" {
+            "Полный доступ".to_string()
+        } else {
+            preset.label.to_string()
+        };
         let approval = preset.approval;
         let sandbox = preset.sandbox;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
-        let title_line = Line::from("Enable full access?").bold();
+        let title_line = Line::from(if is_ru {
+            "Включить режим полного доступа?"
+        } else {
+            "Enable full access?"
+        })
+        .bold();
         let info_line = Line::from(vec![
-            "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
-                .into(),
-            "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
-                .fg(Color::Red),
+            if is_ru {
+                "В этом режиме Lavilas Codex сможет изменять любые файлы на компьютере и запускать сетевые команды без дополнительных подтверждений. ".into()
+            } else {
+                "When Lavilas Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into()
+            },
+            if is_ru {
+                "Включайте его только осознанно: риск потери данных, утечек и неожиданного поведения здесь заметно выше.".fg(Color::Red)
+            } else {
+                "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.".fg(Color::Red)
+            },
         ]);
         header_children.push(Box::new(title_line));
         header_children.push(Box::new(
@@ -9064,22 +11481,46 @@ impl ChatWidget {
 
         let items = vec![
             SelectionItem {
-                name: "Yes, continue anyway".to_string(),
-                description: Some("Apply full access for this session".to_string()),
+                name: if is_ru {
+                    "Да, включить для этой сессии".to_string()
+                } else {
+                    "Yes, continue anyway".to_string()
+                },
+                description: Some(if is_ru {
+                    "Режим полного доступа включится сразу и будет действовать до конца текущей сессии.".to_string()
+                } else {
+                    "Apply full access for this session".to_string()
+                }),
                 actions: accept_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Yes, and don't ask again".to_string(),
-                description: Some("Enable full access and remember this choice".to_string()),
+                name: if is_ru {
+                    "Да, запомнить выбор".to_string()
+                } else {
+                    "Yes, and don't ask again".to_string()
+                },
+                description: Some(if is_ru {
+                    "Включить полный доступ и больше не показывать это предупреждение.".to_string()
+                } else {
+                    "Enable full access and remember this choice".to_string()
+                }),
                 actions: accept_and_remember_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Cancel".to_string(),
-                description: Some("Go back without enabling full access".to_string()),
+                name: if is_ru {
+                    "Вернуться назад".to_string()
+                } else {
+                    "Cancel".to_string()
+                },
+                description: Some(if is_ru {
+                    "Вернуться назад, не включая полный доступ.".to_string()
+                } else {
+                    "Go back without enabling full access".to_string()
+                }),
                 actions: deny_actions,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -9102,15 +11543,19 @@ impl ChatWidget {
         extra_count: usize,
         failed_scan: bool,
     ) {
+        let is_ru = self.ui_language().is_ru();
         let (approval, sandbox) = match &preset {
             Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
             None => (None, None),
         };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
-        let describe_policy = |policy: &SandboxPolicy| match policy {
-            SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
-            SandboxPolicy::ReadOnly { .. } => "Read-Only mode",
-            _ => "Agent mode",
+        let describe_policy = |policy: &SandboxPolicy| match (is_ru, policy) {
+            (true, SandboxPolicy::WorkspaceWrite { .. }) => "Режим агента",
+            (true, SandboxPolicy::ReadOnly { .. }) => "Только чтение",
+            (false, SandboxPolicy::WorkspaceWrite { .. }) => "Agent mode",
+            (false, SandboxPolicy::ReadOnly { .. }) => "Read-Only mode",
+            (true, _) => "Режим агента",
+            (false, _) => "Agent mode",
         };
         let mode_label = preset
             .as_ref()
@@ -9118,15 +11563,34 @@ impl ChatWidget {
             .unwrap_or_else(|| describe_policy(self.config.permissions.sandbox_policy.get()));
         let info_line = if failed_scan {
             Line::from(vec![
-                "We couldn't complete the world-writable scan, so protections cannot be verified. "
-                    .into(),
-                format!("The Windows sandbox cannot guarantee protection in {mode_label}.")
-                    .fg(Color::Red),
+                if is_ru {
+                    "Не удалось завершить проверку world-writable, поэтому состояние защиты нельзя подтвердить. "
+                        .into()
+                } else {
+                    "We couldn't complete the world-writable scan, so protections cannot be verified. "
+                        .into()
+                },
+                if is_ru {
+                    format!("Песочница Windows не может гарантировать защиту в режиме {mode_label}.")
+                        .fg(Color::Red)
+                } else {
+                    format!("The Windows sandbox cannot guarantee protection in {mode_label}.")
+                        .fg(Color::Red)
+                },
             ])
         } else {
             Line::from(vec![
-                "The Windows sandbox cannot protect writes to folders that are writable by Everyone.".into(),
-                " Consider removing write access for Everyone from the following folders:".into(),
+                if is_ru {
+                    "Песочница Windows не может защитить каталоги, в которые группа Everyone имеет право записи."
+                        .into()
+                } else {
+                    "The Windows sandbox cannot protect writes to folders that are writable by Everyone.".into()
+                },
+                if is_ru {
+                    " Уберите право записи для Everyone у следующих каталогов:".into()
+                } else {
+                    " Consider removing write access for Everyone from the following folders:".into()
+                },
             ])
         };
         header_children.push(Box::new(
@@ -9134,24 +11598,23 @@ impl ChatWidget {
         ));
 
         if !sample_paths.is_empty() {
-            // Show up to three examples and optionally an "and X more" line.
             let mut lines: Vec<Line> = Vec::new();
             lines.push(Line::from(""));
             for p in &sample_paths {
                 lines.push(Line::from(format!("  - {p}")));
             }
             if extra_count > 0 {
-                lines.push(Line::from(format!("and {extra_count} more")));
+                lines.push(Line::from(if is_ru {
+                    format!("и ещё {extra_count}")
+                } else {
+                    format!("and {extra_count} more")
+                }));
             }
             header_children.push(Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
         }
         let header = ColumnRenderable::with(header_children);
 
-        // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
-        // so downstream policy-change hooks don't re-trigger the warning.
         let mut accept_actions: Vec<SelectionAction> = Vec::new();
-        // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals or
-        // /permissions), to avoid duplicate warnings from the ensuing policy change.
         if preset.is_some() {
             accept_actions.push(Box::new(|tx| {
                 tx.send(AppEvent::SkipNextWorldWritableScan);
@@ -9182,15 +11645,31 @@ impl ChatWidget {
 
         let items = vec![
             SelectionItem {
-                name: "Continue".to_string(),
-                description: Some(format!("Apply {mode_label} for this session")),
+                name: if is_ru {
+                    "Продолжить".to_string()
+                } else {
+                    "Continue".to_string()
+                },
+                description: Some(if is_ru {
+                    format!("Применить режим {mode_label} для этой сессии")
+                } else {
+                    format!("Apply {mode_label} for this session")
+                }),
                 actions: accept_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Continue and don't warn again".to_string(),
-                description: Some(format!("Enable {mode_label} and remember this choice")),
+                name: if is_ru {
+                    "Продолжить и больше не предупреждать".to_string()
+                } else {
+                    "Continue and don't warn again".to_string()
+                },
+                description: Some(if is_ru {
+                    format!("Включить режим {mode_label} и запомнить этот выбор")
+                } else {
+                    format!("Enable {mode_label} and remember this choice")
+                }),
                 actions: accept_and_remember_actions,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -9219,14 +11698,22 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
+        let is_ru = self.ui_language().is_ru();
+
         if !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
-            // Legacy flow (pre-NUX): explain the experimental sandbox and let the user enable it
-            // directly (no elevation prompts).
             let mut header = ColumnRenderable::new();
             header.push(*Box::new(
                 Paragraph::new(vec![
-                    line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
-                    line!["Learn more: https://developers.openai.com/codex/windows"],
+                    if is_ru {
+                        line!["Режим агента на Windows использует экспериментальную песочницу, чтобы ограничить доступ к сети и файловой системе.".bold()]
+                    } else {
+                        line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()]
+                    },
+                    if is_ru {
+                        line!["Подробнее в документации по песочнице Windows."]
+                    } else {
+                        line!["See the Windows sandbox guide for details."]
+                    },
                 ])
                 .wrap(Wrap { trim: false }),
             ));
@@ -9234,7 +11721,11 @@ impl ChatWidget {
             let preset_clone = preset;
             let items = vec![
                 SelectionItem {
-                    name: "Enable experimental sandbox".to_string(),
+                    name: if is_ru {
+                        "Включить экспериментальную песочницу".to_string()
+                    } else {
+                        "Enable experimental sandbox".to_string()
+                    },
                     description: None,
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
@@ -9246,7 +11737,11 @@ impl ChatWidget {
                     ..Default::default()
                 },
                 SelectionItem {
-                    name: "Go back".to_string(),
+                    name: if is_ru {
+                        "Назад".to_string()
+                    } else {
+                        "Go back".to_string()
+                    },
                     description: None,
                     actions: vec![Box::new(|tx| {
                         tx.send(AppEvent::OpenApprovalsPopup);
@@ -9274,9 +11769,11 @@ impl ChatWidget {
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
-            Paragraph::new(vec![
-                line!["Set up the Codex agent sandbox to protect your files and control network access. Learn more <https://developers.openai.com/codex/windows>"],
-            ])
+            Paragraph::new(vec![if is_ru {
+                line!["Настройте песочницу агента Lavilas Codex, чтобы защитить файлы и контролировать доступ к сети. Подробности есть в документации по песочнице Windows."]
+            } else {
+                line!["Set up the Lavilas Codex agent sandbox to protect your files and control network access. See the Windows sandbox guide for details."]
+            }])
             .wrap(Wrap { trim: false }),
         ));
 
@@ -9286,7 +11783,11 @@ impl ChatWidget {
         let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
-                name: "Set up default sandbox (requires Administrator permissions)".to_string(),
+                name: if is_ru {
+                    "Настроить стандартную песочницу (нужны права администратора)".to_string()
+                } else {
+                    "Set up default sandbox (requires Administrator permissions)".to_string()
+                },
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     accept_otel.counter(
@@ -9302,7 +11803,11 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "Use non-admin sandbox (higher risk if prompt injected)".to_string(),
+                name: if is_ru {
+                    "Использовать песочницу без прав администратора (риск выше, если в контекст попадёт вредная инструкция)".to_string()
+                } else {
+                    "Use non-admin sandbox (higher risk if prompt injected)".to_string()
+                },
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     legacy_otel.counter(
@@ -9318,7 +11823,11 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "Quit".to_string(),
+                name: if is_ru {
+                    "Выйти".to_string()
+                } else {
+                    "Quit".to_string()
+                },
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     quit_otel.counter(
@@ -9349,17 +11858,24 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_fallback_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
+        let is_ru = self.ui_language().is_ru();
         let mut lines = Vec::new();
-        lines.push(line![
-            "Couldn't set up your sandbox with Administrator permissions".bold()
-        ]);
+        lines.push(if is_ru {
+            line!["Не удалось настроить песочницу с правами администратора".bold()]
+        } else {
+            line!["Couldn't set up your sandbox with Administrator permissions".bold()]
+        });
         lines.push(line![""]);
-        lines.push(line![
-            "You can still use Codex in a non-admin sandbox. It carries greater risk if prompt injected."
-        ]);
-        lines.push(line![
-            "Learn more <https://developers.openai.com/codex/windows>"
-        ]);
+        lines.push(if is_ru {
+            line!["Вы всё ещё можете использовать Lavilas Codex в песочнице без прав администратора, но в этом режиме хуже защита, если в контекст попадёт вредная инструкция."]
+        } else {
+            line!["You can still use Lavilas Codex in a non-admin sandbox, but protection is weaker if hostile instructions reach the model."]
+        });
+        lines.push(if is_ru {
+            line!["Подробнее в документации по песочнице Windows."]
+        } else {
+            line!["See the Windows sandbox guide for details."]
+        });
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
@@ -9369,7 +11885,11 @@ impl ChatWidget {
         let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
-                name: "Try setting up admin sandbox again".to_string(),
+                name: if is_ru {
+                    "Попробовать ещё раз настроить админ-песочницу".to_string()
+                } else {
+                    "Try setting up admin sandbox again".to_string()
+                },
                 description: None,
                 actions: vec![Box::new({
                     let otel = self.session_telemetry.clone();
@@ -9389,7 +11909,11 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "Use Codex with non-admin sandbox".to_string(),
+                name: if is_ru {
+                    "Использовать Lavilas Codex с песочницей без прав администратора".to_string()
+                } else {
+                    "Use Lavilas Codex with a non-admin sandbox".to_string()
+                },
                 description: None,
                 actions: vec![Box::new({
                     let otel = self.session_telemetry.clone();
@@ -9409,7 +11933,11 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "Quit".to_string(),
+                name: if is_ru {
+                    "Выйти".to_string()
+                } else {
+                    "Quit".to_string()
+                },
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     quit_otel.counter(
@@ -9453,18 +11981,28 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn show_windows_sandbox_setup_status(&mut self) {
-        // While elevated sandbox setup runs, prevent typing so the user doesn't
-        // accidentally queue messages that will run under an unexpected mode.
         self.bottom_pane.set_composer_input_enabled(
             /*enabled*/ false,
-            Some("Input disabled until setup completes.".to_string()),
+            Some(if self.ui_language().is_ru() {
+                "Ввод заблокирован до завершения настройки.".to_string()
+            } else {
+                "Input disabled until setup completes.".to_string()
+            }),
         );
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ false);
         self.set_status(
-            "Setting up sandbox...".to_string(),
-            Some("Hang tight, this may take a few minutes".to_string()),
+            if self.ui_language().is_ru() {
+                "Готовлю песочницу...".to_string()
+            } else {
+                "Setting up sandbox...".to_string()
+            },
+            Some(if self.ui_language().is_ru() {
+                "Процесс может занять несколько минут".to_string()
+            } else {
+                "Hang tight, this may take a few minutes".to_string()
+            }),
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
@@ -9531,7 +12069,11 @@ impl ChatWidget {
                 .set_audio_device_selection_enabled(self.realtime_audio_device_selection_enabled());
             if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
                 self.request_realtime_conversation_close(Some(
-                    "Realtime voice mode was closed because the feature was disabled.".to_string(),
+                    if self.ui_language().is_ru() {
+                        "Голосовой режим закрыт, потому что эта возможность была отключена.".to_string()
+                    } else {
+                        "Realtime voice mode was closed because the feature was disabled.".to_string()
+                    },
                 ));
             }
         }
@@ -9761,6 +12303,7 @@ impl ChatWidget {
         self.realtime_conversation.is_live()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn current_realtime_audio_device_name(&self, kind: RealtimeAudioDeviceKind) -> Option<String> {
         match kind {
             RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone.clone(),
@@ -9768,9 +12311,33 @@ impl ChatWidget {
         }
     }
 
+    fn realtime_audio_device_title(&self, kind: RealtimeAudioDeviceKind) -> &'static str {
+        match (self.ui_language().is_ru(), kind) {
+            (true, RealtimeAudioDeviceKind::Microphone) => "Микрофон",
+            (true, RealtimeAudioDeviceKind::Speaker) => "Вывод звука",
+            (false, RealtimeAudioDeviceKind::Microphone) => "Microphone",
+            (false, RealtimeAudioDeviceKind::Speaker) => "Speaker",
+        }
+    }
+
+    fn realtime_audio_device_noun(&self, kind: RealtimeAudioDeviceKind) -> &'static str {
+        match (self.ui_language().is_ru(), kind) {
+            (true, RealtimeAudioDeviceKind::Microphone) => "микрофон",
+            (true, RealtimeAudioDeviceKind::Speaker) => "вывод звука",
+            (false, RealtimeAudioDeviceKind::Microphone) => "microphone",
+            (false, RealtimeAudioDeviceKind::Speaker) => "speaker",
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     fn current_realtime_audio_selection_label(&self, kind: RealtimeAudioDeviceKind) -> String {
-        self.current_realtime_audio_device_name(kind)
-            .unwrap_or_else(|| "System default".to_string())
+        self.current_realtime_audio_device_name(kind).unwrap_or_else(|| {
+            if self.ui_language().is_ru() {
+                "По умолчанию в системе".to_string()
+            } else {
+                "System default".to_string()
+            }
+        })
     }
 
     fn sync_fast_command_enabled(&mut self) {
@@ -9826,10 +12393,17 @@ impl ChatWidget {
     }
 
     fn image_inputs_not_supported_message(&self) -> String {
-        format!(
-            "Model {} does not support image inputs. Remove images or switch models.",
-            self.current_model()
-        )
+        if self.ui_language().is_ru() {
+            format!(
+                "Модель {} не поддерживает изображения во входных данных. Уберите изображения или выберите другую модель.",
+                self.current_model()
+            )
+        } else {
+            format!(
+                "Model {} does not support image inputs. Remove images or switch models.",
+                self.current_model()
+            )
+        }
     }
 
     #[allow(dead_code)] // Used in tests
@@ -10120,9 +12694,9 @@ impl ChatWidget {
         let name = name.to_string();
         let line = vec![
             "• ".into(),
-            "Thread renamed to ".into(),
+            "Тред переименован в ".into(),
             name.cyan(),
-            ", to resume this thread run ".into(),
+            ", чтобы продолжить его, выполните ".into(),
             resume_cmd.cyan(),
         ];
         PlainHistoryCell::new(vec![line.into()])
@@ -10164,10 +12738,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_connectors_output(&mut self) {
+        let is_ru = self.ui_language().is_ru();
         if !self.connectors_enabled() {
             self.add_info_message(
-                "Apps are disabled.".to_string(),
-                Some("Enable the apps feature to use $ or /apps.".to_string()),
+                if is_ru {
+                    "Приложения отключены.".to_string()
+                } else {
+                    "Apps are disabled.".to_string()
+                },
+                Some(if is_ru {
+                    "Включите функцию приложений, чтобы использовать $ или /apps.".to_string()
+                } else {
+                    "Enable the apps feature to use $ or /apps.".to_string()
+                }),
             );
             return;
         }
@@ -10180,7 +12763,14 @@ impl ChatWidget {
         match connectors_cache {
             ConnectorsCacheState::Ready(snapshot) => {
                 if snapshot.connectors.is_empty() {
-                    self.add_info_message("No apps available.".to_string(), /*hint*/ None);
+                    self.add_info_message(
+                        if is_ru {
+                            "Нет доступных приложений.".to_string()
+                        } else {
+                            "No apps available.".to_string()
+                        },
+                        /*hint*/ None,
+                    );
                 } else {
                     self.open_connectors_popup(&snapshot.connectors);
                 }
@@ -10212,16 +12802,33 @@ impl ChatWidget {
     }
 
     fn connectors_loading_popup_params(&self) -> SelectionViewParams {
+        let is_ru = self.ui_language().is_ru();
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Apps".bold()));
-        header.push(Line::from("Loading installed and available apps...".dim()));
+        header.push(Line::from(if is_ru {
+            "Приложения".bold()
+        } else {
+            "Apps".bold()
+        }));
+        header.push(Line::from(if is_ru {
+            "Загружаю установленные и доступные приложения...".dim()
+        } else {
+            "Loading installed and available apps...".dim()
+        }));
 
         SelectionViewParams {
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             header: Box::new(header),
             items: vec![SelectionItem {
-                name: "Loading apps...".to_string(),
-                description: Some("This updates when the full list is ready.".to_string()),
+                name: if is_ru {
+                    "Загружаю приложения...".to_string()
+                } else {
+                    "Loading apps...".to_string()
+                },
+                description: Some(if is_ru {
+                    "Список обновится, когда загрузятся все доступные приложения.".to_string()
+                } else {
+                    "This updates when the full list is ready.".to_string()
+                }),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -10234,18 +12841,29 @@ impl ChatWidget {
         connectors: &[connectors::AppInfo],
         selected_connector_id: Option<&str>,
     ) -> SelectionViewParams {
+        let is_ru = self.ui_language().is_ru();
         let total = connectors.len();
         let installed = connectors
             .iter()
             .filter(|connector| connector.is_accessible)
             .count();
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Apps".bold()));
+        header.push(Line::from(if is_ru {
+            "Приложения".bold()
+        } else {
+            "Apps".bold()
+        }));
+        header.push(Line::from(if is_ru {
+            "Используйте $ для вставки установленного приложения в запрос.".dim()
+        } else {
+            "Use $ to insert an installed app into your prompt.".dim()
+        }));
         header.push(Line::from(
-            "Use $ to insert an installed app into your prompt.".dim(),
-        ));
-        header.push(Line::from(
-            format!("Installed {installed} of {total} available apps.").dim(),
+            if is_ru {
+                format!("Установлено {installed} из {total} доступных приложений.").dim()
+            } else {
+                format!("Installed {installed} of {total} available apps.").dim()
+            },
         ));
         let initial_selected_idx = selected_connector_id.and_then(|selected_connector_id| {
             connectors
@@ -10257,8 +12875,8 @@ impl ChatWidget {
             let connector_label = connectors::connector_display_label(connector);
             let connector_title = connector_label.clone();
             let link_description = Self::connector_description(connector);
-            let description = Self::connector_brief_description(connector);
-            let status_label = Self::connector_status_label(connector);
+            let description = self.connector_brief_description(connector);
+            let status_label = self.connector_status_label(connector);
             let search_value = format!("{connector_label} {}", connector.id);
             let mut item = SelectionItem {
                 name: connector_label,
@@ -10268,17 +12886,35 @@ impl ChatWidget {
             };
             let is_installed = connector.is_accessible;
             let selected_label = if is_installed {
-                format!(
-                    "{status_label}. Press Enter to open the app page to install, manage, or enable/disable this app."
-                )
+                if is_ru {
+                    format!(
+                        "{status_label}. Нажмите Enter, чтобы открыть страницу приложения: установить, настроить или включить/выключить его."
+                    )
+                } else {
+                    format!(
+                        "{status_label}. Press Enter to open the app page to install, manage, or enable/disable this app."
+                    )
+                }
+            } else if is_ru {
+                format!("{status_label}. Нажмите Enter, чтобы открыть страницу установки приложения.")
             } else {
                 format!("{status_label}. Press Enter to open the app page to install this app.")
             };
-            let missing_label = format!("{status_label}. App link unavailable.");
-            let instructions = if connector.is_accessible {
-                "Manage this app in your browser."
+            let missing_label = if is_ru {
+                format!("{status_label}. Ссылка на приложение недоступна.")
             } else {
-                "Install this app in your browser, then reload Codex."
+                format!("{status_label}. App link unavailable.")
+            };
+            let instructions = if connector.is_accessible {
+                if is_ru {
+                    "Управляйте этим приложением в браузере."
+                } else {
+                    "Manage this app in your browser."
+                }
+            } else if is_ru {
+                "Установите это приложение в браузере, затем перезапустите Lavilas Codex."
+            } else {
+                "Install this app in your browser, then reload Lavilas Codex."
             };
             if let Some(install_url) = connector.install_url.clone() {
                 let app_id = connector.id.clone();
@@ -10318,10 +12954,14 @@ impl ChatWidget {
         SelectionViewParams {
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             header: Box::new(header),
-            footer_hint: Some(Self::connectors_popup_hint_line()),
+            footer_hint: Some(self.connectors_popup_hint_line()),
             items,
             is_searchable: true,
-            search_placeholder: Some("Type to search apps".to_string()),
+            search_placeholder: Some(if is_ru {
+                "Введите текст для поиска приложений".to_string()
+            } else {
+                "Type to search apps".to_string()
+            }),
             col_width_mode: ColumnWidthMode::AutoAllRows,
             initial_selected_idx,
             ..Default::default()
@@ -10348,29 +12988,47 @@ impl ChatWidget {
         );
     }
 
-    fn connectors_popup_hint_line() -> Line<'static> {
+    fn connectors_popup_hint_line(&self) -> Line<'static> {
+        let is_ru = self.ui_language().is_ru();
         Line::from(vec![
-            "Press ".into(),
+            if is_ru {
+                "Нажмите ".into()
+            } else {
+                "Press ".into()
+            },
             key_hint::plain(KeyCode::Esc).into(),
-            " to close.".into(),
+            if is_ru {
+                " чтобы закрыть.".into()
+            } else {
+                " to close.".into()
+            },
         ])
     }
 
-    fn connector_brief_description(connector: &connectors::AppInfo) -> String {
-        let status_label = Self::connector_status_label(connector);
+    fn connector_brief_description(&self, connector: &connectors::AppInfo) -> String {
+        let status_label = self.connector_status_label(connector);
         match Self::connector_description(connector) {
             Some(description) => format!("{status_label} · {description}"),
             None => status_label.to_string(),
         }
     }
 
-    fn connector_status_label(connector: &connectors::AppInfo) -> &'static str {
+    fn connector_status_label(&self, connector: &connectors::AppInfo) -> &'static str {
+        let is_ru = self.ui_language().is_ru();
         if connector.is_accessible {
             if connector.is_enabled {
-                "Installed"
+                if is_ru {
+                    "Установлено"
+                } else {
+                    "Installed"
+                }
+            } else if is_ru {
+                "Установлено · Отключено"
             } else {
                 "Installed · Disabled"
             }
+        } else if is_ru {
+            "Можно установить"
         } else {
             "Can be installed"
         }
@@ -10769,11 +13427,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_review_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
         let mut items: Vec<SelectionItem> = Vec::new();
 
         items.push(SelectionItem {
-            name: "Review against a base branch".to_string(),
-            description: Some("(PR Style)".into()),
+            name: if is_ru {
+                "Сравнить с базовой веткой".to_string()
+            } else {
+                "Review against a base branch".to_string()
+            },
+            description: Some(if is_ru { "Стиль pull request".into() } else { "(PR Style)".into() }),
             actions: vec![Box::new({
                 let cwd = self.config.cwd.to_path_buf();
                 move |tx| {
@@ -10785,7 +13448,11 @@ impl ChatWidget {
         });
 
         items.push(SelectionItem {
-            name: "Review uncommitted changes".to_string(),
+            name: if is_ru {
+                "Проверить незакоммиченные изменения".to_string()
+            } else {
+                "Review uncommitted changes".to_string()
+            },
             actions: vec![Box::new(move |tx: &AppEventSender| {
                 tx.review(ReviewRequest {
                     target: ReviewTarget::UncommittedChanges,
@@ -10796,9 +13463,12 @@ impl ChatWidget {
             ..Default::default()
         });
 
-        // New: Review a specific commit (opens commit picker)
         items.push(SelectionItem {
-            name: "Review a commit".to_string(),
+            name: if is_ru {
+                "Проверить конкретный коммит".to_string()
+            } else {
+                "Review a commit".to_string()
+            },
             actions: vec![Box::new({
                 let cwd = self.config.cwd.to_path_buf();
                 move |tx| {
@@ -10810,7 +13480,11 @@ impl ChatWidget {
         });
 
         items.push(SelectionItem {
-            name: "Custom review instructions".to_string(),
+            name: if is_ru {
+                "Свои инструкции для ревью".to_string()
+            } else {
+                "Custom review instructions".to_string()
+            },
             actions: vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenReviewCustomPrompt);
             })],
@@ -10819,7 +13493,11 @@ impl ChatWidget {
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select a review preset".into()),
+            title: Some(if is_ru {
+                "Выберите режим ревью".into()
+            } else {
+                "Select a review preset".into()
+            }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -10827,10 +13505,17 @@ impl ChatWidget {
     }
 
     pub(crate) async fn show_review_branch_picker(&mut self, cwd: &Path) {
+        let is_ru = self.ui_language().is_ru();
         let branches = local_git_branches(cwd).await;
         let current_branch = current_branch_name(cwd)
             .await
-            .unwrap_or_else(|| "(detached HEAD)".to_string());
+            .unwrap_or_else(|| {
+                if is_ru {
+                    "(detached HEAD)".to_string()
+                } else {
+                    "(detached HEAD)".to_string()
+                }
+            });
         let mut items: Vec<SelectionItem> = Vec::with_capacity(branches.len());
 
         for option in branches {
@@ -10852,16 +13537,25 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select a base branch".to_string()),
+            title: Some(if is_ru {
+                "Выберите базовую ветку".to_string()
+            } else {
+                "Select a base branch".to_string()
+            }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
-            search_placeholder: Some("Type to search branches".to_string()),
+            search_placeholder: Some(if is_ru {
+                "Введите текст для поиска веток".to_string()
+            } else {
+                "Type to search branches".to_string()
+            }),
             ..Default::default()
         });
     }
 
     pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
+        let is_ru = self.ui_language().is_ru();
         let commits = recent_commits(cwd, /*limit*/ 100).await;
 
         let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
@@ -10888,20 +13582,37 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select a commit to review".to_string()),
+            title: Some(if is_ru {
+                "Выберите коммит для ревью".to_string()
+            } else {
+                "Select a commit to review".to_string()
+            }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
-            search_placeholder: Some("Type to search commits".to_string()),
+            search_placeholder: Some(if is_ru {
+                "Введите текст для поиска коммитов".to_string()
+            } else {
+                "Type to search commits".to_string()
+            }),
             ..Default::default()
         });
     }
 
     pub(crate) fn show_review_custom_prompt(&mut self) {
+        let is_ru = self.ui_language().is_ru();
         let tx = self.app_event_tx.clone();
         let view = CustomPromptView::new(
-            "Custom review instructions".to_string(),
-            "Type instructions and press Enter".to_string(),
+            if is_ru {
+                "Свои инструкции для ревью".to_string()
+            } else {
+                "Custom review instructions".to_string()
+            },
+            if is_ru {
+                "Введите инструкции и нажмите Enter".to_string()
+            } else {
+                "Type instructions and press Enter".to_string()
+            },
             /*context_label*/ None,
             Box::new(move |prompt: String| {
                 let trimmed = prompt.trim().to_string();
@@ -11095,7 +13806,7 @@ impl Notification {
             }
             Notification::EditApprovalRequested { cwd, changes } => {
                 format!(
-                    "Codex wants to edit {}",
+                    "Lavilas Codex wants to edit {}",
                     if changes.len() == 1 {
                         #[allow(clippy::unwrap_used)]
                         display_path_for(changes.first().unwrap(), cwd)
@@ -11265,11 +13976,11 @@ pub(crate) fn show_review_commit_picker_with_entries(
     }
 
     chat.bottom_pane.show_selection_view(SelectionViewParams {
-        title: Some("Select a commit to review".to_string()),
+        title: Some("Выберите коммит для ревью".to_string()),
         footer_hint: Some(standard_popup_hint_line()),
         items,
         is_searchable: true,
-        search_placeholder: Some("Type to search commits".to_string()),
+        search_placeholder: Some("Введите текст для поиска коммитов".to_string()),
         ..Default::default()
     });
 }

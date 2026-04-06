@@ -36,10 +36,10 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 
 use super::selection_popup_common::GenericDisplayRow;
+use super::selection_popup_common::render_menu_surface;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
@@ -48,18 +48,15 @@ use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::render_rows_single_line;
 use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
-use crate::render::Insets;
-use crate::render::RectExt;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
 use crate::text_formatting::truncate_text;
 
 /// Maximum display length for item names before truncation.
 const ITEM_NAME_TRUNCATE_LEN: usize = 21;
 
 /// Placeholder text shown in the search input when empty.
-const SEARCH_PLACEHOLDER: &str = "Type to search";
+const SEARCH_PLACEHOLDER: &str = "Введите для поиска";
 
 /// Prefix displayed before the search query (mimics a command prompt).
 const SEARCH_PROMPT_PREFIX: &str = "> ";
@@ -516,10 +513,7 @@ impl Renderable for MultiSelectPicker {
         let footer_height = 1 + preview_height;
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_height)]).areas(area);
-
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let content_area = render_menu_surface(content_area, buf);
 
         let header_height = self
             .header
@@ -533,7 +527,7 @@ impl Renderable for MultiSelectPicker {
             Constraint::Length(2),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
+        .areas(content_area);
 
         self.header.render(header_area, buf);
 
@@ -573,7 +567,7 @@ impl Renderable for MultiSelectPicker {
                 &rows,
                 &self.state,
                 render_area.height as usize,
-                "no matches",
+                "нет совпадений",
             );
         }
 
@@ -728,13 +722,13 @@ impl MultiSelectPickerBuilder {
 
         let instructions = if self.instructions.is_empty() {
             vec![
-                "Press ".into(),
+                "Нажмите ".into(),
                 key_hint::plain(KeyCode::Char(' ')).into(),
-                " to toggle; ".into(),
+                " для переключения, ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " to confirm and close; ".into(),
+                " чтобы сохранить и закрыть, ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
-                " to close".into(),
+                " чтобы отменить".into(),
             ]
         } else {
             self.instructions

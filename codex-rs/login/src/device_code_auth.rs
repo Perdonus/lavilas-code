@@ -82,12 +82,12 @@ async fn request_user_code(
         if status == StatusCode::NOT_FOUND {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                "device code login is not enabled for this Codex server. Use the browser login or verify the server URL.",
+                "Вход по коду устройства не включён на этом сервере Lavilas Codex. Используйте вход через браузер или проверьте URL сервера.",
             ));
         }
 
         return Err(std::io::Error::other(format!(
-            "device code request failed with status {status}"
+            "запрос кода устройства завершился ошибкой со статусом {status}"
         )));
     }
 
@@ -130,7 +130,7 @@ async fn poll_for_token(
         if status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND {
             if start.elapsed() >= max_wait {
                 return Err(std::io::Error::other(
-                    "device auth timed out after 15 minutes",
+                    "ожидание подтверждения кода устройства превысило 15 минут",
                 ));
             }
             let sleep_for = Duration::from_secs(interval).min(max_wait - start.elapsed());
@@ -139,7 +139,7 @@ async fn poll_for_token(
         }
 
         return Err(std::io::Error::other(format!(
-            "device auth failed with status {}",
+            "подтверждение кода устройства завершилось ошибкой со статусом {}",
             resp.status()
         )));
     }
@@ -148,11 +148,11 @@ async fn poll_for_token(
 fn print_device_code_prompt(verification_url: &str, code: &str) {
     let version = env!("CARGO_PKG_VERSION");
     println!(
-        "\nWelcome to Codex [v{ANSI_GRAY}{version}{ANSI_RESET}]\n{ANSI_GRAY}OpenAI's command-line coding agent{ANSI_RESET}\n\
-\nFollow these steps to sign in with ChatGPT using device code authorization:\n\
-\n1. Open this link in your browser and sign in to your account\n   {ANSI_BLUE}{verification_url}{ANSI_RESET}\n\
-\n2. Enter this one-time code {ANSI_GRAY}(expires in 15 minutes){ANSI_RESET}\n   {ANSI_BLUE}{code}{ANSI_RESET}\n\
-\n{ANSI_GRAY}Device codes are a common phishing target. Never share this code.{ANSI_RESET}\n",
+        "\nДобро пожаловать в Lavilas Codex [v{ANSI_GRAY}{version}{ANSI_RESET}]\n{ANSI_GRAY}Командный ИИ-агент Lavilas для разработки{ANSI_RESET}\n\
+\nВыполните шаги ниже, чтобы войти через ChatGPT с помощью кода устройства:\n\
+\n1. Откройте ссылку в браузере и войдите в аккаунт\n   {ANSI_BLUE}{verification_url}{ANSI_RESET}\n\
+\n2. Введите одноразовый код {ANSI_GRAY}(действует 15 минут){ANSI_RESET}\n   {ANSI_BLUE}{code}{ANSI_RESET}\n\
+\n{ANSI_GRAY}Коды устройства часто используют в фишинге. Никому не передавайте этот код.{ANSI_RESET}\n",
     );
 }
 
@@ -201,7 +201,7 @@ pub async fn complete_device_code_login(
         &code_resp.authorization_code,
     )
     .await
-    .map_err(|err| std::io::Error::other(format!("device code exchange failed: {err}")))?;
+    .map_err(|err| std::io::Error::other(format!("не удалось обменять код устройства: {err}")))?;
 
     if let Err(message) = crate::server::ensure_workspace_allowed(
         opts.forced_chatgpt_workspace_id.as_deref(),

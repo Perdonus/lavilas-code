@@ -2,17 +2,21 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Select Microphone
-  Saved devices apply to realtime voice only.
+  Устройство: Микрофон
+  Сохранённый выбор влияет только на голосовой режим.
 
-  1. System default                                Use your operating system
-                                                   default device.
-›    Unavailable: Studio Mic (current) (disabled)  Configured device is not
-                                                   currently available.
-                                                   (disabled: Reconnect the
-                                                   device or choose another
-                                                   one.)
-  3. Built-in Mic
-  4. USB Mic
+  Найти устройство: Микрофон
+  ← Назад к голосу и звуку                       Вернуться к выбору микрофона
+                                                 и вывода для голосового
+                                                 режима.
+  По умолчанию в системе                         Использовать устройство,
+                                                 которое сейчас выбрано в
+                                                 системе.
+› Недоступно: Studio Mic (текущий) (недоступно)  Сохранённое устройство сейчас
+                                                 не видно системе. (недоступно:
+                                                 Подключите его снова или
+                                                 выберите другой вариант.)
+  Built-in Mic
+  USB Mic
 
-  Press enter to confirm or esc to go back
+  Нажмите enter для подтверждения или esc для возврата

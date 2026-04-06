@@ -1,6 +1,11 @@
+use std::cell::RefCell;
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use itertools::Itertools as _;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -31,6 +36,7 @@ use super::selection_popup_common::measure_rows_height_with_col_width_mode;
 use super::selection_popup_common::render_rows;
 use super::selection_popup_common::render_rows_stable_col_widths;
 use super::selection_popup_common::render_rows_with_col_width_mode;
+use super::selection_popup_common::visible_row_line_counts;
 use unicode_width::UnicodeWidthStr;
 
 /// Minimum list width (in content columns) required before the side-by-side
@@ -132,7 +138,7 @@ pub(crate) struct SelectionItem {
 /// row) lives on the view itself.
 ///
 /// `col_width_mode` controls column width mode in selection lists:
-/// `AutoVisible` (default) measures only rows visible in the viewport
+/// `AutoVisible` (по умолчанию) measures only rows visible in the viewport
 /// `AutoAllRows` measures all rows to ensure stable column widths as the user scrolls
 /// `Fixed` used a fixed 30/70  split between columns
 pub(crate) struct SelectionViewParams {
@@ -232,6 +238,14 @@ pub(crate) struct ListSelectionView {
 
     /// Called when the picker is dismissed via Esc/Ctrl+C without selecting.
     on_cancel: OnCancelCallback,
+    mouse_layout: RefCell<SelectionMouseLayout>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SelectionMouseLayout {
+    content_area: Rect,
+    list_render_area: Rect,
+    visible_row_heights: Vec<u16>,
 }
 
 impl ListSelectionView {
@@ -280,6 +294,7 @@ impl ListSelectionView {
             preserve_side_content_bg: params.preserve_side_content_bg,
             on_selection_changed: params.on_selection_changed,
             on_cancel: params.on_cancel,
+            mouse_layout: RefCell::new(SelectionMouseLayout::default()),
         };
         s.apply_filter();
         s
@@ -364,9 +379,9 @@ impl ListSelectionView {
                     let prefix = if is_selected { '›' } else { ' ' };
                     let name = item.name.as_str();
                     let marker = if item.is_current {
-                        " (current)"
+                        " (текущий)"
                     } else if item.is_default {
-                        " (default)"
+                        " (по умолчанию)"
                     } else {
                         ""
                     };
@@ -572,6 +587,23 @@ impl ListSelectionView {
             }
         }
     }
+
+    fn point_in_rect(rect: Rect, column: u16, row: u16) -> bool {
+        column >= rect.x
+            && column < rect.x.saturating_add(rect.width)
+            && row >= rect.y
+            && row < rect.y.saturating_add(rect.height)
+    }
+
+    fn select_visible_index(&mut self, visible_idx: usize) {
+        let before = self.selected_actual_idx();
+        self.state.selected_idx = Some(visible_idx);
+        self.state
+            .ensure_visible(self.visible_len(), Self::max_visible_rows(self.visible_len()));
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
 }
 
 impl BottomPaneView for ListSelectionView {
@@ -689,6 +721,41 @@ impl BottomPaneView for ListSelectionView {
         }
         self.complete = true;
         CancellationEvent::Handled
+    }
+
+    fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        let layout = self.mouse_layout.borrow().clone();
+        if layout.content_area.width == 0 || layout.content_area.height == 0 {
+            return;
+        }
+
+        if !Self::point_in_rect(layout.content_area, mouse_event.column, mouse_event.row) {
+            return;
+        }
+
+        match mouse_event.kind {
+            MouseEventKind::ScrollUp => self.move_up(),
+            MouseEventKind::ScrollDown => self.move_down(),
+            MouseEventKind::Down(MouseButton::Left)
+                if Self::point_in_rect(
+                    layout.list_render_area,
+                    mouse_event.column,
+                    mouse_event.row,
+                ) =>
+            {
+                let mut cursor_y = layout.list_render_area.y;
+                for (visible_idx, height) in layout.visible_row_heights.iter().enumerate() {
+                    let next_y = cursor_y.saturating_add(*height);
+                    if mouse_event.row >= cursor_y && mouse_event.row < next_y {
+                        self.select_visible_index(visible_idx);
+                        self.accept();
+                        break;
+                    }
+                    cursor_y = next_y;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -811,6 +878,13 @@ impl Renderable for ListSelectionView {
                 ColumnWidthMode::Fixed,
             ),
         };
+        let visible_row_heights = visible_row_line_counts(
+            &rows,
+            &self.state,
+            MAX_POPUP_ROWS,
+            effective_rows_width.saturating_add(1),
+            self.col_width_mode,
+        );
 
         // Stacked (fallback) side content height — only used when not side-by-side.
         let stacked_side_h = if side_w.is_none() {
@@ -836,7 +910,7 @@ impl Renderable for ListSelectionView {
                 Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(header_area);
             self.header.render(header_area, buf);
             Paragraph::new(vec![
-                Line::from(format!("[… {header_height} lines] ctrl + a view all")).dim(),
+                Line::from(format!("[… {header_height} строк] Ctrl+A: показать всё")).dim(),
             ])
             .render(elision_area, buf);
         } else {
@@ -865,6 +939,11 @@ impl Renderable for ListSelectionView {
                 width: effective_rows_width.max(1),
                 height: list_area.height,
             };
+            *self.mouse_layout.borrow_mut() = SelectionMouseLayout {
+                content_area: outer_content_area,
+                list_render_area: render_area,
+                visible_row_heights,
+            };
             match self.col_width_mode {
                 ColumnWidthMode::AutoVisible => render_rows(
                     render_area,
@@ -872,7 +951,7 @@ impl Renderable for ListSelectionView {
                     &rows,
                     &self.state,
                     render_area.height as usize,
-                    "no matches",
+                    "нет совпадений",
                 ),
                 ColumnWidthMode::AutoAllRows => render_rows_stable_col_widths(
                     render_area,
@@ -880,7 +959,7 @@ impl Renderable for ListSelectionView {
                     &rows,
                     &self.state,
                     render_area.height as usize,
-                    "no matches",
+                    "нет совпадений",
                 ),
                 ColumnWidthMode::Fixed => render_rows_with_col_width_mode(
                     render_area,
@@ -888,9 +967,15 @@ impl Renderable for ListSelectionView {
                     &rows,
                     &self.state,
                     render_area.height as usize,
-                    "no matches",
+                    "нет совпадений",
                     ColumnWidthMode::Fixed,
                 ),
+            };
+        } else {
+            *self.mouse_layout.borrow_mut() = SelectionMouseLayout {
+                content_area: outer_content_area,
+                list_render_area: Rect::default(),
+                visible_row_heights,
             };
         }
 
@@ -1180,7 +1265,7 @@ mod tests {
         let view = ListSelectionView::new(params, tx);
 
         let rendered = render_lines_in_area(&view, /*width*/ 94, /*height*/ 35);
-        assert!(rendered.contains("Move up/down to live preview themes"));
+        assert!(rendered.contains("Листайте ↑↓, чтобы сразу смотреть тему"));
     }
 
     #[test]
@@ -1411,7 +1496,7 @@ mod tests {
             SelectionItem {
                 name: "gpt-5.1-codex".to_string(),
                 description: Some(
-                    "Optimized for Codex. Balance of reasoning quality and coding ability."
+                    "Оптимизирована под Codex. Баланс качества рассуждений и навыков кодинга."
                         .to_string(),
                 ),
                 is_current: true,
@@ -1421,7 +1506,7 @@ mod tests {
             SelectionItem {
                 name: "gpt-5.1-codex-mini".to_string(),
                 description: Some(
-                    "Optimized for Codex. Cheaper, faster, but less capable.".to_string(),
+                    "Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям.".to_string(),
                 ),
                 dismiss_on_select: true,
                 ..Default::default()
@@ -1429,7 +1514,7 @@ mod tests {
             SelectionItem {
                 name: "gpt-4.1-codex".to_string(),
                 description: Some(
-                    "Legacy model. Use when you need compatibility with older automations."
+                    "Устаревшая модель. Нужна для совместимости со старыми автоматизациями."
                         .to_string(),
                 ),
                 dismiss_on_select: true,
@@ -1438,7 +1523,7 @@ mod tests {
         ];
         let view = ListSelectionView::new(
             SelectionViewParams {
-                title: Some("Select Model and Effort".to_string()),
+                title: Some("Каталог моделей".to_string()),
                 items,
                 ..Default::default()
             },
@@ -1493,7 +1578,7 @@ mod tests {
             SelectionItem {
                 name: "gpt-5.1-codex".to_string(),
                 description: Some(
-                    "Optimized for Codex. Balance of reasoning quality and coding ability."
+                    "Оптимизирована под Codex. Баланс качества рассуждений и навыков кодинга."
                         .to_string(),
                 ),
                 is_current: true,
@@ -1503,7 +1588,7 @@ mod tests {
             SelectionItem {
                 name: "gpt-5.1-codex-mini".to_string(),
                 description: Some(
-                    "Optimized for Codex. Cheaper, faster, but less capable.".to_string(),
+                    "Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям.".to_string(),
                 ),
                 dismiss_on_select: true,
                 ..Default::default()
@@ -1511,7 +1596,7 @@ mod tests {
             SelectionItem {
                 name: "gpt-4.1-codex".to_string(),
                 description: Some(
-                    "Legacy model. Use when you need compatibility with older automations."
+                    "Устаревшая модель. Нужна для совместимости со старыми автоматизациями."
                         .to_string(),
                 ),
                 dismiss_on_select: true,
@@ -1520,7 +1605,7 @@ mod tests {
         ];
         let view = ListSelectionView::new(
             SelectionViewParams {
-                title: Some("Select Model and Effort".to_string()),
+                title: Some("Каталог моделей".to_string()),
                 items,
                 ..Default::default()
             },

@@ -2,16 +2,12 @@
 source: tui/src/bottom_pane/feedback_view.rs
 expression: rendered
 ---
-  Do you want to upload logs before reporting issue?
-
-  Logs may include the full conversation history of this Codex process
-  These logs are retained for 90 days and are used solely for troubles
-
-  You can review the exact content of the logs before they’re uploaded
-  <LOG_PATH>
+  Поделиться логами?
+  
+  Будут отправлены файлы:
+  • codex-logs.log
 
 
-› 1. Yes     Share the current Codex session logs with the team for
-             troubleshooting.
-  2. No
-  3. Cancel
+› 1. Да     Поделитесь логами текущей сессии с командой для диагностики.
+  2. Нет     Отправить сообщение без логов.
+  3. Отменить

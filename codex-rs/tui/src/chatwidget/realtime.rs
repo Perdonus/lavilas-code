@@ -8,7 +8,8 @@ use codex_protocol::protocol::RealtimeEvent;
 #[cfg(not(target_os = "linux"))]
 use std::time::Duration;
 
-const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
+const REALTIME_CONVERSATION_PROMPT_EN: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
+const REALTIME_CONVERSATION_PROMPT_RU: &str = "Вы в голосовом диалоге в реальном времени внутри TUI Lavilas Codex. Отвечайте по-русски, естественно и коротко.";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum RealtimeConversationPhase {
@@ -188,7 +189,11 @@ impl ChatWidget {
         if !self.realtime_conversation.warned_audio_only_submission {
             self.realtime_conversation.warned_audio_only_submission = true;
             self.add_info_message(
-                "Realtime voice mode is audio-only. Use /realtime to stop.".to_string(),
+                if self.ui_language().is_ru() {
+                    "Голосовой режим в реальном времени принимает только аудио. Используйте /realtime, чтобы его остановить.".to_string()
+                } else {
+                    "Realtime voice mode is audio-only. Use /realtime to stop.".to_string()
+                },
                 /*hint*/ None,
             );
         } else {
@@ -198,8 +203,15 @@ impl ChatWidget {
         None
     }
 
-    fn realtime_footer_hint_items() -> Vec<(String, String)> {
-        vec![("/realtime".to_string(), "stop live voice".to_string())]
+    fn realtime_footer_hint_items(&self) -> Vec<(String, String)> {
+        vec![(
+            "/realtime".to_string(),
+            if self.ui_language().is_ru() {
+                "остановить голосовой режим".to_string()
+            } else {
+                "stop live voice".to_string()
+            },
+        )]
     }
 
     pub(super) fn stop_realtime_conversation_from_ui(&mut self) {
@@ -224,10 +236,15 @@ impl ChatWidget {
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
         self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        self.set_footer_hint_override(Some(self.realtime_footer_hint_items()));
+        let prompt = if self.ui_language().is_ru() {
+            REALTIME_CONVERSATION_PROMPT_RU
+        } else {
+            REALTIME_CONVERSATION_PROMPT_EN
+        };
         self.submit_op(AppCommand::realtime_conversation_start(
             ConversationStartParams {
-                prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
+                prompt: prompt.to_string(),
                 session_id: None,
             },
         ));
@@ -307,7 +324,11 @@ impl ChatWidget {
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}
             RealtimeEvent::Error(message) => {
-                self.fail_realtime_conversation(format!("Realtime voice error: {message}"));
+                self.fail_realtime_conversation(if self.ui_language().is_ru() {
+                    format!("Ошибка голосового режима: {message}")
+                } else {
+                    format!("Realtime voice error: {message}")
+                });
             }
         }
     }
@@ -321,7 +342,11 @@ impl ChatWidget {
             && reason != "error"
         {
             self.add_info_message(
-                format!("Realtime voice mode closed: {reason}"),
+                if self.ui_language().is_ru() {
+                    format!("Голосовой режим завершён: {reason}")
+                } else {
+                    format!("Realtime voice mode closed: {reason}")
+                },
                 /*hint*/ None,
             );
         }
@@ -375,9 +400,11 @@ impl ChatWidget {
             Err(err) => {
                 self.realtime_conversation.meter_placeholder_id = None;
                 self.remove_recording_meter_placeholder(&placeholder_id);
-                self.fail_realtime_conversation(format!(
-                    "Failed to start microphone capture: {err}"
-                ));
+                self.fail_realtime_conversation(if self.ui_language().is_ru() {
+                    format!("Не удалось включить микрофон: {err}")
+                } else {
+                    format!("Failed to start microphone capture: {err}")
+                });
                 return;
             }
         };
@@ -434,9 +461,11 @@ impl ChatWidget {
                         self.realtime_conversation.audio_player = Some(player);
                     }
                     Err(err) => {
-                        self.fail_realtime_conversation(format!(
-                            "Failed to start speaker output: {err}"
-                        ));
+                        self.fail_realtime_conversation(if self.ui_language().is_ru() {
+                            format!("Не удалось включить вывод звука: {err}")
+                        } else {
+                            format!("Failed to start speaker output: {err}")
+                        });
                     }
                 }
             }

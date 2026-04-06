@@ -135,7 +135,7 @@ const WIDE_PREVIEW_LEFT_INSET: u16 = 2;
 /// Minimum frame padding used for vertically centered wide preview.
 const PREVIEW_FRAME_PADDING: u16 = 1;
 
-const PREVIEW_FALLBACK_SUBTITLE: &str = "Move up/down to live preview themes";
+const PREVIEW_FALLBACK_SUBTITLE: &str = "Листайте ↑↓, чтобы сразу видеть, как выглядит тема";
 
 /// Side-by-side preview: syntax-highlighted Rust diff snippet, vertically
 /// centered with a 2-column left inset.  Fills the entire side panel height.
@@ -292,7 +292,7 @@ fn theme_picker_subtitle(codex_home: Option<&Path>, terminal_width: Option<u16>)
     if let Some(path) = themes_dir_display
         && path.starts_with('~')
     {
-        let subtitle = format!("Custom .tmTheme files can be added to the {path} directory.");
+        let subtitle = format!("Свои файлы .tmTheme можно положить в каталог {path}.");
         if UnicodeWidthStr::width(subtitle.as_str()) <= available_width {
             return subtitle;
         }
@@ -341,7 +341,7 @@ pub(crate) fn build_theme_picker_params(
         .enumerate()
         .map(|(idx, entry)| {
             let display_name = if entry.is_custom {
-                format!("{} (custom)", entry.name)
+                format!("{} (пользовательская)", entry.name)
             } else {
                 entry.name.clone()
             };
@@ -385,7 +385,7 @@ pub(crate) fn build_theme_picker_params(
     })
         as Box<dyn Fn(&crate::app_event_sender::AppEventSender) + Send + Sync>);
     SelectionViewParams {
-        title: Some("Select Syntax Theme".to_string()),
+        title: Some("Выбор темы подсветки".to_string()),
         subtitle: Some(theme_picker_subtitle(
             codex_home_owned.as_deref(),
             terminal_width,
@@ -393,7 +393,7 @@ pub(crate) fn build_theme_picker_params(
         footer_hint: Some(standard_popup_hint_line()),
         items,
         is_searchable: true,
-        search_placeholder: Some("Type to filter themes...".to_string()),
+        search_placeholder: Some("Начните вводить, чтобы отфильтровать темы...".to_string()),
         initial_selected_idx: initial_idx,
         side_content: Box::new(ThemePreviewWideRenderable),
         side_content_width: SideContentWidth::Half,
@@ -602,7 +602,7 @@ mod tests {
         let subtitle = theme_picker_subtitle(Some(&codex_home), Some(200));
 
         assert!(subtitle.contains("~"));
-        assert!(subtitle.contains("directory"));
+        assert!(subtitle.contains("каталог"));
     }
 
     #[test]

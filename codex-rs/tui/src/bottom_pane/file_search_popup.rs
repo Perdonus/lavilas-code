@@ -135,9 +135,9 @@ impl WidgetRef for &FileSearchPopup {
         };
 
         let empty_message = if self.waiting {
-            "loading..."
+            "ищу файлы..."
         } else {
-            "no matches"
+            "ничего не найдено"
         };
 
         render_rows(

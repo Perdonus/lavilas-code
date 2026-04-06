@@ -2,7 +2,8 @@
 source: tui/src/chatwidget/tests.rs
 expression: before
 ---
-  Apps
-  Loading installed and available apps...
+  Приложения
+  Загружаю установленные и доступные приложения...
 
-›    Loading apps...  This updates when the full list is ready.
+›    Загружаю приложения...  Список обновится, когда загрузятся все доступные
+                             приложения.

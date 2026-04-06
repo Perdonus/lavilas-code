@@ -40,7 +40,7 @@ pub(crate) enum StatusDetailsCapitalization {
 
 /// Displays a single-line in-progress status with optional wrapped details.
 pub(crate) struct StatusIndicatorWidget {
-    /// Animated header text (defaults to "Working").
+    /// Animated header text (defaults to "Выполняю").
     header: String,
     details: Option<String>,
     details_max_lines: usize,
@@ -80,7 +80,7 @@ impl StatusIndicatorWidget {
         animations_enabled: bool,
     ) -> Self {
         Self {
-            header: String::from("Working"),
+            header: String::from("Выполняю"),
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             inline_message: None,
@@ -259,7 +259,7 @@ impl Renderable for StatusIndicatorWidget {
             spans.extend(vec![
                 format!("({pretty_elapsed} • ").dim(),
                 key_hint::plain(KeyCode::Esc).into(),
-                " to interrupt)".dim(),
+                " чтобы прервать)".dim(),
             ]);
         } else {
             spans.push(format!("({pretty_elapsed})").dim());

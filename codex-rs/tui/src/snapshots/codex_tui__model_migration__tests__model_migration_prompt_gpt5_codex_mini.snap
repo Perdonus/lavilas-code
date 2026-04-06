@@ -3,13 +3,12 @@ source: tui/src/model_migration.rs
 expression: terminal.backend()
 ---
 
-> Codex just got an upgrade. Introducing gpt-5.1-codex-mini.
+> У Lavilas Codex обновление: теперь доступна gpt-5.1-codex-mini.
 
-  We recommend switching from gpt-5-codex-mini to
-  gpt-5.1-codex-mini.
+  Рекомендуем перейти с gpt-5-codex-mini на gpt-5.1-codex-mini.
 
-  Optimized for codex. Cheaper, faster, but less capable.
-  Learn more about gpt-5.1-codex-mini at
+  Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям.
+  Подробнее о gpt-5.1-codex-mini:
   https://www.codex.com/models/gpt-5.1-codex-mini
 
-  Press enter to continue
+  Нажмите Enter, чтобы продолжить

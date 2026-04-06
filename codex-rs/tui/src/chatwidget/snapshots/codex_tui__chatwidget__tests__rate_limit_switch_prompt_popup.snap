@@ -2,13 +2,14 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Approaching rate limits
-  Switch to gpt-5.1-codex-mini for lower credit usage?
+  Лимиты почти исчерпаны
+  Переключиться на gpt-5.1-codex-mini, чтобы тратить меньше кредитов?
 
-› 1. Switch to gpt-5.1-codex-mini           Optimized for codex. Cheaper,
-                                            faster, but less capable.
-  2. Keep current model
-  3. Keep current model (never show again)  Hide future rate limit reminders
-                                            about switching models.
+› 1. Переключиться на gpt-5.1-codex-mini  Упор на скорость и цену: отвечает
+                                           быстрее и дешевле, но слабее на
+                                           тяжёлых задачах.
+  2. Оставить текущую модель
+  3. Оставить текущую модель и больше не   Скрыть будущие напоминания о смене
+     напоминать                            модели из-за лимитов.
 
-  Press enter to confirm or esc to go back
+  Нажмите enter для подтверждения или esc для возврата

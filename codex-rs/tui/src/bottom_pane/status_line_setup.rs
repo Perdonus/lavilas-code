@@ -101,34 +101,36 @@ impl StatusLineItem {
     /// User-visible description shown in the popup.
     pub(crate) fn description(&self) -> &'static str {
         match self {
-            StatusLineItem::ModelName => "Current model name",
-            StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
-            StatusLineItem::CurrentDir => "Current working directory",
-            StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
-            StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::ModelName => "Текущее имя модели",
+            StatusLineItem::ModelWithReasoning => "Текущее имя модели с уровнем размышлений",
+            StatusLineItem::CurrentDir => "Текущая рабочая директория",
+            StatusLineItem::ProjectRoot => {
+                "Корневая директория проекта (скрывается, если недоступна)"
+            }
+            StatusLineItem::GitBranch => "Текущая ветка Git (скрывается, если недоступна)",
             StatusLineItem::ContextRemaining => {
-                "Percentage of context window remaining (omitted when unknown)"
+                "Оставшийся процент контекстного окна (скрывается, если неизвестно)"
             }
             StatusLineItem::ContextUsed => {
-                "Percentage of context window used (omitted when unknown)"
+                "Использованный процент контекстного окна (скрывается, если неизвестно)"
             }
             StatusLineItem::FiveHourLimit => {
-                "Remaining usage on 5-hour usage limit (omitted when unavailable)"
+                "Оставшийся лимит за 5 часов (скрывается, если недоступно)"
             }
             StatusLineItem::WeeklyLimit => {
-                "Remaining usage on weekly usage limit (omitted when unavailable)"
+                "Оставшийся недельный лимит (скрывается, если недоступно)"
             }
-            StatusLineItem::CodexVersion => "Codex application version",
+            StatusLineItem::CodexVersion => "Версия приложения",
             StatusLineItem::ContextWindowSize => {
-                "Total context window size in tokens (omitted when unknown)"
+                "Размер контекстного окна в токенах (скрывается, если неизвестно)"
             }
-            StatusLineItem::UsedTokens => "Total tokens used in session (omitted when zero)",
-            StatusLineItem::TotalInputTokens => "Total input tokens used in session",
-            StatusLineItem::TotalOutputTokens => "Total output tokens used in session",
+            StatusLineItem::UsedTokens => "Всего токенов в сессии (скрывается при нуле)",
+            StatusLineItem::TotalInputTokens => "Всего входных токенов в сессии",
+            StatusLineItem::TotalOutputTokens => "Всего выходных токенов в сессии",
             StatusLineItem::SessionId => {
-                "Current session identifier (omitted until session starts)"
+                "Идентификатор текущей сессии (скрывается до начала сессии)"
             }
-            StatusLineItem::FastMode => "Whether Fast mode is currently active",
+            StatusLineItem::FastMode => "Включён ли быстрый режим",
         }
     }
 }
@@ -219,12 +221,12 @@ impl StatusLineSetupView {
 
         Self {
             picker: MultiSelectPicker::builder(
-                "Configure Status Line".to_string(),
-                Some("Select which items to display in the status line.".to_string()),
+                "Настройка строки статуса".to_string(),
+                Some("Выберите элементы для отображения в строке статуса.".to_string()),
                 app_event_tx,
             )
             .instructions(vec![
-                "Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel."
+                "↑↓ — навигация, ←→ — перемещение, пробел — переключение, Enter — сохранить, Esc — отмена."
                     .into(),
             ])
             .items(items)

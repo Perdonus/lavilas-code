@@ -126,6 +126,7 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::MouseEvent;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -162,7 +163,7 @@ use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
-const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
+const EXTERNAL_EDITOR_HINT: &str = "Сохраните изменения и закройте внешний редактор, чтобы продолжить.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
 enum ThreadInteractiveRequest {
@@ -414,7 +415,7 @@ fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorI
     let error_count = errors.len();
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
         crate::history_cell::new_warning_event(format!(
-            "Skipped loading {error_count} skill(s) due to invalid SKILL.md files."
+            "Пропущена загрузка {error_count} навыков: обнаружены некорректные файлы SKILL.md."
         )),
     )));
 
@@ -446,7 +447,7 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
                 .disabled_reason
                 .as_ref()
                 .map(ToString::to_string)
-                .unwrap_or_else(|| "config.toml is disabled.".to_string()),
+                .unwrap_or_else(|| "файл config.toml отключен.".to_string()),
         ));
     }
 
@@ -455,8 +456,8 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     }
 
     let mut message = concat!(
-        "Project config.toml files are disabled in the following folders. ",
-        "Settings in those files are ignored, but skills and exec policies still load.\n",
+        "Проектные файлы config.toml отключены в следующих папках. ",
+        "Настройки из этих файлов игнорируются, но навыки и политики выполнения продолжают загружаться.\n",
     )
     .to_string();
     for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
@@ -1108,7 +1109,7 @@ impl App {
             .harness_overrides(overrides)
             .build()
             .await
-            .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
+            .wrap_err_with(|| format!("Не удалось пересобрать конфигурацию для каталога {cwd_display}"))
     }
 
     async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
@@ -1160,7 +1161,7 @@ impl App {
         {
             tracing::warn!(%err, "failed to carry forward approval policy override");
             self.chat_widget.add_error_message(format!(
-                "Failed to carry forward approval policy override: {err}"
+                "Не удалось применить сохраненное переопределение политики подтверждений: {err}"
             ));
         }
         if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
@@ -1168,7 +1169,7 @@ impl App {
         {
             tracing::warn!(%err, "failed to carry forward sandbox policy override");
             self.chat_widget.add_error_message(format!(
-                "Failed to carry forward sandbox policy override: {err}"
+                "Не удалось применить сохраненное переопределение политики песочницы: {err}"
             ));
         }
     }
@@ -1270,7 +1271,7 @@ impl App {
                 && root_approvals_reviewer_blocks_profile_disable
             {
                 self.chat_widget.add_error_message(
-                        "Cannot disable Guardian Approvals in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
+                        "Нельзя отключить Guardian Approvals в этом профиле, потому что `approvals_reviewer` задан вне активного профиля.".to_string(),
                     );
                 continue;
             }
@@ -1282,7 +1283,7 @@ impl App {
                     "failed to update constrained feature flags"
                 );
                 self.chat_widget.add_error_message(format!(
-                    "Failed to update experimental feature `{feature_key}`: {err}"
+                    "Не удалось обновить экспериментальную функцию `{feature_key}`: {err}"
                 ));
                 continue;
             }
@@ -1326,7 +1327,7 @@ impl App {
                 if !self.try_set_approval_policy_on_config(
                     &mut feature_config,
                     guardian_approvals_preset.approval_policy,
-                    "Failed to enable Guardian Approvals",
+                    "Не удалось включить Guardian Approvals",
                     "failed to set guardian approvals approval policy on staged config",
                 ) {
                     continue;
@@ -1334,7 +1335,7 @@ impl App {
                 if !self.try_set_sandbox_policy_on_config(
                     &mut feature_config,
                     guardian_approvals_preset.sandbox_policy.clone(),
-                    "Failed to enable Guardian Approvals",
+                    "Не удалось включить Guardian Approvals",
                     "failed to set guardian approvals sandbox policy on staged config",
                 ) {
                     continue;
@@ -1365,7 +1366,7 @@ impl App {
         if let Err(err) = builder.apply().await {
             tracing::error!(error = %err, "failed to persist feature flags");
             self.chat_widget
-                .add_error_message(format!("Failed to update experimental features: {err}"));
+                .add_error_message(format!("Не удалось обновить экспериментальные функции: {err}"));
             return;
         }
 
@@ -1391,7 +1392,7 @@ impl App {
                 "failed to set guardian approvals sandbox policy on chat config"
             );
             self.chat_widget
-                .add_error_message(format!("Failed to enable Guardian Approvals: {err}"));
+                .add_error_message(format!("Не удалось включить Guardian Approvals: {err}"));
         }
 
         if approval_policy_override.is_some()
@@ -1451,7 +1452,7 @@ impl App {
 
         if let Some(label) = permissions_history_label {
             self.chat_widget.add_info_message(
-                format!("Permissions updated to {label}"),
+                format!("Права доступа обновлены: {label}"),
                 /*hint*/ None,
             );
         }
@@ -1460,12 +1461,12 @@ impl App {
     fn open_url_in_browser(&mut self, url: String) {
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget
-                .add_error_message(format!("Failed to open browser for {url}: {err}"));
+                .add_error_message(format!("Не удалось открыть браузер для {url}: {err}"));
             return;
         }
 
         self.chat_widget
-            .add_info_message(format!("Opened {url} in your browser."), /*hint*/ None);
+            .add_info_message(format!("Ссылка открыта в браузере: {url}."), /*hint*/ None);
     }
 
     fn clear_ui_header_lines_with_version(
@@ -1655,11 +1656,11 @@ impl App {
     fn thread_label(&self, thread_id: ThreadId) -> String {
         let is_primary = self.primary_thread_id == Some(thread_id);
         let fallback_label = if is_primary {
-            "Main [default]".to_string()
+            "Основной [по умолчанию]".to_string()
         } else {
             let thread_id = thread_id.to_string();
             let short_id: String = thread_id.chars().take(8).collect();
-            format!("Agent ({short_id})")
+            format!("Агент ({short_id})")
         };
         if let Some(entry) = self.agent_navigation.get(&thread_id) {
             let label = format_agent_picker_item_name(
@@ -1667,10 +1668,10 @@ impl App {
                 entry.agent_role.as_deref(),
                 is_primary,
             );
-            if label == "Agent" {
+            if label == "Agent" || label == "Агент" {
                 let thread_id = thread_id.to_string();
                 let short_id: String = thread_id.chars().take(8).collect();
-                format!("{label} ({short_id})")
+                format!("Агент ({short_id})")
             } else {
                 label
             }
@@ -1829,7 +1830,7 @@ impl App {
     ) -> Result<()> {
         let Some(thread_id) = self.active_thread_id else {
             self.chat_widget
-                .add_error_message("No active thread is available.".to_string());
+                .add_error_message("Нет активного треда.".to_string());
             return Ok(());
         };
 
@@ -1867,7 +1868,7 @@ impl App {
         }
 
         self.chat_widget
-            .add_error_message(format!("Not available in TUI yet for thread {thread_id}."));
+            .add_error_message(format!("Пока недоступно в TUI для треда {thread_id}."));
         Ok(())
     }
 
@@ -1945,7 +1946,7 @@ impl App {
             let plugin_name_for_event = plugin_name.clone();
             let result = fetch_plugin_install(request_handle, marketplace_path, plugin_name)
                 .await
-                .map_err(|err| format!("Failed to install plugin: {err}"));
+                .map_err(|err| format!("Не удалось установить плагин: {err}"));
             app_event_tx.send(AppEvent::PluginInstallLoaded {
                 cwd: cwd_for_event,
                 marketplace_path: marketplace_path_for_event,
@@ -1970,7 +1971,7 @@ impl App {
             let plugin_id_for_event = plugin_id.clone();
             let result = fetch_plugin_uninstall(request_handle, plugin_id)
                 .await
-                .map_err(|err| format!("Failed to uninstall plugin: {err}"));
+                .map_err(|err| format!("Не удалось удалить плагин: {err}"));
             app_event_tx.send(AppEvent::PluginUninstallLoaded {
                 cwd: cwd_for_event,
                 plugin_id: plugin_id_for_event,
@@ -2030,7 +2031,7 @@ impl App {
             Err(err) => self
                 .chat_widget
                 .add_to_history(history_cell::new_error_event(format!(
-                    "Failed to upload feedback: {err}"
+                    "Не удалось отправить отзыв: {err}"
                 ))),
         }
     }
@@ -2112,7 +2113,7 @@ impl App {
             Ok(statuses) => statuses,
             Err(err) => {
                 self.chat_widget
-                    .add_error_message(format!("Failed to load MCP inventory: {err}"));
+                    .add_error_message(format!("Не удалось загрузить инвентарь MCP: {err}"));
                 return;
             }
         };
@@ -2428,7 +2429,7 @@ impl App {
             }
             Err(err) => {
                 self.chat_widget.add_error_message(format!(
-                    "Failed to resolve app-server request for thread {thread_id}: {err}"
+                    "Не удалось подтвердить запрос app-server для треда {thread_id}: {err}"
                 ));
                 Ok(false)
             }
@@ -2850,7 +2851,7 @@ impl App {
 
         if self.agent_navigation.is_empty() {
             self.chat_widget
-                .add_info_message("No agents available yet.".to_string(), /*hint*/ None);
+                .add_info_message("Субагенты пока не доступны.".to_string(), /*hint*/ None);
             return;
         }
 
@@ -2888,7 +2889,7 @@ impl App {
             .collect();
 
         self.chat_widget.show_selection_view(SelectionViewParams {
-            title: Some("Subagents".to_string()),
+            title: Some("Субагенты".to_string()),
             subtitle: Some(AgentNavigationState::picker_subtitle()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -3093,7 +3094,7 @@ impl App {
                     // A `thread/read` fallback without turns would create a blank local replay
                     // channel with no live listener attached, which blocks later real re-attach.
                     return Err(color_eyre::eyre::eyre!(
-                        "Agent thread {thread_id} is not yet available for replay or live attach."
+                        "Тред агента {thread_id} пока недоступен для воспроизведения или live-подключения."
                     ));
                 }
                 let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
@@ -3150,7 +3151,7 @@ impl App {
             .await
         {
             self.chat_widget
-                .add_error_message(format!("Agent thread {thread_id} is no longer available."));
+                .add_error_message(format!("Тред агента {thread_id} больше недоступен."));
             return Ok(());
         }
 
@@ -3172,14 +3173,14 @@ impl App {
                 }
                 Err(err) => {
                     self.chat_widget.add_error_message(format!(
-                        "Failed to attach to agent thread {thread_id}: {err}"
+                        "Не удалось подключиться к треду агента {thread_id}: {err}"
                     ));
                     return Ok(());
                 }
             }
         } else if !self.thread_event_channels.contains_key(&thread_id) && is_replay_only {
             self.chat_widget
-                .add_error_message(format!("Agent thread {thread_id} is no longer available."));
+                .add_error_message(format!("Тред агента {thread_id} больше недоступен."));
             return Ok(());
         }
 
@@ -3189,7 +3190,7 @@ impl App {
         let Some((receiver, mut snapshot)) = self.activate_thread_for_replay(thread_id).await
         else {
             self.chat_widget
-                .add_error_message(format!("Agent thread {thread_id} is already active."));
+                .add_error_message(format!("Тред агента {thread_id} уже активен."));
             if let Some(previous_thread_id) = previous_thread_id {
                 self.activate_thread_channel(previous_thread_id).await;
             }
@@ -3215,10 +3216,10 @@ impl App {
         if is_replay_only {
             let message = if attached_replay_only {
                 format!(
-                    "Agent thread {thread_id} could not be resumed live. Replaying saved transcript."
+                    "Не удалось возобновить тред агента {thread_id} в live-режиме. Воспроизводится сохранённая история."
                 )
             } else {
-                format!("Agent thread {thread_id} is closed. Replaying saved transcript.")
+                format!("Тред агента {thread_id} закрыт. Воспроизводится сохранённая история.")
             };
             self.chat_widget.add_info_message(message, /*hint*/ None);
         }
@@ -3295,12 +3296,12 @@ impl App {
                     .await
                 {
                     self.chat_widget.add_error_message(format!(
-                        "Failed to attach to fresh app-server thread: {err}"
+                        "Не удалось подключиться к новому треду app server: {err}"
                     ));
                 } else if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
-                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                        let spans = vec!["Чтобы продолжить эту сессию, выполните ".into(), command.cyan()];
                         lines.push(spans.into());
                     }
                     self.chat_widget.add_plain_history_lines(lines);
@@ -3308,7 +3309,7 @@ impl App {
             }
             Err(err) => {
                 self.chat_widget.add_error_message(format!(
-                    "Failed to start a fresh session through the app server: {err}"
+                    "Не удалось запустить новую сессию через app server: {err}"
                 ));
                 self.config.model = Some(model);
             }
@@ -3673,7 +3674,7 @@ impl App {
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
-                        format!("Failed to resume session from {target_label}")
+                        format!("Не удалось возобновить сессию из {target_label}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -3712,7 +3713,7 @@ impl App {
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
-                        format!("Failed to fork session from {target_label}")
+                        format!("Не удалось форкнуть сессию из {target_label}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -3962,6 +3963,9 @@ impl App {
                 TuiEvent::Key(key_event) => {
                     self.handle_key_event(tui, app_server, key_event).await;
                 }
+                TuiEvent::Mouse(mouse_event) => {
+                    self.handle_mouse_event(mouse_event);
+                }
                 TuiEvent::Paste(pasted) => {
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
                     // but tui-textarea expects \n. Normalize CR to LF.
@@ -4038,7 +4042,7 @@ impl App {
                     Ok(app_server) => app_server,
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
-                            "Failed to start TUI session picker: {err}"
+                            "Не удалось запустить выбор сессии в TUI: {err}"
                         ));
                         return Ok(AppRunControl::Continue);
                     }
@@ -4082,7 +4086,7 @@ impl App {
                             Ok(cfg) => cfg,
                             Err(err) => {
                                 self.chat_widget.add_error_message(format!(
-                                    "Failed to rebuild configuration for resume: {err}"
+                                    "Не удалось пересобрать конфигурацию для возобновления: {err}"
                                 ));
                                 return Ok(AppRunControl::Continue);
                             }
@@ -4115,7 +4119,7 @@ impl App {
                                                 vec![summary.usage_line.clone().into()];
                                             if let Some(command) = summary.resume_command {
                                                 let spans = vec![
-                                                    "To continue this session, run ".into(),
+                                                    "Чтобы продолжить эту сессию, выполните ".into(),
                                                     command.cyan(),
                                                 ];
                                                 lines.push(spans.into());
@@ -4125,7 +4129,7 @@ impl App {
                                     }
                                     Err(err) => {
                                         self.chat_widget.add_error_message(format!(
-                                            "Failed to attach to resumed app-server thread: {err}"
+                                            "Не удалось подключиться к возобновлённому треду app server: {err}"
                                         ));
                                     }
                                 }
@@ -4133,7 +4137,7 @@ impl App {
                             Err(err) => {
                                 let path_display = target_session.display_label();
                                 self.chat_widget.add_error_message(format!(
-                                    "Failed to resume session from {path_display}: {err}"
+                                    "Не удалось возобновить сессию из {path_display}: {err}"
                                 ));
                             }
                         }
@@ -4175,7 +4179,7 @@ impl App {
                                             vec![summary.usage_line.clone().into()];
                                         if let Some(command) = summary.resume_command {
                                             let spans = vec![
-                                                "To continue this session, run ".into(),
+                                                "Чтобы продолжить эту сессию, выполните ".into(),
                                                 command.cyan(),
                                             ];
                                             lines.push(spans.into());
@@ -4185,20 +4189,20 @@ impl App {
                                 }
                                 Err(err) => {
                                     self.chat_widget.add_error_message(format!(
-                                        "Failed to attach to forked app-server thread: {err}"
+                                        "Не удалось подключиться к форкнутому треду app server: {err}"
                                     ));
                                 }
                             }
                         }
                         Err(err) => {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to fork current session through the app server: {err}"
+                                "Не удалось форкнуть текущую сессию через app server: {err}"
                             ));
                         }
                     }
                 } else {
                     self.chat_widget.add_error_message(
-                        "A thread must contain at least one turn before it can be forked."
+                        "Чтобы форкнуть тред, в нём должен быть хотя бы один ход."
                             .to_string(),
                     );
                 }
@@ -4281,7 +4285,7 @@ impl App {
                 // Enter alternate screen using TUI helper and build pager lines
                 let _ = tui.enter_alt_screen();
                 let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
-                    vec!["No changes detected.".italic().into()]
+                    vec!["Изменений не найдено.".italic().into()]
                 } else {
                     text.lines().map(ansi_escape_line).collect()
                 };
@@ -4463,6 +4467,46 @@ impl App {
             }
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);
+            }
+            AppEvent::OpenCustomSettings => {
+                self.chat_widget.open_custom_settings_popup();
+            }
+            AppEvent::OpenModelPopup => {
+                self.chat_widget.open_model_popup();
+            }
+            AppEvent::OpenPersonalityPopup => {
+                self.chat_widget.open_personality_popup();
+            }
+            AppEvent::OpenProfilesManager => {
+                self.chat_widget.open_profiles_manager_popup();
+            }
+            AppEvent::OpenAddAccountProviderPicker => {
+                self.chat_widget.open_add_account_provider_popup();
+            }
+            AppEvent::CreateProfileTemplate { provider } => {
+                self.chat_widget
+                    .create_profile_template_for_provider(&provider);
+            }
+            AppEvent::OpenLanguagePicker => {
+                self.chat_widget.open_language_picker_popup();
+            }
+            AppEvent::SetProfilesLanguage { lang } => {
+                self.chat_widget.apply_profiles_language(&lang);
+            }
+            AppEvent::OpenCommandPrefixPicker => {
+                self.chat_widget.open_command_prefix_picker_popup();
+            }
+            AppEvent::SetCommandPrefix { prefix } => {
+                self.chat_widget.apply_command_prefix(prefix);
+            }
+            AppEvent::OpenCommandVisibilityPicker => {
+                self.chat_widget.open_command_visibility_picker_popup();
+            }
+            AppEvent::ToggleCommandVisibility { command_key } => {
+                self.chat_widget.toggle_command_visibility(&command_key);
+            }
+            AppEvent::OpenRealtimeAudioPopup => {
+                self.chat_widget.open_realtime_audio_popup();
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -4676,7 +4720,7 @@ impl App {
                 {
                     self.chat_widget
                         .add_to_history(history_cell::new_info_event(
-                            format!("Granting sandbox read access to {path} ..."),
+                            format!("Выдаю доступ к чтению в песочнице для {path}..."),
                             /*hint*/ None,
                         ));
 
@@ -4718,12 +4762,12 @@ impl App {
             AppEvent::WindowsSandboxGrantReadRootCompleted { path, error } => match error {
                 Some(err) => {
                     self.chat_widget
-                        .add_to_history(history_cell::new_error_event(format!("Error: {err}")));
+                        .add_to_history(history_cell::new_error_event(format!("Ошибка: {err}")));
                 }
                 None => {
                     self.chat_widget
                         .add_to_history(history_cell::new_info_event(
-                            format!("Sandbox read access granted for {}", path.display()),
+                            format!("Доступ к чтению в песочнице выдан для {}", path.display()),
                             /*hint*/ None,
                         ));
                 }
@@ -4817,10 +4861,10 @@ impl App {
                                     .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
                                 let _ = mode;
                                 self.chat_widget.add_plain_history_lines(vec![
-                                    Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
+                                    Line::from(vec!["• ".dim(), "Песочница готова".into()]),
                                     Line::from(vec![
                                         "  ".into(),
-                                        "Codex can now safely edit files and execute commands in your computer"
+                                        "Lavilas Codex теперь может безопасно редактировать файлы и выполнять команды на вашем компьютере"
                                             .dark_gray(),
                                     ]),
                                 ]);
@@ -4832,7 +4876,7 @@ impl App {
                                 "failed to enable Windows sandbox feature"
                             );
                             self.chat_widget.add_error_message(format!(
-                                "Failed to enable the Windows sandbox feature: {err}"
+                                "Не удалось включить функцию Windows Sandbox: {err}"
                             ));
                         }
                     }
@@ -4855,15 +4899,14 @@ impl App {
                             .map(|selected_effort| selected_effort.to_string())
                             .unwrap_or_else(|| "default".to_string());
                         tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
-                        let mut message = format!("Model changed to {model}");
+                        let mut message = format!("Модель изменена: {model}");
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
                             message.push(' ');
                             message.push_str(label);
                         }
                         if let Some(profile) = profile {
-                            message.push_str(" for ");
+                            message.push_str(" в профиле ");
                             message.push_str(profile);
-                            message.push_str(" profile");
                         }
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
@@ -4874,11 +4917,11 @@ impl App {
                         );
                         if let Some(profile) = profile {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to save model for profile `{profile}`: {err}"
+                                "Не удалось сохранить модель для профиля `{profile}`: {err}"
                             ));
                         } else {
                             self.chat_widget
-                                .add_error_message(format!("Failed to save default model: {err}"));
+                                .add_error_message(format!("Не удалось сохранить модель по умолчанию: {err}"));
                         }
                     }
                 }
@@ -4921,11 +4964,10 @@ impl App {
                 {
                     Ok(()) => {
                         let label = Self::personality_label(personality);
-                        let mut message = format!("Personality set to {label}");
+                        let mut message = format!("Стиль общения изменён: {label}");
                         if let Some(profile) = profile {
-                            message.push_str(" for ");
+                            message.push_str(" в профиле ");
                             message.push_str(profile);
-                            message.push_str(" profile");
                         }
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
@@ -4936,11 +4978,11 @@ impl App {
                         );
                         if let Some(profile) = profile {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to save personality for profile `{profile}`: {err}"
+                                "Не удалось сохранить стиль общения для профиля `{profile}`: {err}"
                             ));
                         } else {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to save default personality: {err}"
+                                "Не удалось сохранить стиль общения по умолчанию: {err}"
                             ));
                         }
                     }
@@ -4956,12 +4998,11 @@ impl App {
                     .await
                 {
                     Ok(()) => {
-                        let status = if service_tier.is_some() { "on" } else { "off" };
-                        let mut message = format!("Fast mode set to {status}");
+                        let status = if service_tier.is_some() { "вкл" } else { "выкл" };
+                        let mut message = format!("Режим Fast: {status}");
                         if let Some(profile) = profile {
-                            message.push_str(" for ");
+                            message.push_str(" в профиле ");
                             message.push_str(profile);
-                            message.push_str(" profile");
                         }
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
@@ -4969,11 +5010,11 @@ impl App {
                         tracing::error!(error = %err, "failed to persist fast mode selection");
                         if let Some(profile) = profile {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to save Fast mode for profile `{profile}`: {err}"
+                                "Не удалось сохранить режим Fast для профиля `{profile}`: {err}"
                             ));
                         } else {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to save default Fast mode: {err}"
+                                "Не удалось сохранить режим Fast по умолчанию: {err}"
                             ));
                         }
                     }
@@ -5007,9 +5048,9 @@ impl App {
                         if self.chat_widget.realtime_conversation_is_live() {
                             self.chat_widget.open_realtime_audio_restart_prompt(kind);
                         } else {
-                            let selection = name.unwrap_or_else(|| "System default".to_string());
+                            let selection = name.unwrap_or_else(|| "Система по умолчанию".to_string());
                             self.chat_widget.add_info_message(
-                                format!("Realtime {} set to {selection}", kind.noun()),
+                                format!("Устройство realtime-{}: {selection}", kind.noun()),
                                 /*hint*/ None,
                             );
                         }
@@ -5020,7 +5061,7 @@ impl App {
                             "failed to persist realtime audio selection"
                         );
                         self.chat_widget.add_error_message(format!(
-                            "Failed to save realtime {}: {err}",
+                            "Не удалось сохранить устройство realtime {}: {err}",
                             kind.noun()
                         ));
                     }
@@ -5034,7 +5075,7 @@ impl App {
                 if !self.try_set_approval_policy_on_config(
                     &mut config,
                     policy,
-                    "Failed to set approval policy",
+                    "Не удалось установить политику подтверждений",
                     "failed to set approval policy on app config",
                 ) {
                     return Ok(AppRunControl::Continue);
@@ -5058,7 +5099,7 @@ impl App {
                 if !self.try_set_sandbox_policy_on_config(
                     &mut config,
                     policy,
-                    "Failed to set sandbox policy",
+                    "Не удалось установить политику песочницы",
                     "failed to set sandbox policy on app config",
                 ) {
                     return Ok(AppRunControl::Continue);
@@ -5067,7 +5108,7 @@ impl App {
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
-                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                        .add_error_message(format!("Не удалось установить политику песочницы: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_sandbox_policy_override =
@@ -5130,7 +5171,7 @@ impl App {
                         "failed to persist approvals reviewer update"
                     );
                     self.chat_widget
-                        .add_error_message(format!("Failed to save approvals reviewer: {err}"));
+                        .add_error_message(format!("Не удалось сохранить рецензента подтверждений: {err}"));
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
@@ -5164,7 +5205,7 @@ impl App {
                         "failed to persist full access warning acknowledgement"
                     );
                     self.chat_widget.add_error_message(format!(
-                        "Failed to save full access confirmation preference: {err}"
+                        "Не удалось сохранить настройку подтверждения полного доступа: {err}"
                     ));
                 }
             }
@@ -5179,7 +5220,7 @@ impl App {
                         "failed to persist world-writable warning acknowledgement"
                     );
                     self.chat_widget.add_error_message(format!(
-                        "Failed to save Agent mode warning preference: {err}"
+                        "Не удалось сохранить настройку предупреждения режима Agent: {err}"
                     ));
                 }
             }
@@ -5194,7 +5235,7 @@ impl App {
                         "failed to persist rate limit switch prompt preference"
                     );
                     self.chat_widget.add_error_message(format!(
-                        "Failed to save rate limit reminder preference: {err}"
+                        "Не удалось сохранить настройку напоминания о лимитах: {err}"
                     ));
                 }
             }
@@ -5228,11 +5269,11 @@ impl App {
                     );
                     if let Some(profile) = profile {
                         self.chat_widget.add_error_message(format!(
-                            "Failed to save Plan mode reasoning effort for profile `{profile}`: {err}"
+                            "Не удалось сохранить бюджет размышлений режима Plan для профиля `{profile}`: {err}"
                         ));
                     } else {
                         self.chat_widget.add_error_message(format!(
-                            "Failed to save Plan mode reasoning effort: {err}"
+                            "Не удалось сохранить бюджет размышлений режима Plan: {err}"
                         ));
                     }
                 }
@@ -5251,7 +5292,7 @@ impl App {
                         "failed to persist model migration prompt acknowledgement"
                     );
                     self.chat_widget.add_error_message(format!(
-                        "Failed to save model migration prompt preference: {err}"
+                        "Не удалось сохранить настройку подсказки миграции модели: {err}"
                     ));
                 }
             }
@@ -5292,7 +5333,7 @@ impl App {
                     Err(err) => {
                         let path_display = path.display();
                         self.chat_widget.add_error_message(format!(
-                            "Failed to update skill config for {path_display}: {err}"
+                            "Не удалось обновить конфигурацию навыка для {path_display}: {err}"
                         ));
                     }
                 }
@@ -5341,7 +5382,7 @@ impl App {
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
-                            "Failed to update app config for {id}: {err}"
+                            "Не удалось обновить конфигурацию приложения {id}: {err}"
                         ));
                     }
                 }
@@ -5394,14 +5435,14 @@ impl App {
                     let _ = tui.enter_alt_screen();
                     let mut lines = Vec::new();
                     if let Some(reason) = reason {
-                        lines.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
+                        lines.push(Line::from(vec!["Причина: ".into(), reason.italic()]));
                         lines.push(Line::from(""));
                     }
                     if let Some(rule_line) =
                         crate::bottom_pane::format_requested_permissions_rule(&permissions)
                     {
                         lines.push(Line::from(vec![
-                            "Permission rule: ".into(),
+                            "Правило доступа: ".into(),
                             rule_line.cyan(),
                         ]));
                     }
@@ -5417,7 +5458,7 @@ impl App {
                 } => {
                     let _ = tui.enter_alt_screen();
                     let paragraph = Paragraph::new(vec![
-                        Line::from(vec!["Server: ".into(), server_name.bold()]),
+                        Line::from(vec!["Сервер: ".into(), server_name.bold()]),
                         Line::from(""),
                         Line::from(message),
                     ])
@@ -5455,7 +5496,7 @@ impl App {
                     Err(err) => {
                         tracing::error!(error = %err, "failed to persist status line items; keeping previous selection");
                         self.chat_widget
-                            .add_error_message(format!("Failed to save status line items: {err}"));
+                            .add_error_message(format!("Не удалось сохранить элементы статусной строки: {err}"));
                     }
                 }
             }
@@ -5482,7 +5523,7 @@ impl App {
                         tracing::error!(error = %err, "failed to persist terminal title items; keeping previous selection");
                         self.chat_widget.revert_terminal_title_setup_preview();
                         self.chat_widget.add_error_message(format!(
-                            "Failed to save terminal title items: {err}"
+                            "Не удалось сохранить элементы заголовка терминала: {err}"
                         ));
                     }
                 }
@@ -5517,7 +5558,7 @@ impl App {
                         self.restore_runtime_theme_from_config();
                         tracing::error!(error = %err, "failed to persist theme selection");
                         self.chat_widget
-                            .add_error_message(format!("Failed to save theme: {err}"));
+                            .add_error_message(format!("Не удалось сохранить тему: {err}"));
                     }
                 }
             }
@@ -5673,14 +5714,14 @@ impl App {
             if self.active_thread_id == Some(primary_thread_id) {
                 self.chat_widget.add_info_message(
                     format!(
-                        "Agent thread {closed_thread_id} closed. Switched back to main thread."
+                        "Тред агента {closed_thread_id} завершён. Переключено обратно на основной тред."
                     ),
                     /*hint*/ None,
                 );
             } else {
                 self.clear_active_thread().await;
                 self.chat_widget.add_error_message(format!(
-                    "Agent thread {closed_thread_id} closed. Failed to switch back to main thread {primary_thread_id}.",
+                    "Тред агента {closed_thread_id} завершён. Не удалось вернуться к основному треду {primary_thread_id}.",
                 ));
             }
             return Ok(());
@@ -5762,9 +5803,9 @@ impl App {
 
     fn personality_label(personality: Personality) -> &'static str {
         match personality {
-            Personality::None => "None",
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
+            Personality::None => "Без стиля",
+            Personality::Friendly => "Дружелюбный",
+            Personality::Pragmatic => "Прагматичный",
         }
     }
 
@@ -5774,7 +5815,7 @@ impl App {
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
-                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
+                    "Не удалось открыть внешний редактор: задайте $VISUAL или $EDITOR перед запуском Lavilas Codex."
                         .to_string(),
                 ));
                 self.reset_external_editor_state(tui);
@@ -5783,7 +5824,7 @@ impl App {
             Err(err) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(format!(
-                        "Failed to open editor: {err}",
+                        "Не удалось открыть редактор: {err}",
                     )));
                 self.reset_external_editor_state(tui);
                 return;
@@ -5807,7 +5848,7 @@ impl App {
             Err(err) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(format!(
-                        "Failed to open editor: {err}",
+                        "Не удалось открыть редактор: {err}",
                     )));
             }
         }
@@ -5899,7 +5940,7 @@ impl App {
                 if let Err(err) = self.clear_terminal_ui(tui, /*redraw_header*/ false) {
                     tracing::warn!(error = %err, "failed to clear terminal UI");
                     self.chat_widget
-                        .add_error_message(format!("Failed to clear terminal UI: {err}"));
+                        .add_error_message(format!("Не удалось очистить интерфейс терминала: {err}"));
                 } else {
                     self.reset_app_ui_state_after_clear();
                     self.queue_clear_ui_header(tui);
@@ -5971,6 +6012,12 @@ impl App {
 
     fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
+    }
+
+    fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        if self.overlay.is_none() {
+            self.chat_widget.handle_mouse_event(mouse_event);
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -7591,7 +7638,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+            format!("Тред агента {thread_id} пока недоступен для воспроизведения или live-подключения.")
         );
         assert!(!app.thread_event_channels.contains_key(&thread_id));
         Ok(())
@@ -7623,7 +7670,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+            format!("Тред агента {thread_id} пока недоступен для воспроизведения или live-подключения.")
         );
         assert!(!app.thread_event_channels.contains_key(&thread_id));
         Ok(())
@@ -7785,7 +7832,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Permissions updated to Guardian Approvals"));
+        assert!(rendered.contains("Права доступа обновлены: Guardian Approvals"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(config.contains("guardian_approval = true"));
@@ -7876,7 +7923,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Permissions updated to Default"));
+        assert!(rendered.contains("Права доступа обновлены: Default"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
@@ -8158,7 +8205,7 @@ guardian_approval = true
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Permissions updated to Default"));
+        assert!(rendered.contains("Права доступа обновлены: Default"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
@@ -8224,7 +8271,7 @@ guardian_approval = true
                 AppEvent::InsertHistoryCell(cell) => cell
                     .display_lines(/*width*/ 120)
                     .iter()
-                    .any(|line| line.to_string().contains("Permissions updated to")),
+                    .any(|line| line.to_string().contains("Права доступа обновлены:")),
                 _ => false,
             }),
             "blocking disable with inherited guardian review should not emit a permissions history update: {app_events:?}"
@@ -9497,7 +9544,7 @@ guardian_approval = true
         };
         assert_eq!(
             lines_to_single_string(&cell.display_lines(/*width*/ 120)),
-            "■ Failed to upload feedback: boom"
+            "■ Не удалось отправить отзыв: boom"
         );
     }
 

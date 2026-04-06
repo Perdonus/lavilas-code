@@ -336,7 +336,7 @@ async fn slash_stop_submits_background_terminal_cleanup() {
     assert_eq!(cells.len(), 1, "expected cleanup confirmation message");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Stopping all background terminals."),
+        rendered.contains("Останавливаю все фоновые терминалы."),
         "expected cleanup confirmation, got {rendered:?}"
     );
 }
@@ -397,7 +397,7 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 
     chat.dispatch_command(SlashCommand::Mcp);
 
-    assert!(active_blob(&chat).contains("Loading MCP inventory"));
+    assert!(active_blob(&chat).contains("Загружаю список MCP"));
     assert_matches!(rx.try_recv(), Ok(AppEvent::FetchMcpInventory));
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }

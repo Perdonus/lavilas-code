@@ -29,10 +29,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_skills_menu(&mut self) {
+        let is_ru = self.ui_language().is_ru();
         let items = vec![
             SelectionItem {
-                name: "List skills".to_string(),
-                description: Some("Tip: press $ to open this list directly.".to_string()),
+                name: if is_ru {
+                    "Список навыков".to_string()
+                } else {
+                    "List skills".to_string()
+                },
+                description: Some(if is_ru {
+                    "Подсказка: нажмите $, чтобы открыть этот список напрямую.".to_string()
+                } else {
+                    "Tip: press $ to open this list directly.".to_string()
+                }),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::OpenSkillsList);
                 })],
@@ -40,8 +49,16 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "Enable/Disable Skills".to_string(),
-                description: Some("Enable or disable skills.".to_string()),
+                name: if is_ru {
+                    "Управление навыками".to_string()
+                } else {
+                    "Enable/Disable Skills".to_string()
+                },
+                description: Some(if is_ru {
+                    "Включайте и отключайте навыки для текущей сессии.".to_string()
+                } else {
+                    "Enable or disable skills.".to_string()
+                }),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::OpenManageSkillsPopup);
                 })],
@@ -51,8 +68,16 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Skills".to_string()),
-            subtitle: Some("Choose an action".to_string()),
+            title: Some(if is_ru {
+                "Навыки".to_string()
+            } else {
+                "Skills".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Выберите действие".to_string()
+            } else {
+                "Choose an action".to_string()
+            }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -61,7 +86,14 @@ impl ChatWidget {
 
     pub(crate) fn open_manage_skills_popup(&mut self) {
         if self.skills_all.is_empty() {
-            self.add_info_message("No skills available.".to_string(), /*hint*/ None);
+            self.add_info_message(
+                if self.ui_language().is_ru() {
+                    "Нет доступных навыков.".to_string()
+                } else {
+                    "No skills available.".to_string()
+                },
+                /*hint*/ None,
+            );
             return;
         }
 
@@ -131,10 +163,12 @@ impl ChatWidget {
         if enabled_count == 0 && disabled_count == 0 {
             return;
         }
-        self.add_info_message(
-            format!("{enabled_count} skills enabled, {disabled_count} skills disabled"),
-            /*hint*/ None,
-        );
+        let message = if self.ui_language().is_ru() {
+            format!("Навыки: включено {enabled_count}, выключено {disabled_count}")
+        } else {
+            format!("{enabled_count} skills enabled, {disabled_count} skills disabled")
+        };
+        self.add_info_message(message, /*hint*/ None);
     }
 
     pub(crate) fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {

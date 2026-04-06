@@ -381,8 +381,8 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
             turn_id: "child-turn-1".to_string(),
             questions: vec![RequestUserInputQuestion {
                 id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
-                header: "Approve app tool call?".to_string(),
-                question: "Allow this app tool?".to_string(),
+                header: "Подтвердить вызов инструмента приложения?".to_string(),
+                question: "Разрешить этот инструмент приложения?".to_string(),
                 is_other: false,
                 is_secret: false,
                 options: None,

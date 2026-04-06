@@ -85,15 +85,22 @@ impl ChatWidget {
                 .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
         {
-            let label = if invalid_items.len() == 1 {
-                "item"
+            let message = if self.ui_language().is_ru() {
+                format!(
+                    "Игнорированы некорректные элементы строки статуса: {}.",
+                    proper_join(invalid_items)
+                )
             } else {
-                "items"
+                let label = if invalid_items.len() == 1 {
+                    "item"
+                } else {
+                    "items"
+                };
+                format!(
+                    "Ignored invalid status line {label}: {}.",
+                    proper_join(invalid_items)
+                )
             };
-            let message = format!(
-                "Ignored invalid status line {label}: {}.",
-                proper_join(invalid_items)
-            );
             self.on_warning(message);
         }
     }
@@ -106,15 +113,22 @@ impl ChatWidget {
                 .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
         {
-            let label = if invalid_items.len() == 1 {
-                "item"
+            let message = if self.ui_language().is_ru() {
+                format!(
+                    "Игнорированы некорректные элементы заголовка терминала: {}.",
+                    proper_join(invalid_items)
+                )
             } else {
-                "items"
+                let label = if invalid_items.len() == 1 {
+                    "item"
+                } else {
+                    "items"
+                };
+                format!(
+                    "Ignored invalid terminal title {label}: {}.",
+                    proper_join(invalid_items)
+                )
             };
-            let message = format!(
-                "Ignored invalid terminal title {label}: {}.",
-                proper_join(invalid_items)
-            );
             self.on_warning(message);
         }
     }
@@ -427,7 +441,11 @@ impl ChatWidget {
                 let fast_label = if self
                     .should_show_fast_status(self.current_model(), self.config.service_tier)
                 {
-                    " fast"
+                    if self.ui_language().is_ru() {
+                        " быстрый"
+                    } else {
+                        " fast"
+                    }
                 } else {
                     ""
                 };
@@ -447,15 +465,19 @@ impl ChatWidget {
                 if total <= 0 {
                     None
                 } else {
-                    Some(format!("{} used", format_tokens_compact(total)))
+                    Some(if self.ui_language().is_ru() {
+                        format!("{} исп.", format_tokens_compact(total))
+                    } else {
+                        format!("{} used", format_tokens_compact(total))
+                    })
                 }
             }
             StatusLineItem::ContextRemaining => self
                 .status_line_context_remaining_percent()
-                .map(|remaining| format!("{remaining}% left")),
+                .map(|remaining| if self.ui_language().is_ru() { format!("{remaining}% осталось") } else { format!("{remaining}% left") }),
             StatusLineItem::ContextUsed => self
                 .status_line_context_used_percent()
-                .map(|used| format!("{used}% used")),
+                .map(|used| if self.ui_language().is_ru() { format!("{used}% использовано") } else { format!("{used}% used") }),
             StatusLineItem::FiveHourLimit => {
                 let window = self
                     .rate_limit_snapshots_by_limit_id
@@ -475,29 +497,47 @@ impl ChatWidget {
                 let label = window
                     .and_then(|window| window.window_minutes)
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string());
+                    .unwrap_or_else(|| if self.ui_language().is_ru() { "неделя".to_string() } else { "weekly".to_string() });
                 self.status_line_limit_display(window, &label)
             }
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
             StatusLineItem::ContextWindowSize => self
                 .status_line_context_window_size()
-                .map(|cws| format!("{} window", format_tokens_compact(cws))),
-            StatusLineItem::TotalInputTokens => Some(format!(
-                "{} in",
-                format_tokens_compact(self.status_line_total_usage().input_tokens)
-            )),
-            StatusLineItem::TotalOutputTokens => Some(format!(
-                "{} out",
-                format_tokens_compact(self.status_line_total_usage().output_tokens)
-            )),
+                .map(|cws| if self.ui_language().is_ru() { format!("{} в окне", format_tokens_compact(cws)) } else { format!("{} window", format_tokens_compact(cws)) }),
+            StatusLineItem::TotalInputTokens => Some(if self.ui_language().is_ru() {
+                format!(
+                    "{} вх.",
+                    format_tokens_compact(self.status_line_total_usage().input_tokens)
+                )
+            } else {
+                format!(
+                    "{} in",
+                    format_tokens_compact(self.status_line_total_usage().input_tokens)
+                )
+            }),
+            StatusLineItem::TotalOutputTokens => Some(if self.ui_language().is_ru() {
+                format!(
+                    "{} вых.",
+                    format_tokens_compact(self.status_line_total_usage().output_tokens)
+                )
+            } else {
+                format!(
+                    "{} out",
+                    format_tokens_compact(self.status_line_total_usage().output_tokens)
+                )
+            }),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
-            StatusLineItem::FastMode => Some(
+            StatusLineItem::FastMode => Some(if self.ui_language().is_ru() {
                 if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
-                    "Fast on".to_string()
+                    "Быстрый режим: вкл.".to_string()
                 } else {
-                    "Fast off".to_string()
-                },
-            ),
+                    "Быстрый режим: выкл.".to_string()
+                }
+            } else if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                "Fast on".to_string()
+            } else {
+                "Fast off".to_string()
+            }),
         }
     }
 
@@ -511,7 +551,7 @@ impl ChatWidget {
         now: Instant,
     ) -> Option<String> {
         match item {
-            TerminalTitleItem::AppName => Some("codex".to_string()),
+            TerminalTitleItem::AppName => Some("lavilas codex".to_string()),
             TerminalTitleItem::Project => self.terminal_title_project_name(),
             TerminalTitleItem::Spinner => self.terminal_title_spinner_text_at(now),
             TerminalTitleItem::Status => Some(self.terminal_title_status_text()),
@@ -542,26 +582,39 @@ impl ChatWidget {
     /// Startup takes precedence over normal task states, and idle state renders
     /// as `Ready` regardless of the last active status bucket.
     pub(super) fn terminal_title_status_text(&self) -> String {
+        let is_ru = self.ui_language().is_ru();
         if self.mcp_startup_status.is_some() {
-            return "Starting".to_string();
+            return if is_ru {
+                "Запуск".to_string()
+            } else {
+                "Starting".to_string()
+            };
         }
 
         match self.terminal_title_status_kind {
             TerminalTitleStatusKind::Working if !self.bottom_pane.is_task_running() => {
-                "Ready".to_string()
+                if is_ru { "Готово".to_string() } else { "Ready".to_string() }
             }
             TerminalTitleStatusKind::WaitingForBackgroundTerminal
                 if !self.bottom_pane.is_task_running() =>
             {
-                "Ready".to_string()
+                if is_ru { "Готово".to_string() } else { "Ready".to_string() }
             }
             TerminalTitleStatusKind::Thinking if !self.bottom_pane.is_task_running() => {
-                "Ready".to_string()
+                if is_ru { "Готово".to_string() } else { "Ready".to_string() }
             }
-            TerminalTitleStatusKind::Working => "Working".to_string(),
-            TerminalTitleStatusKind::WaitingForBackgroundTerminal => "Waiting".to_string(),
-            TerminalTitleStatusKind::Undoing => "Undoing".to_string(),
-            TerminalTitleStatusKind::Thinking => "Thinking".to_string(),
+            TerminalTitleStatusKind::Working => {
+                if is_ru { "В работе".to_string() } else { "Working".to_string() }
+            }
+            TerminalTitleStatusKind::WaitingForBackgroundTerminal => {
+                if is_ru { "Ожидание".to_string() } else { "Waiting".to_string() }
+            }
+            TerminalTitleStatusKind::Undoing => {
+                if is_ru { "Откат".to_string() } else { "Undoing".to_string() }
+            }
+            TerminalTitleStatusKind::Thinking => {
+                if is_ru { "Анализ".to_string() } else { "Thinking".to_string() }
+            }
         }
     }
 
@@ -620,7 +673,7 @@ impl ChatWidget {
         if total == 0 {
             return None;
         }
-        Some(format!("Tasks {completed}/{total}"))
+        Some(if self.ui_language().is_ru() { format!("Шаги {completed}/{total}") } else { format!("Tasks {completed}/{total}") })
     }
 
     /// Truncates a title segment by grapheme cluster and appends `...` when needed.

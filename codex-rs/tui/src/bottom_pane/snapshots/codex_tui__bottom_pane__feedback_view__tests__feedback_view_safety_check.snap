@@ -2,8 +2,8 @@
 source: tui/src/bottom_pane/feedback_view.rs
 expression: rendered
 ---
-▌ Tell us more (safety check)
+▌ Проверка безопасности?
 ▌
-▌ (optional) Share what was refused and why it should have b
+▌ (необязательно) Объясните, почему этот запрос должен пройти
 
-Press enter to confirm or esc to go back
+Нажмите Enter для подтверждения или Esc для возврата

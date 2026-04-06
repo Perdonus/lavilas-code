@@ -5,19 +5,19 @@ expression: sanitized
 /status
 
 ╭───────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                                             │
+│  >_ Lavilas Codex (v0.0.0)                                             │
 │                                                                       │
-│ Visit https://chatgpt.com/codex/settings/usage for up-to-date         │
-│ information on rate limits and credits                                │
+│ Откройте https://chatgpt.com/codex/settings/usage для актуальной         │
+│ информации о лимитах и кредитах                                │
 │                                                                       │
-│  Model:            gpt-5.1-codex-max (reasoning none, summaries auto) │
-│  Directory: [[workspace]]                                             │
-│  Permissions:      Custom (read-only, on-request)                     │
-│  Agents.md:        <none>                                             │
-│  Session:          0f0f3c13-6cf9-4aa4-8b80-7d49c2f1be2e               │
-│  Forked from:      e9f18a88-8081-4e51-9d4e-8af5cde2d8dd               │
+│  Модель:            gpt-5.1-codex-max (размышления выкл, сводки авто) │
+│  Каталог: [[workspace]]                                             │
+│  Доступ:      Пользовательский (Только чтение, по запросу)                     │
+│  AGENTS.md:        <нет>                                             │
+│  Сессия:          0f0f3c13-6cf9-4aa4-8b80-7d49c2f1be2e               │
+│  Форк от:      e9f18a88-8081-4e51-9d4e-8af5cde2d8dd               │
 │                                                                       │
-│  Token usage:      1.2K total  (800 input + 400 output)               │
-│  Context window:   100% left (1.2K used / 272K)                       │
-│  Limits:           data not available yet                             │
+│  Токены:      1.2K всего  (800 вход + 400 выход)               │
+│  Контекстное окно:   100% осталось (1.2K использовано / 272K)                       │
+│  Лимиты:           данные пока недоступны                             │
 ╰───────────────────────────────────────────────────────────────────────╯

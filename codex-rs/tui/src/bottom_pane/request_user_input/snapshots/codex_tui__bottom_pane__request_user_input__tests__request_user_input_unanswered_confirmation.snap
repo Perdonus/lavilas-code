@@ -3,13 +3,13 @@ source: tui/src/bottom_pane/request_user_input/mod.rs
 expression: "render_snapshot(&overlay, area)"
 ---
                                                                                 
-  Submit with unanswered questions?                                             
-  2 unanswered questions                                                        
+  Отправить с вопросами без ответа?                                             
+  2 вопроса без ответа
                                                                                 
-  › 1. Proceed  Submit with 2 unanswered questions.                             
-    2. Go back  Return to the first unanswered question.                        
-                                                                                
-                                                                                
+  › 1. Отправить  Отправить, оставив 2 вопроса без ответа.                             
+    2. Вернуться  Перейти к первому вопросу без ответа.                        
                                                                                 
                                                                                 
-  Press enter to confirm or esc to go back
+                                                                                
+                                                                                
+  Нажмите Enter для подтверждения или Esc для возврата

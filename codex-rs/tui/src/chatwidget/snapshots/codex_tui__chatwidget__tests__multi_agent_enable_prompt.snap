@@ -2,10 +2,11 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Enable subagents?
-  Subagents are currently disabled in your config.
+  Включить сабагентов?
+  Сейчас эта возможность отключена в конфиге и не используется в текущей сессии.
 
-› 1. Yes, enable  Save the setting now. You will need a new session to use it.
-  2. Not now      Keep subagents disabled.
+› 1. Да, включить  Сохранить настройку сейчас. После запуска новой сессии
+                   станут доступны сабагенты.
+  2. Не сейчас     Оставить сабагентов выключенными и вернуться к этому позже.
 
-  Press enter to confirm or esc to go back
+  Нажмите enter для подтверждения или esc для возврата

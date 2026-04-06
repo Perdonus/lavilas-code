@@ -2,10 +2,11 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Select Personality
-  Choose a communication style for Codex.
+  Тон ответов
+  Подберите стиль, с которым Lavilas Codex будет отвечать в этой сессии.
 
-  1. Friendly             Warm, collaborative, and helpful.
-› 2. Pragmatic (current)  Concise, task-focused, and direct.
+  1. Дружелюбный              Мягкий, живой и поддерживающий тон ответа.
+› 2. Прагматичный (текущий)   Коротко, прямо и с упором на действие, без
+                              лишней воды.
 
-  Press enter to confirm or esc to go back
+  Нажмите enter для подтверждения или esc для возврата

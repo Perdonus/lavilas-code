@@ -9,28 +9,25 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
-use crate::render::Insets;
-use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::skills_helpers::match_skill;
 use crate::skills_helpers::truncate_skill_name;
-use crate::style::user_message_style;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
+use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::render_rows_single_line;
 
-const SEARCH_PLACEHOLDER: &str = "Type to search skills";
+const SEARCH_PLACEHOLDER: &str = "Введите для поиска навыков";
 const SEARCH_PROMPT_PREFIX: &str = "> ";
 
 pub(crate) struct SkillsToggleItem {
@@ -55,9 +52,9 @@ pub(crate) struct SkillsToggleView {
 impl SkillsToggleView {
     pub(crate) fn new(items: Vec<SkillsToggleItem>, app_event_tx: AppEventSender) -> Self {
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Enable/Disable Skills".bold()));
+        header.push(Line::from("Настройки навыков".bold()));
         header.push(Line::from(
-            "Turn skills on or off. Your changes are saved automatically.".dim(),
+            "Включайте и отключайте навыки, изменения применяются сразу.".dim(),
         ));
 
         let mut view = Self {
@@ -294,10 +291,7 @@ impl Renderable for SkillsToggleView {
         // Reserve the footer line for the key-hint row.
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
-
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let content_area = render_menu_surface(content_area, buf);
 
         let header_height = self
             .header
@@ -311,7 +305,7 @@ impl Renderable for SkillsToggleView {
             Constraint::Length(2),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
+        .areas(content_area);
 
         self.header.render(header_area, buf);
 
@@ -351,7 +345,7 @@ impl Renderable for SkillsToggleView {
                 &rows,
                 &self.state,
                 render_area.height as usize,
-                "no matches",
+                "нет совпадений",
             );
         }
 
@@ -367,13 +361,13 @@ impl Renderable for SkillsToggleView {
 
 fn skills_toggle_hint_line() -> Line<'static> {
     Line::from(vec![
-        "Press ".into(),
+        "Нажмите ".into(),
         key_hint::plain(KeyCode::Char(' ')).into(),
-        " or ".into(),
+        " или ".into(),
         key_hint::plain(KeyCode::Enter).into(),
-        " to toggle; ".into(),
+        " для переключения, ".into(),
         key_hint::plain(KeyCode::Esc).into(),
-        " to close".into(),
+        " для закрытия".into(),
     ])
 }
 

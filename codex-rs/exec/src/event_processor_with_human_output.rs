@@ -68,8 +68,8 @@ impl EventProcessorWithHumanOutput {
         match item {
             ThreadItem::CommandExecution { command, cwd, .. } => {
                 eprintln!(
-                    "{}\n{} in {}",
-                    "exec".style(self.italic).style(self.magenta),
+                    "{}\n{} в {}",
+                    "команда".style(self.italic).style(self.magenta),
                     command.style(self.bold),
                     cwd.display()
                 );
@@ -79,17 +79,17 @@ impl EventProcessorWithHumanOutput {
                     "{} {} {}",
                     "mcp:".style(self.bold),
                     format!("{server}/{tool}").style(self.cyan),
-                    "started".style(self.dimmed)
+                    "запущено".style(self.dimmed)
                 );
             }
             ThreadItem::WebSearch { query, .. } => {
-                eprintln!("{} {}", "web search:".style(self.bold), query);
+                eprintln!("{} {}", "веб-поиск:".style(self.bold), query);
             }
             ThreadItem::FileChange { .. } => {
-                eprintln!("{}", "apply patch".style(self.bold));
+                eprintln!("{}", "применение патча".style(self.bold));
             }
             ThreadItem::CollabAgentToolCall { tool, .. } => {
-                eprintln!("{} {:?}", "collab:".style(self.bold), tool);
+                eprintln!("{} {:?}", "коллаб:".style(self.bold), tool);
             }
             _ => {}
         }
@@ -100,7 +100,7 @@ impl EventProcessorWithHumanOutput {
             ThreadItem::AgentMessage { text, .. } => {
                 eprintln!(
                     "{}\n{}",
-                    "codex".style(self.italic).style(self.magenta),
+                    "lavilas-codex".style(self.italic).style(self.magenta),
                     text
                 );
                 self.final_message = Some(text);
@@ -126,32 +126,32 @@ impl EventProcessorWithHumanOutput {
                 ..
             } => {
                 let duration_suffix = duration_ms
-                    .map(|duration_ms| format!(" in {duration_ms}ms"))
+                    .map(|duration_ms| format!(" за {duration_ms} мс"))
                     .unwrap_or_default();
                 match status {
                     CommandExecutionStatus::Completed => {
                         eprintln!(
                             "{}",
-                            format!(" succeeded{duration_suffix}:").style(self.green)
+                            format!(" успешно{duration_suffix}:").style(self.green)
                         );
                     }
                     CommandExecutionStatus::Failed => {
                         let exit_code = exit_code.unwrap_or(1);
                         eprintln!(
                             "{}",
-                            format!(" exited {exit_code}{duration_suffix}:").style(self.red)
+                            format!(" завершилась с кодом {exit_code}{duration_suffix}:").style(self.red)
                         );
                     }
                     CommandExecutionStatus::Declined => {
                         eprintln!(
                             "{}",
-                            format!(" declined{duration_suffix}:").style(self.yellow)
+                            format!(" отклонено{duration_suffix}:").style(self.yellow)
                         );
                     }
                     CommandExecutionStatus::InProgress => {
                         eprintln!(
                             "{}",
-                            format!(" in progress{duration_suffix}:").style(self.dimmed)
+                            format!(" выполняется{duration_suffix}:").style(self.dimmed)
                         );
                     }
                 }
@@ -165,12 +165,12 @@ impl EventProcessorWithHumanOutput {
                 changes, status, ..
             } => {
                 let status_text = match status {
-                    PatchApplyStatus::Completed => "completed",
-                    PatchApplyStatus::Failed => "failed",
-                    PatchApplyStatus::Declined => "declined",
-                    PatchApplyStatus::InProgress => "in_progress",
+                    PatchApplyStatus::Completed => "завершено",
+                    PatchApplyStatus::Failed => "ошибка",
+                    PatchApplyStatus::Declined => "отклонено",
+                    PatchApplyStatus::InProgress => "выполняется",
                 };
-                eprintln!("{} {}", "patch:".style(self.bold), status_text);
+                eprintln!("{} {}", "патч:".style(self.bold), status_text);
                 for change in changes {
                     eprintln!("{}", change.path.style(self.dimmed));
                 }
@@ -183,9 +183,9 @@ impl EventProcessorWithHumanOutput {
                 ..
             } => {
                 let status_text = match status {
-                    McpToolCallStatus::Completed => "completed".style(self.green),
-                    McpToolCallStatus::Failed => "failed".style(self.red),
-                    McpToolCallStatus::InProgress => "in_progress".style(self.dimmed),
+                    McpToolCallStatus::Completed => "завершено".style(self.green),
+                    McpToolCallStatus::Failed => "ошибка".style(self.red),
+                    McpToolCallStatus::InProgress => "выполняется".style(self.dimmed),
                 };
                 eprintln!(
                     "{} {} {}",
@@ -198,10 +198,10 @@ impl EventProcessorWithHumanOutput {
                 }
             }
             ThreadItem::WebSearch { query, .. } => {
-                eprintln!("{} {}", "web search:".style(self.bold), query);
+                eprintln!("{} {}", "веб-поиск:".style(self.bold), query);
             }
             ThreadItem::ContextCompaction { .. } => {
-                eprintln!("{}", "context compacted".style(self.dimmed));
+                eprintln!("{}", "контекст сжат".style(self.dimmed));
             }
             _ => {}
         }
@@ -216,12 +216,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         session_configured_event: &SessionConfiguredEvent,
     ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
-        eprintln!("OpenAI Codex v{VERSION} (research preview)\n--------");
+        eprintln!("Lavilas Codex v{VERSION}\n--------");
         for (key, value) in config_summary_entries(config, session_configured_event) {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
         eprintln!("--------");
-        eprintln!("{}\n{}", "user".style(self.cyan), prompt);
+        eprintln!("{}\n{}", "пользователь".style(self.cyan), prompt);
     }
 
     fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus {
@@ -233,7 +233,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     .unwrap_or_default();
                 eprintln!(
                     "{} {}{}",
-                    "warning:".style(self.yellow).style(self.bold),
+                    "предупреждение:".style(self.yellow).style(self.bold),
                     notification.summary,
                     details
                 );
@@ -242,7 +242,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             ServerNotification::Error(notification) => {
                 eprintln!(
                     "{} {}",
-                    "ERROR:".style(self.red).style(self.bold),
+                    "ОШИБКА:".style(self.red).style(self.bold),
                     notification.error
                 );
                 CodexStatus::Running
@@ -250,7 +250,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             ServerNotification::DeprecationNotice(notification) => {
                 eprintln!(
                     "{} {}",
-                    "deprecated:".style(self.yellow).style(self.bold),
+                    "устарело:".style(self.yellow).style(self.bold),
                     notification.summary
                 );
                 if let Some(details) = notification.details {
@@ -261,7 +261,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             ServerNotification::HookStarted(notification) => {
                 eprintln!(
                     "{} {}",
-                    "hook:".style(self.bold),
+                    "хук:".style(self.bold),
                     format!("{:?}", notification.run.event_name).style(self.dimmed)
                 );
                 CodexStatus::Running
@@ -269,7 +269,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             ServerNotification::HookCompleted(notification) => {
                 eprintln!(
                     "{} {} {:?}",
-                    "hook:".style(self.bold),
+                    "хук:".style(self.bold),
                     format!("{:?}", notification.run.event_name).style(self.dimmed),
                     notification.run.status
                 );
@@ -286,7 +286,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             ServerNotification::ModelRerouted(notification) => {
                 eprintln!(
                     "{} {} -> {}",
-                    "model rerouted:".style(self.yellow).style(self.bold),
+                    "модель переключена:".style(self.yellow).style(self.bold),
                     notification.from_model,
                     notification.to_model
                 );
@@ -317,7 +317,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.final_message_rendered = false;
                     self.emit_final_message_on_shutdown = false;
                     if let Some(error) = notification.turn.error {
-                        eprintln!("{} {}", "ERROR:".style(self.red).style(self.bold), error);
+                        eprintln!("{} {}", "ОШИБКА:".style(self.red).style(self.bold), error);
                     }
                     CodexStatus::InitiateShutdown
                 }
@@ -325,7 +325,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.final_message = None;
                     self.final_message_rendered = false;
                     self.emit_final_message_on_shutdown = false;
-                    eprintln!("{}", "turn interrupted".style(self.dimmed));
+                    eprintln!("{}", "ход прерван".style(self.dimmed));
                     CodexStatus::InitiateShutdown
                 }
                 TurnStatus::InProgress => CodexStatus::Running,
@@ -367,7 +367,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     fn process_warning(&mut self, message: String) -> CodexStatus {
         eprintln!(
             "{} {message}",
-            "warning:".style(self.yellow).style(self.bold)
+            "предупреждение:".style(self.yellow).style(self.bold)
         );
         CodexStatus::Running
     }
@@ -408,7 +408,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         {
             eprintln!(
                 "{}\n{}",
-                "codex".style(self.italic).style(self.magenta),
+                "lavilas-codex".style(self.italic).style(self.magenta),
                 message
             );
         }

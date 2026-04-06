@@ -2,20 +2,20 @@
 source: tui/src/bottom_pane/title_setup.rs
 expression: "render_lines(&view, 84)"
 ---
-                                                                                    
-  Configure Terminal Title                                                          
-  Select which items to display in the terminal title.                              
-                                                                                    
-  Type to search                                                                    
+                                                                                     
+  Настройка заголовка терминала                                                       
+  Выберите элементы для отображения в заголовке терминала.                         
+                                                                                     
+  Введите для поиска                                                                 
   >                                                                                 
-› [x] project        Project name (falls back to current directory name)            
-  [x] spinner        Animated task spinner (omitted while idle or when animations…  
-  [x] status         Compact session status text (Ready, Working, Thinking)         
-  [x] thread         Current thread title (omitted until available)                 
-  [ ] app-name       Codex app name                                                 
-  [ ] git-branch     Current Git branch (omitted when unavailable)                  
-  [ ] model          Current model name                                             
-  [ ] task-progress  Latest task progress from update_plan (omitted until availab…  
-                                                                                    
-  my-project ⠋ Working | Investigate flaky test                                     
-  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.
+› [x] project        Название проекта (или текущей директории)                       
+  [x] spinner        Анимированный индикатор задачи (скрывается в простое или без анимации)
+  [x] status         Краткий статус сессии (Готов, В работе, Размышляет)              
+  [x] thread         Текущий заголовок треда (скрывается, пока недоступен)             
+  [ ] app-name       Название приложения                                            
+  [ ] git-branch     Текущая ветка Git (скрывается, если недоступна)                
+  [ ] model          Текущее имя модели                                               
+  [ ] task-progress  Последний прогресс задач из update_plan (скрывается, пока недоступен)
+                                                                                     
+  мой-проект ⠋ В работе | Investigate flaky test                                   
+  ↑↓ — навигация, ←→ — перемещение, пробел — переключение, Enter — сохранить, Esc — отмена

@@ -189,7 +189,8 @@ pub(crate) fn compose_rate_limit_data_many(
                 window
                     .window_minutes
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string())
+                    .map(|label| localize_limit_duration(&label))
+                    .unwrap_or_else(|| "5ч".to_string())
             })
             .map(|label| capitalize_first(&label));
         let secondary_label = snapshot
@@ -199,7 +200,8 @@ pub(crate) fn compose_rate_limit_data_many(
                 window
                     .window_minutes
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string())
+                    .map(|label| localize_limit_duration(&label))
+                    .unwrap_or_else(|| "недельный".to_string())
             })
             .map(|label| capitalize_first(&label));
         let window_count =
@@ -208,7 +210,7 @@ pub(crate) fn compose_rate_limit_data_many(
 
         if show_limit_prefix && !combine_non_codex_single_limit {
             rows.push(StatusRateLimitRow {
-                label: format!("{limit_bucket_label} limit"),
+                label: format!("{limit_bucket_label} лимит"),
                 value: StatusRateLimitValue::Text(String::new()),
             });
         }
@@ -216,14 +218,14 @@ pub(crate) fn compose_rate_limit_data_many(
         if let Some(primary) = snapshot.primary.as_ref() {
             let label = if combine_non_codex_single_limit {
                 format!(
-                    "{} {} limit",
+                    "{} {} лимит",
                     limit_bucket_label,
-                    primary_label.clone().unwrap_or_else(|| "5h".to_string())
+                    primary_label.clone().unwrap_or_else(|| "5ч".to_string())
                 )
             } else {
                 format!(
-                    "{} limit",
-                    primary_label.clone().unwrap_or_else(|| "5h".to_string())
+                    "{} лимит",
+                    primary_label.clone().unwrap_or_else(|| "5ч".to_string())
                 )
             };
             rows.push(StatusRateLimitRow {
@@ -238,18 +240,18 @@ pub(crate) fn compose_rate_limit_data_many(
         if let Some(secondary) = snapshot.secondary.as_ref() {
             let label = if combine_non_codex_single_limit {
                 format!(
-                    "{} {} limit",
+                    "{} {} лимит",
                     limit_bucket_label,
                     secondary_label
                         .clone()
-                        .unwrap_or_else(|| "weekly".to_string())
+                        .unwrap_or_else(|| "недельный".to_string())
                 )
             } else {
                 format!(
-                    "{} limit",
+                    "{} лимит",
                     secondary_label
                         .clone()
-                        .unwrap_or_else(|| "weekly".to_string())
+                        .unwrap_or_else(|| "недельный".to_string())
                 )
             };
             rows.push(StatusRateLimitRow {
@@ -277,6 +279,22 @@ pub(crate) fn compose_rate_limit_data_many(
     }
 }
 
+fn localize_limit_duration(label: &str) -> String {
+    let normalized = label.trim().to_ascii_lowercase();
+    if let Some(hours) = normalized.strip_suffix('h')
+        && hours.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return format!("{hours}ч");
+    }
+
+    match normalized.as_str() {
+        "weekly" => "недельный".to_string(),
+        "monthly" => "месячный".to_string(),
+        "annual" => "годовой".to_string(),
+        _ => label.to_string(),
+    }
+}
+
 /// Renders a fixed-width progress bar from remaining percentage.
 ///
 /// This function expects a remaining value in the `0..=100` range and clamps out-of-range input.
@@ -295,7 +313,7 @@ pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> String
 
 /// Formats a compact textual summary from remaining percentage.
 pub(crate) fn format_status_limit_summary(percent_remaining: f64) -> String {
-    format!("{percent_remaining:.0}% left")
+    format!("{percent_remaining:.0}% осталось")
 }
 
 /// Builds a single `StatusRateLimitRow` for credits when the snapshot indicates
@@ -308,15 +326,15 @@ fn credit_status_row(credits: &CreditsSnapshotDisplay) -> Option<StatusRateLimit
     }
     if credits.unlimited {
         return Some(StatusRateLimitRow {
-            label: "Credits".to_string(),
-            value: StatusRateLimitValue::Text("Unlimited".to_string()),
+            label: "Кредиты".to_string(),
+            value: StatusRateLimitValue::Text("Безлимит".to_string()),
         });
     }
     let balance = credits.balance.as_ref()?;
     let display_balance = format_credit_balance(balance)?;
     Some(StatusRateLimitRow {
-        label: "Credits".to_string(),
-        value: StatusRateLimitValue::Text(format!("{display_balance} credits")),
+        label: "Кредиты".to_string(),
+        value: StatusRateLimitValue::Text(format!("{display_balance} кредитов")),
     })
 }
 
@@ -395,13 +413,13 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "5h limit".to_string(),
-                "Credits".to_string(),
-                "codex-other 5h limit".to_string(),
-                "Credits".to_string(),
+                "5ч лимит".to_string(),
+                "Кредиты".to_string(),
+                "codex-other 5ч лимит".to_string(),
+                "Кредиты".to_string(),
             ]
         );
-        assert_eq!(rows.iter().filter(|row| row.label == "Credits").count(), 2);
+        assert_eq!(rows.iter().filter(|row| row.label == "Кредиты").count(), 2);
     }
 
     #[test]
@@ -431,9 +449,9 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "codex-other limit".to_string(),
-                "1h limit".to_string(),
-                "Weekly limit".to_string(),
+                "codex-other лимит".to_string(),
+                "1ч лимит".to_string(),
+                "Недельный лимит".to_string(),
             ]
         );
     }

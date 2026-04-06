@@ -16,9 +16,9 @@ Buffer {
         "  $ echo hello world                                                            ",
         "                                                                                ",
         "› 1. Yes, proceed (y)                                                           ",
-        "  2. No, and tell Codex what to do differently (esc)                            ",
+        "  2. Нет, и дать другое указание (esc)                            ",
         "                                                                                ",
-        "  Press enter to confirm or esc to cancel                                       ",
+        "  Нажмите enter для подтверждения или esc для отмены                                       ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,

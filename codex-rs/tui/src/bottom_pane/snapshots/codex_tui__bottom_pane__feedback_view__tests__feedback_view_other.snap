@@ -2,8 +2,8 @@
 source: tui/src/bottom_pane/feedback_view.rs
 expression: rendered
 ---
-▌ Tell us more (other)
+▌ Что хотите сообщить?
 ▌
-▌ (optional) Write a short description to help us further
+▌ (необязательно) Поделитесь идеей, замечанием или наблюдением
 
-Press enter to confirm or esc to go back
+Нажмите Enter для подтверждения или Esc для возврата

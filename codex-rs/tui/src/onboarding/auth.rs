@@ -103,7 +103,7 @@ pub(crate) enum SignInOption {
     ApiKey,
 }
 
-const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
+const API_KEY_DISABLED_MESSAGE: &str = "Вход по API-ключу отключен.";
 fn onboarding_request_id() -> codex_app_server_protocol::RequestId {
     codex_app_server_protocol::RequestId::String(Uuid::new_v4().to_string())
 }
@@ -315,11 +315,11 @@ impl AuthModeWidget {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 "  ".into(),
-                "Sign in with ChatGPT to use Codex as part of your paid plan".into(),
+                "Войдите через ChatGPT, чтобы продолжить работу с Lavilas.".into(),
             ]),
             Line::from(vec![
                 "  ".into(),
-                "or connect an API key for usage-based billing".into(),
+                "Или подключите API-ключ с оплатой по фактическому использованию.".into(),
             ]),
             "".into(),
         ];
@@ -354,11 +354,11 @@ impl AuthModeWidget {
         };
 
         let chatgpt_description = if !self.is_chatgpt_login_allowed() {
-            "ChatGPT login is disabled"
+            "Вход через ChatGPT отключен"
         } else {
-            "Usage included with Plus, Pro, Business, and Enterprise plans"
+            "Доступно в тарифах Plus, Pro, Business и Enterprise"
         };
-        let device_code_description = "Sign in from another device with a one-time code";
+        let device_code_description = "Вход с другого устройства по одноразовому коду";
 
         for (idx, option) in self.displayed_sign_in_options().into_iter().enumerate() {
             match option {
@@ -366,7 +366,7 @@ impl AuthModeWidget {
                     lines.extend(create_mode_item(
                         idx,
                         option,
-                        "Sign in with ChatGPT",
+                        "Войти через ChatGPT",
                         chatgpt_description,
                     ));
                 }
@@ -374,7 +374,7 @@ impl AuthModeWidget {
                     lines.extend(create_mode_item(
                         idx,
                         option,
-                        "Sign in with Device Code",
+                        "Войти через код устройства",
                         device_code_description,
                     ));
                 }
@@ -382,8 +382,8 @@ impl AuthModeWidget {
                     lines.extend(create_mode_item(
                         idx,
                         option,
-                        "Provide your own API key",
-                        "Pay for what you use",
+                        "Использовать свой API-ключ",
+                        "Платите только за фактическое использование",
                     ));
                 }
             }
@@ -392,7 +392,7 @@ impl AuthModeWidget {
 
         if !self.is_api_login_allowed() {
             lines.push(
-                "  API key login is disabled by this workspace. Sign in with ChatGPT to continue."
+                "  В этом рабочем пространстве вход по API-ключу отключен. Продолжите через ChatGPT."
                     .dim()
                     .into(),
             );
@@ -401,7 +401,7 @@ impl AuthModeWidget {
         lines.push(
             // AE: Following styles.md, this should probably be Cyan because it's a user input tip.
             //     But leaving this for a future cleanup.
-            "  Press Enter to continue".dim().into(),
+            "  Нажмите Enter, чтобы продолжить".dim().into(),
         );
         if let Some(err) = self.error_message() {
             lines.push("".into());
@@ -419,9 +419,9 @@ impl AuthModeWidget {
             // Schedule a follow-up frame to keep the shimmer animation going.
             self.request_frame
                 .schedule_frame_in(std::time::Duration::from_millis(100));
-            spans.extend(shimmer_spans("Finish signing in via your browser"));
+            spans.extend(shimmer_spans("Завершите вход в браузере"));
         } else {
-            spans.push("Finish signing in via your browser".into());
+            spans.push("Завершите вход в браузере".into());
         }
         let mut lines = vec![spans.into(), "".into()];
 
@@ -429,7 +429,9 @@ impl AuthModeWidget {
         let auth_url = if let SignInState::ChatGptContinueInBrowser(state) = &*sign_in_state
             && !state.auth_url.is_empty()
         {
-            lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
+            lines.push(
+                "  Если ссылка не открылась автоматически, откройте ее вручную для входа:".into(),
+            );
             lines.push("".into());
             lines.push(Line::from(vec![
                 "  ".into(),
@@ -437,8 +439,8 @@ impl AuthModeWidget {
             ]));
             lines.push("".into());
             lines.push(Line::from(vec![
-                "  On a remote or headless machine? Press Esc and choose ".into(),
-                "Sign in with Device Code".cyan(),
+                "  На удаленной или headless-машине нажмите Esc и выберите ".into(),
+                "«Войти через код устройства»".cyan(),
                 ".".into(),
             ]));
             lines.push("".into());
@@ -447,7 +449,7 @@ impl AuthModeWidget {
             None
         };
 
-        lines.push("  Press Esc to cancel".dim().into());
+        lines.push("  Нажмите Esc для отмены".dim().into());
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
@@ -461,28 +463,28 @@ impl AuthModeWidget {
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            "✓ Signed in with your ChatGPT account".fg(Color::Green).into(),
+            "✓ Вход через ChatGPT выполнен".fg(Color::Green).into(),
             "".into(),
-            "  Before you start:".into(),
+            "  Перед началом:".into(),
             "".into(),
-            "  Decide how much autonomy you want to grant Codex".into(),
+            "  Решите, насколько активно помощник может действовать".into(),
             Line::from(vec![
-                "  For more details see the ".into(),
-                "\u{1b}]8;;https://developers.openai.com/codex/security\u{7}Codex docs\u{1b}]8;;\u{7}".underlined(),
+                "  Подробнее: ".into(),
+                "документация Lavilas по безопасности".underlined(),
             ])
             .dim(),
             "".into(),
-            "  Codex can make mistakes".into(),
-            "  Review the code it writes and commands it runs".dim().into(),
+            "  Помощник может ошибаться".into(),
+            "  Проверяйте написанный код и выполняемые команды".dim().into(),
             "".into(),
-            "  Powered by your ChatGPT account".into(),
+            "  Работает через ваш аккаунт ChatGPT".into(),
             Line::from(vec![
-                "  Uses your plan's rate limits and ".into(),
-                "\u{1b}]8;;https://chatgpt.com/#settings\u{7}training data preferences\u{1b}]8;;\u{7}".underlined(),
+                "  Используются лимиты вашего тарифа и ".into(),
+                "\u{1b}]8;;https://chatgpt.com/#settings\u{7}настройки данных для обучения\u{1b}]8;;\u{7}".underlined(),
             ])
             .dim(),
             "".into(),
-            "  Press Enter to continue".fg(Color::Cyan).into(),
+            "  Нажмите Enter, чтобы продолжить".fg(Color::Cyan).into(),
         ];
 
         Paragraph::new(lines)
@@ -491,11 +493,7 @@ impl AuthModeWidget {
     }
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
-        let lines = vec![
-            "✓ Signed in with your ChatGPT account"
-                .fg(Color::Green)
-                .into(),
-        ];
+        let lines = vec!["✓ Вход через ChatGPT выполнен".fg(Color::Green).into()];
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -504,9 +502,9 @@ impl AuthModeWidget {
 
     fn render_api_key_configured(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            "✓ API key configured".fg(Color::Green).into(),
+            "✓ API-ключ настроен".fg(Color::Green).into(),
             "".into(),
-            "  Lavilas Codex will use usage-based billing with your API key.".into(),
+            "  Lavilas будет использовать ваш API-ключ и платить только за фактическое использование.".into(),
         ];
 
         Paragraph::new(lines)
@@ -525,16 +523,16 @@ impl AuthModeWidget {
         let mut intro_lines: Vec<Line> = vec![
             Line::from(vec![
                 "> ".into(),
-                "Use your own API key for usage-based billing".bold(),
+                "Используйте свой API-ключ для оплаты по использованию".bold(),
             ]),
             "".into(),
-            "  Paste or type your API key below. It will be stored locally in auth.json.".into(),
+            "  Вставьте или введите API-ключ ниже. Он будет сохранен локально в auth.json.".into(),
             "".into(),
         ];
         if state.prepopulated_from_env {
-            intro_lines.push("  Detected OPENAI_API_KEY environment variable.".into());
+            intro_lines.push("  Обнаружена переменная окружения OPENAI_API_KEY.".into());
             intro_lines.push(
-                "  Paste a different key if you prefer to use another account."
+                "  Вставьте другой ключ, если хотите использовать другой аккаунт."
                     .dim()
                     .into(),
             );
@@ -545,7 +543,7 @@ impl AuthModeWidget {
             .render(intro_area, buf);
 
         let content_line: Line = if state.value.is_empty() {
-            vec!["Paste or type your API key".dim()].into()
+            vec!["Вставьте или введите API-ключ".dim()].into()
         } else {
             Line::from(state.value.clone())
         };
@@ -553,7 +551,7 @@ impl AuthModeWidget {
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
-                    .title("API key")
+                    .title("API-ключ")
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(Color::Cyan)),
@@ -561,8 +559,8 @@ impl AuthModeWidget {
             .render(input_area, buf);
 
         let mut footer_lines: Vec<Line> = vec![
-            "  Press Enter to save".dim().into(),
-            "  Press Esc to go back".dim().into(),
+            "  Нажмите Enter для сохранения".dim().into(),
+            "  Нажмите Esc, чтобы вернуться".dim().into(),
         ];
         if let Some(error) = self.error_message() {
             footer_lines.push("".into());
@@ -589,7 +587,7 @@ impl AuthModeWidget {
                     KeyCode::Enter => {
                         let trimmed = state.value.trim().to_string();
                         if trimmed.is_empty() {
-                            self.set_error(Some("API key cannot be empty".to_string()));
+                            self.set_error(Some("API-ключ не может быть пустым".to_string()));
                             should_request_frame = true;
                         } else {
                             should_save = Some(trimmed);
@@ -714,16 +712,15 @@ impl AuthModeWidget {
                     *sign_in_state.write().unwrap() = SignInState::ApiKeyConfigured;
                 }
                 Ok(other) => {
-                    *error.write().unwrap() = Some(format!(
-                        "Unexpected account/login/start response: {other:?}"
-                    ));
+                    *error.write().unwrap() =
+                        Some(format!("Неожиданный ответ account/login/start: {other:?}"));
                     *sign_in_state.write().unwrap() = SignInState::ApiKeyEntry(ApiKeyInputState {
                         value: api_key,
                         prepopulated_from_env: false,
                     });
                 }
                 Err(err) => {
-                    *error.write().unwrap() = Some(format!("Failed to save API key: {err}"));
+                    *error.write().unwrap() = Some(format!("Не удалось сохранить API-ключ: {err}"));
                     *sign_in_state.write().unwrap() = SignInState::ApiKeyEntry(ApiKeyInputState {
                         value: api_key,
                         prepopulated_from_env: false,
@@ -781,9 +778,8 @@ impl AuthModeWidget {
                 }
                 Ok(other) => {
                     *sign_in_state.write().unwrap() = SignInState::PickMode;
-                    *error.write().unwrap() = Some(format!(
-                        "Unexpected account/login/start response: {other:?}"
-                    ));
+                    *error.write().unwrap() =
+                        Some(format!("Неожиданный ответ account/login/start: {other:?}"));
                 }
                 Err(err) => {
                     *sign_in_state.write().unwrap() = SignInState::PickMode;

@@ -3,12 +3,12 @@ source: tui/src/cwd_prompt.rs
 expression: terminal.backend()
 ---
 
-Choose working directory to resume this session
+Выберите рабочую папку для этой сессии
 
-  Session = latest cwd recorded in the resumed session                          
-  Current = your current working directory
+  Сессия = последняя папка из сохранённой сессии
+  Текущая папка = ваша текущая рабочая папка
 
-› 1. Use session directory (/Users/example/session)                             
-  2. Use current directory (/Users/example/current)
+› 1. Использовать папку из сессии (/Users/example/session)
+  2. Использовать текущую папку (/Users/example/current)
 
-  Press enter to continue
+  Нажмите Enter чтобы продолжить

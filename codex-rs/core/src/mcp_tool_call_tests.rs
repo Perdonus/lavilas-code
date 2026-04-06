@@ -128,7 +128,7 @@ fn approval_question_text_prepends_safety_reason() {
             "Allow this action?".to_string(),
             Some("This tool may contact an external system."),
         ),
-        "Tool call needs your approval. Reason: This tool may contact an external system."
+        "Вызов инструмента требует подтверждения. Причина: This tool may contact an external system."
     );
 }
 
@@ -294,10 +294,10 @@ fn custom_mcp_tool_question_mentions_server_name() {
         /*question_override*/ None,
     );
 
-    assert_eq!(question.header, "Approve app tool call?");
+    assert_eq!(question.header, "Подтвердить вызов инструмента приложения?");
     assert_eq!(
         question.question,
-        "Allow the custom_server MCP server to run tool \"run_action\"?"
+        "Разрешить MCP-серверу custom_server запустить инструмент \"run_action\"?"
     );
     assert!(
         !question
@@ -324,7 +324,7 @@ fn codex_apps_tool_question_uses_fallback_app_label() {
 
     assert_eq!(
         question.question,
-        "Allow this app to run tool \"run_action\"?"
+        "Разрешить этому приложению запустить инструмент \"run_action\"?"
     );
 }
 
@@ -344,11 +344,11 @@ fn trusted_codex_apps_tool_question_offers_always_allow() {
 
     assert!(options.iter().any(|option| {
         option.label == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION
-            && option.description == "Run the tool and remember this choice for this session."
+            && option.description == "Запустить инструмент и запомнить выбор до конца текущей сессии."
     }));
     assert!(options.iter().any(|option| {
         option.label == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER
-            && option.description == "Run the tool and remember this choice for future tool calls."
+            && option.description == "Запустить инструмент и запомнить выбор для будущих вызовов инструмента."
     }));
     assert_eq!(
         options
@@ -1420,7 +1420,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
     assert_eq!(
         decision,
         Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
-            "Tool call was cancelled because of safety risks: high-risk action".to_string(),
+            "Вызов инструмента был отменён из-за рисков безопасности: high-risk action".to_string(),
         ))
     );
 }
@@ -1489,7 +1489,7 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
     assert_eq!(
         decision,
         Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
-            "Tool call was cancelled because of safety risks: high-risk action".to_string(),
+            "Вызов инструмента был отменён из-за рисков безопасности: high-risk action".to_string(),
         ))
     );
 }
@@ -1558,7 +1558,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
     assert_eq!(
         decision,
         Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
-            "Tool call was cancelled because of safety risks: high-risk action".to_string(),
+            "Вызов инструмента был отменён из-за рисков безопасности: high-risk action".to_string(),
         ))
     );
 }

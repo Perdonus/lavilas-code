@@ -45,6 +45,22 @@ use crate::wrapping::adaptive_wrap_lines;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+const LABEL_MODEL: &str = "Модель";
+const LABEL_MODEL_PROVIDER: &str = "Провайдер модели";
+const LABEL_DIRECTORY: &str = "Каталог";
+const LABEL_PERMISSIONS: &str = "Доступ";
+const LABEL_AGENTS_MD: &str = "AGENTS.md";
+const LABEL_ACCOUNT: &str = "Аккаунт";
+const LABEL_THREAD_NAME: &str = "Название треда";
+const LABEL_SESSION: &str = "Сессия";
+const LABEL_FORKED_FROM: &str = "Форк от";
+const LABEL_COLLABORATION_MODE: &str = "Режим совместной работы";
+const LABEL_TOKEN_USAGE: &str = "Токены";
+const LABEL_CONTEXT_WINDOW: &str = "Контекстное окно";
+const LABEL_LIMITS: &str = "Лимиты";
+const LABEL_NOTICE: &str = "Примечание";
+const LABEL_WARNING: &str = "Предупреждение";
+
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
     percent_remaining: i64,
@@ -273,34 +289,35 @@ impl StatusHistoryCell {
             .iter()
             .find(|(k, _)| *k == "approval")
             .map(|(_, v)| v.clone())
-            .unwrap_or_else(|| "<unknown>".to_string());
+            .unwrap_or_else(|| "<неизвестно>".to_string());
         let sandbox = match config.permissions.sandbox_policy.get() {
-            SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
-            SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
+            SandboxPolicy::DangerFullAccess => "Опасный полный доступ".to_string(),
+            SandboxPolicy::ReadOnly { .. } => "Только чтение".to_string(),
             SandboxPolicy::WorkspaceWrite {
                 network_access: true,
                 ..
-            } => "workspace-write with network access".to_string(),
-            SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
+            } => "Запись в рабочей директории + сеть".to_string(),
+            SandboxPolicy::WorkspaceWrite { .. } => "Запись в рабочей директории".to_string(),
             SandboxPolicy::ExternalSandbox { network_access } => {
                 if matches!(network_access, NetworkAccess::Enabled) {
-                    "external-sandbox (network access enabled)".to_string()
+                    "Внешняя песочница (сеть включена)".to_string()
                 } else {
-                    "external-sandbox".to_string()
+                    "Внешняя песочница".to_string()
                 }
             }
         };
+        let approval = localize_approval_policy(&approval);
         let permissions = if config.permissions.approval_policy.value() == AskForApproval::OnRequest
             && *config.permissions.sandbox_policy.get()
                 == SandboxPolicy::new_workspace_write_policy()
         {
-            "Default".to_string()
+            "По умолчанию".to_string()
         } else if config.permissions.approval_policy.value() == AskForApproval::Never
             && *config.permissions.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
         {
-            "Full Access".to_string()
+            "Полный доступ".to_string()
         } else {
-            format!("Custom ({sandbox}, {approval})")
+            format!("Пользовательский ({sandbox}, {approval})")
         };
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
@@ -361,13 +378,13 @@ impl StatusHistoryCell {
 
         vec![
             Span::from(total_fmt),
-            Span::from(" total "),
+            Span::from(" всего "),
             Span::from(" (").dim(),
             Span::from(input_fmt).dim(),
-            Span::from(" input").dim(),
+            Span::from(" вход").dim(),
             Span::from(" + ").dim(),
             Span::from(output_fmt).dim(),
-            Span::from(" output").dim(),
+            Span::from(" выход").dim(),
             Span::from(")").dim(),
         ]
     }
@@ -379,10 +396,10 @@ impl StatusHistoryCell {
         let window_fmt = format_tokens_compact(context.window);
 
         Some(vec![
-            Span::from(format!("{percent}% left")),
+            Span::from(format!("{percent}% осталось")),
             Span::from(" (").dim(),
             Span::from(used_fmt).dim(),
-            Span::from(" used / ").dim(),
+            Span::from(" использовано / ").dim(),
             Span::from(window_fmt).dim(),
             Span::from(")").dim(),
         ])
@@ -398,11 +415,11 @@ impl StatusHistoryCell {
             StatusRateLimitData::Available(rows_data) => {
                 if rows_data.is_empty() {
                     return vec![formatter.line(
-                        "Limits",
+                        LABEL_LIMITS,
                         vec![if state.refreshing_rate_limits {
-                            Span::from("refreshing cached limits...").dim()
+                            Span::from("обновляю кэш лимитов...").dim()
                         } else {
-                            Span::from("data not available yet").dim()
+                            Span::from("данные пока недоступны").dim()
                         }],
                     )];
                 }
@@ -411,8 +428,8 @@ impl StatusHistoryCell {
                     self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
                 if state.refreshing_rate_limits {
                     lines.push(formatter.line(
-                        "Notice",
-                        vec![Span::from("refreshing limits in background...").dim()],
+                        LABEL_NOTICE,
+                        vec![Span::from("обновляю лимиты в фоне...").dim()],
                     ));
                 }
                 lines
@@ -421,11 +438,11 @@ impl StatusHistoryCell {
                 let mut lines =
                     self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
                 lines.push(formatter.line(
-                    "Warning",
+                    LABEL_WARNING,
                     vec![Span::from(if state.refreshing_rate_limits {
-                        "limits may be stale - refreshing in background..."
+                        "лимиты могут быть устаревшими, обновляю в фоне..."
                     } else {
-                        "limits may be stale - start new turn to refresh."
+                        "лимиты могут быть устаревшими, начните новый запрос для обновления."
                     })
                     .dim()],
                 ));
@@ -433,11 +450,11 @@ impl StatusHistoryCell {
             }
             StatusRateLimitData::Missing => {
                 vec![formatter.line(
-                    "Limits",
+                    LABEL_LIMITS,
                     vec![Span::from(if state.refreshing_rate_limits {
-                        "refreshing limits..."
+                        "обновляю лимиты..."
                     } else {
-                        "data not available yet"
+                        "данные пока недоступны"
                     })
                     .dim()],
                 )]
@@ -469,7 +486,7 @@ impl StatusHistoryCell {
                     let base_line = Line::from(base_spans.clone());
 
                     if let Some(resets_at) = resets_at.as_ref() {
-                        let resets_span = Span::from(format!("(resets {resets_at})")).dim();
+                        let resets_span = Span::from(format!("(сброс {resets_at})")).dim();
                         let mut inline_spans = base_spans.clone();
                         inline_spans.push(Span::from(" ").dim());
                         inline_spans.push(resets_span.clone());
@@ -507,7 +524,7 @@ impl StatusHistoryCell {
         match &state.rate_limits {
             StatusRateLimitData::Available(rows) => {
                 if rows.is_empty() {
-                    push_label(labels, seen, "Limits");
+                    push_label(labels, seen, LABEL_LIMITS);
                 } else {
                     for row in rows {
                         push_label(labels, seen, row.label.as_str());
@@ -518,9 +535,9 @@ impl StatusHistoryCell {
                 for row in rows {
                     push_label(labels, seen, row.label.as_str());
                 }
-                push_label(labels, seen, "Warning");
+                push_label(labels, seen, LABEL_WARNING);
             }
-            StatusRateLimitData::Missing => push_label(labels, seen, "Limits"),
+            StatusRateLimitData::Missing => push_label(labels, seen, LABEL_LIMITS),
         }
     }
 }
@@ -549,14 +566,19 @@ impl HistoryCell for StatusHistoryCell {
                 (None, None) => "ChatGPT".to_string(),
             },
             StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
+                "API-ключ настроен (выполните codex login, если хотите вход через ChatGPT)".to_string()
             }
         });
 
-        let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let mut labels: Vec<String> = vec![
+            LABEL_MODEL,
+            LABEL_DIRECTORY,
+            LABEL_PERMISSIONS,
+            LABEL_AGENTS_MD,
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
         #[expect(clippy::expect_used)]
@@ -566,26 +588,26 @@ impl HistoryCell for StatusHistoryCell {
             .expect("status history rate-limit state poisoned");
 
         if self.model_provider.is_some() {
-            push_label(&mut labels, &mut seen, "Model provider");
+            push_label(&mut labels, &mut seen, LABEL_MODEL_PROVIDER);
         }
         if account_value.is_some() {
-            push_label(&mut labels, &mut seen, "Account");
+            push_label(&mut labels, &mut seen, LABEL_ACCOUNT);
         }
         if thread_name.is_some() {
-            push_label(&mut labels, &mut seen, "Thread name");
+            push_label(&mut labels, &mut seen, LABEL_THREAD_NAME);
         }
         if self.session_id.is_some() {
-            push_label(&mut labels, &mut seen, "Session");
+            push_label(&mut labels, &mut seen, LABEL_SESSION);
         }
         if self.session_id.is_some() && self.forked_from.is_some() {
-            push_label(&mut labels, &mut seen, "Forked from");
+            push_label(&mut labels, &mut seen, LABEL_FORKED_FROM);
         }
         if self.collaboration_mode.is_some() {
-            push_label(&mut labels, &mut seen, "Collaboration mode");
+            push_label(&mut labels, &mut seen, LABEL_COLLABORATION_MODE);
         }
-        push_label(&mut labels, &mut seen, "Token usage");
+        push_label(&mut labels, &mut seen, LABEL_TOKEN_USAGE);
         if self.token_usage.context_window.is_some() {
-            push_label(&mut labels, &mut seen, "Context window");
+            push_label(&mut labels, &mut seen, LABEL_CONTEXT_WINDOW);
         }
 
         self.collect_rate_limit_labels(&rate_limit_state, &mut seen, &mut labels);
@@ -593,16 +615,10 @@ impl HistoryCell for StatusHistoryCell {
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
 
-        let note_first_line = Line::from(vec![
-            Span::from("Visit ").cyan(),
-            "https://chatgpt.com/codex/settings/usage"
-                .cyan()
-                .underlined(),
-            Span::from(" for up-to-date").cyan(),
-        ]);
-        let note_second_line = Line::from(vec![
-            Span::from("information on rate limits and credits").cyan(),
-        ]);
+        let note_first_line =
+            Line::from(vec![Span::from("Лимиты и кредиты отображаются по данным текущего аккаунта.").cyan()]);
+        let note_second_line =
+            Line::from(vec![Span::from("Если значения обновляются не сразу, откройте /status повторно через несколько секунд.").cyan()]);
         let note_lines = adaptive_wrap_lines(
             [note_first_line, note_second_line],
             RtOptions::new(available_inner_width),
@@ -619,41 +635,54 @@ impl HistoryCell for StatusHistoryCell {
 
         let directory_value = format_directory_display(&self.directory, Some(value_width));
 
-        lines.push(formatter.line("Model", model_spans));
+        lines.push(formatter.line(LABEL_MODEL, model_spans));
         if let Some(model_provider) = self.model_provider.as_ref() {
-            lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
+            lines.push(formatter.line(
+                LABEL_MODEL_PROVIDER,
+                vec![Span::from(model_provider.clone())],
+            ));
         }
-        lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
-        lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
-        lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
+        lines.push(formatter.line(LABEL_DIRECTORY, vec![Span::from(directory_value)]));
+        lines.push(formatter.line(
+            LABEL_PERMISSIONS,
+            vec![Span::from(self.permissions.clone())],
+        ));
+        lines.push(formatter.line(
+            LABEL_AGENTS_MD,
+            vec![Span::from(self.agents_summary.clone())],
+        ));
 
         if let Some(account_value) = account_value {
-            lines.push(formatter.line("Account", vec![Span::from(account_value)]));
+            lines.push(formatter.line(LABEL_ACCOUNT, vec![Span::from(account_value)]));
         }
 
         if let Some(thread_name) = thread_name {
-            lines.push(formatter.line("Thread name", vec![Span::from(thread_name.to_string())]));
+            lines
+                .push(formatter.line(LABEL_THREAD_NAME, vec![Span::from(thread_name.to_string())]));
         }
         if let Some(collab_mode) = self.collaboration_mode.as_ref() {
-            lines.push(formatter.line("Collaboration mode", vec![Span::from(collab_mode.clone())]));
+            lines.push(formatter.line(
+                LABEL_COLLABORATION_MODE,
+                vec![Span::from(collab_mode.clone())],
+            ));
         }
         if let Some(session) = self.session_id.as_ref() {
-            lines.push(formatter.line("Session", vec![Span::from(session.clone())]));
+            lines.push(formatter.line(LABEL_SESSION, vec![Span::from(session.clone())]));
         }
         if self.session_id.is_some()
             && let Some(forked_from) = self.forked_from.as_ref()
         {
-            lines.push(formatter.line("Forked from", vec![Span::from(forked_from.clone())]));
+            lines.push(formatter.line(LABEL_FORKED_FROM, vec![Span::from(forked_from.clone())]));
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
         // Hide token usage only for ChatGPT subscribers
         if !matches!(self.account, Some(StatusAccountDisplay::ChatGpt { .. })) {
-            lines.push(formatter.line("Token usage", self.token_usage_spans()));
+            lines.push(formatter.line(LABEL_TOKEN_USAGE, self.token_usage_spans()));
         }
 
         if let Some(spans) = self.context_window_spans() {
-            lines.push(formatter.line("Context window", spans));
+            lines.push(formatter.line(LABEL_CONTEXT_WINDOW, spans));
         }
 
         lines.extend(self.rate_limit_lines(&rate_limit_state, available_inner_width, &formatter));
@@ -687,6 +716,16 @@ fn format_model_provider(config: &Config) -> Option<String> {
         Some(base_url) => format!("{provider_name} - {base_url}"),
         None => provider_name.to_string(),
     })
+}
+
+fn localize_approval_policy(approval: &str) -> String {
+    match approval {
+        "never" => "без подтверждений".to_string(),
+        "on-request" => "по запросу".to_string(),
+        "on-failure" => "после ошибки".to_string(),
+        "untrusted" => "для недоверенных команд".to_string(),
+        _ => approval.to_string(),
+    }
 }
 
 fn sanitize_base_url(raw: &str) -> Option<String> {

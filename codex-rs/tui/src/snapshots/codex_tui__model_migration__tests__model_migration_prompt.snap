@@ -3,16 +3,16 @@ source: tui/src/model_migration.rs
 expression: terminal.backend()
 ---
 
-> Codex just got an upgrade. Introducing gpt-5.1-codex-max.
+> У Lavilas Codex обновление: теперь доступна gpt-5.1-codex-max.
 
-  Upgrade to gpt-5.2-codex for the latest and greatest
-  agentic coding model.
+  Переходите на gpt-5.2-codex: это актуальная флагманская агентная модель для
+  кодинга.
 
-  You can continue using gpt-5.1-codex-mini if you prefer.
+  Если хотите, можно остаться на gpt-5.1-codex-mini.
 
-  Choose how you'd like Codex to proceed.
+  Выберите, как Lavilas Codex должен поступить дальше.
 
-› 1. Try new model
-  2. Use existing model
+› 1. Попробовать новую модель
+  2. Оставить текущую модель
 
-  Use ↑/↓ to move, press enter to confirm
+  Стрелки ↑ и ↓ меняют выбор, Enter подтверждает

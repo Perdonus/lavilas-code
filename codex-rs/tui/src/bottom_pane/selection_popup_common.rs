@@ -8,6 +8,8 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
+use ratatui::widgets::BorderType;
+use ratatui::widgets::Borders;
 use ratatui::widgets::Widget;
 use std::borrow::Cow;
 use unicode_width::UnicodeWidthChar;
@@ -87,6 +89,9 @@ pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
     }
     Block::default()
         .style(user_message_style())
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
         .render(area, buf);
     menu_surface_inset(area)
 }
@@ -156,7 +161,7 @@ fn compute_desc_col(
                         let mut spans = row.name_prefix_spans.clone();
                         spans.push(row.name.clone().into());
                         if row.disabled_reason.is_some() {
-                            spans.push(" (disabled)".dim());
+                            spans.push(" (недоступно)".dim());
                         }
                         Line::from(spans).width()
                     })
@@ -168,7 +173,7 @@ fn compute_desc_col(
                         let mut spans = row.name_prefix_spans.clone();
                         spans.push(row.name.clone().into());
                         if row.disabled_reason.is_some() {
-                            spans.push(" (disabled)".dim());
+                            spans.push(" (недоступно)".dim());
                         }
                         Line::from(spans).width()
                     })
@@ -293,11 +298,15 @@ fn wrap_row_lines(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<L
     wrap_standard_row(row, desc_col, width)
 }
 
+fn selected_row_style() -> Style {
+    Style::default().fg(Color::Black).bg(Color::Cyan).bold()
+}
+
 fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disabled: bool) {
     if selected {
         for line in lines.iter_mut() {
             line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
+                span.style = span.style.patch(selected_row_style());
             });
         }
     }
@@ -414,9 +423,9 @@ fn adjust_start_for_wrapped_selection_visibility(
 /// dims the description.
 fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
     let combined_description = match (&row.description, &row.disabled_reason) {
-        (Some(desc), Some(reason)) => Some(format!("{desc} (disabled: {reason})")),
+        (Some(desc), Some(reason)) => Some(format!("{desc} (недоступно: {reason})")),
         (Some(desc), None) => Some(desc.clone()),
-        (None, Some(reason)) => Some(format!("disabled: {reason}")),
+        (None, Some(reason)) => Some(format!("недоступно: {reason}")),
         (None, None) => None,
     };
 
@@ -470,7 +479,7 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
     }
 
     if row.disabled_reason.is_some() {
-        name_spans.push(" (disabled)".dim());
+        name_spans.push(" (недоступно)".dim());
     }
 
     let this_name_width = name_prefix_width + Line::from(name_spans.clone()).width();
@@ -721,7 +730,7 @@ pub(crate) fn render_rows_single_line(
         let mut full_line = build_full_line(row, desc_col);
         if Some(i) == state.selected_idx && !row.is_disabled {
             full_line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
+                span.style = span.style.patch(selected_row_style());
             });
         }
         if row.is_disabled {
@@ -799,6 +808,48 @@ pub(crate) fn measure_rows_height_with_col_width_mode(
     col_width_mode: ColumnWidthMode,
 ) -> u16 {
     measure_rows_height_inner(rows_all, state, max_results, width, col_width_mode)
+}
+
+pub(crate) fn visible_row_line_counts(
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    width: u16,
+    col_width_mode: ColumnWidthMode,
+) -> Vec<u16> {
+    if rows_all.is_empty() {
+        return Vec::new();
+    }
+
+    let content_width = width.saturating_sub(1).max(1);
+    let visible_items = max_results.min(rows_all.len());
+    let mut start_idx = state.scroll_top.min(rows_all.len().saturating_sub(1));
+    if let Some(sel) = state.selected_idx {
+        if sel < start_idx {
+            start_idx = sel;
+        } else if visible_items > 0 {
+            let bottom = start_idx + visible_items - 1;
+            if sel > bottom {
+                start_idx = sel + 1 - visible_items;
+            }
+        }
+    }
+
+    let desc_col = compute_desc_col(
+        rows_all,
+        start_idx,
+        visible_items,
+        content_width,
+        col_width_mode,
+    );
+
+    rows_all
+        .iter()
+        .enumerate()
+        .skip(start_idx)
+        .take(visible_items)
+        .map(|(_, row)| wrap_row_lines(row, desc_col, content_width).len() as u16)
+        .collect()
 }
 
 fn measure_rows_height_inner(

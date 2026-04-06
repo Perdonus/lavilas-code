@@ -1254,7 +1254,7 @@ async fn review_custom_prompt_escape_navigates_back_then_dismisses() {
     // Verify child view is on top.
     let header = render_bottom_first_row(&chat, /*width*/ 60);
     assert!(
-        header.contains("Custom review instructions"),
+        header.contains("Свои инструкции для ревью"),
         "expected custom prompt view header: {header:?}"
     );
 
@@ -1262,7 +1262,7 @@ async fn review_custom_prompt_escape_navigates_back_then_dismisses() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     let header = render_bottom_first_row(&chat, /*width*/ 60);
     assert!(
-        header.contains("Select a review preset"),
+        header.contains("Выберите режим ревью"),
         "expected to return to parent review popup: {header:?}"
     );
 
@@ -1290,7 +1290,7 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
     // Verify child view header.
     let header = render_bottom_first_row(&chat, /*width*/ 60);
     assert!(
-        header.contains("Select a base branch"),
+        header.contains("Выберите базовую ветку"),
         "expected branch picker header: {header:?}"
     );
 
@@ -1298,7 +1298,7 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     let header = render_bottom_first_row(&chat, /*width*/ 60);
     assert!(
-        header.contains("Select a review preset"),
+        header.contains("Выберите режим ревью"),
         "expected to return to parent review popup: {header:?}"
     );
 

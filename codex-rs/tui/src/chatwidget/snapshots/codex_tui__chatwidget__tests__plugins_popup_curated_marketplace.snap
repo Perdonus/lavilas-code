@@ -2,15 +2,15 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Plugins
-  Browse plugins from available marketplaces.
-  Installed 1 of 4 available plugins.
-  Using cached marketplace data: remote sync timed out
+  Плагины
+  Просматривайте плагины из доступных маркетплейсов.
+  Установлено 1 из 4 доступных плагинов.
+  Показываю кэшированные данные маркетплейса: remote sync timed out
 
-  Type to search plugins
-› Alpha Sync          Installed · Disabled   Press Enter to view plugin details.
-  Bravo Search        Available            · ChatGPT Marketplace · Search docs and tickets.
-  Hidden Repo Plugin  Available            · Repo Marketplace · Should not be shown in /plugins.
-  Starter             Available by default · ChatGPT Marketplace · Included by default.
+  Начните вводить для поиска по плагинам
+› Alpha Sync          Установлен · Отключен   Enter открывает карточку плагина.
+  Bravo Search        Доступен               · ChatGPT Marketplace · Search docs and tickets.
+  Hidden Repo Plugin  Доступен               · Repo Marketplace · Should not be shown in /plugins.
+  Starter             Доступен по умолчанию  · ChatGPT Marketplace · Included by default.
 
-  Press esc to close.
+  Esc закрывает окно.

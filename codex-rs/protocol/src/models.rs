@@ -792,7 +792,7 @@ fn local_image_error_placeholder(
 ) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Codex could not read the local image at `{}`: {}",
+            "Lavilas Codex не смог прочитать локальное изображение `{}`: {}",
             path.display(),
             error
         ),
@@ -816,7 +816,7 @@ pub fn image_close_tag_text() -> String {
 }
 
 pub fn local_image_label_text(label_number: usize) -> String {
-    format!("[Image #{label_number}]")
+    format!("[Изображение #{label_number}]")
 }
 
 pub fn local_image_open_tag_text(label_number: usize) -> String {
@@ -847,7 +847,7 @@ fn invalid_image_error_placeholder(
 ) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Image located at `{}` is invalid: {}",
+            "Изображение по пути `{}` недействительно: {}",
             path.display(),
             error
         ),
@@ -857,7 +857,7 @@ fn invalid_image_error_placeholder(
 fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Codex cannot attach image at `{}`: unsupported image `{}`.",
+            "Lavilas Codex не может прикрепить изображение `{}`: неподдерживаемый формат `{}`.",
             path.display(),
             mime
         ),
@@ -2721,7 +2721,7 @@ mod tests {
                 match &content[0] {
                     ContentItem::InputText { text } => {
                         assert!(
-                            text.contains("unsupported image `application/json`"),
+                            text.contains("неподдерживаемый формат `application/json`"),
                             "placeholder should mention unsupported image MIME: {text}"
                         );
                         assert!(
@@ -2756,7 +2756,7 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 let expected = format!(
-                    "Codex cannot attach image at `{}`: unsupported image `image/svg+xml`.",
+                    "Lavilas Codex не может прикрепить изображение `{}`: неподдерживаемый формат `image/svg+xml`.",
                     svg_path.display()
                 );
                 match &content[0] {

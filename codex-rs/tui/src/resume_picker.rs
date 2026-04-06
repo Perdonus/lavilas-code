@@ -57,7 +57,7 @@ impl SessionTarget {
         self.path
             .as_ref()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| format!("thread {}", self.thread_id))
+            .unwrap_or_else(|| format!("тред {}", self.thread_id))
     }
 }
 
@@ -78,15 +78,15 @@ pub enum SessionPickerAction {
 impl SessionPickerAction {
     fn title(self) -> &'static str {
         match self {
-            SessionPickerAction::Resume => "Resume a previous session",
-            SessionPickerAction::Fork => "Fork a previous session",
+            SessionPickerAction::Resume => "Продолжить предыдущую сессию",
+            SessionPickerAction::Fork => "Создать ответвление",
         }
     }
 
     fn action_label(self) -> &'static str {
         match self {
-            SessionPickerAction::Resume => "resume",
-            SessionPickerAction::Fork => "fork",
+            SessionPickerAction::Resume => "продолжить",
+            SessionPickerAction::Fork => "создать ветку",
         }
     }
 
@@ -395,8 +395,8 @@ fn spawn_app_server_page_loader(
 /// Returns the human-readable column header for the given sort key.
 fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
     match sort_key {
-        ThreadSortKey::CreatedAt => "Created at",
-        ThreadSortKey::UpdatedAt => "Updated at",
+        ThreadSortKey::CreatedAt => "Дата создания",
+        ThreadSortKey::UpdatedAt => "Дата обновления",
     }
 }
 
@@ -642,10 +642,10 @@ impl PickerState {
                     }
                     self.inline_error = Some(match path {
                         Some(path) => {
-                            format!("Failed to read session metadata from {}", path.display())
+                            format!("Не удалось прочитать метаданные сессии из {}", path.display())
                         }
                         None => {
-                            String::from("Failed to read session metadata from selected session")
+                            String::from("Не удалось прочитать метаданные выбранной сессии")
                         }
                     });
                     self.request_frame();
@@ -1074,7 +1074,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| String::from("(no message yet)"));
+        .unwrap_or_else(|| String::from("(сообщений пока нет)"));
 
     Row {
         path: Some(item.path.clone()),
@@ -1100,7 +1100,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
     Some(Row {
         path: thread.path,
         preview: if preview.is_empty() {
-            String::from("(no message yet)")
+            String::from("(сообщений пока нет)")
         } else {
             preview.to_string()
         },
@@ -1176,7 +1176,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         let header_line: Line = vec![
             state.action.title().bold().cyan(),
             "  ".into(),
-            "Sort:".dim(),
+            "Сортировка:".dim(),
             " ".into(),
             sort_key_label(state.sort_key).magenta(),
         ]
@@ -1196,21 +1196,21 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         let action_label = state.action.action_label();
         let hint_line: Line = vec![
             key_hint::plain(KeyCode::Enter).into(),
-            format!(" to {action_label} ").dim(),
+            format!(" чтобы {action_label} ").dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Esc).into(),
-            " to start new ".dim(),
+            " чтобы начать новую ".dim(),
             "    ".dim(),
             key_hint::ctrl(KeyCode::Char('c')).into(),
-            " to quit ".dim(),
+            " чтобы выйти ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Tab).into(),
-            " to toggle sort ".dim(),
+            " чтобы переключить сортировку ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Up).into(),
             "/".dim(),
             key_hint::plain(KeyCode::Down).into(),
-            " to browse".dim(),
+            " для прокрутки".dim(),
         ]
         .into();
         frame.render_widget_ref(hint_line, hint);
@@ -1222,9 +1222,9 @@ fn search_line(state: &PickerState) -> Line<'_> {
         return Line::from(error.red());
     }
     if state.query.is_empty() {
-        return Line::from("Type to search".dim());
+        return Line::from("Введите запрос".dim());
     }
-    Line::from(format!("Search: {}", state.query))
+    Line::from(format!("Поиск: {}", state.query))
 }
 
 fn render_list(
@@ -1354,7 +1354,7 @@ fn render_list(
     }
 
     if state.pagination.loading.is_pending() && y < area.y.saturating_add(area.height) {
-        let loading_line: Line = vec!["  ".into(), "Loading older sessions…".italic().dim()].into();
+        let loading_line: Line = vec!["  ".into(), "Загрузка более ранних сессий…".italic().dim()].into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(loading_line, rect);
     }
@@ -1365,60 +1365,59 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
         if state.search_state.is_active()
             || (state.pagination.loading.is_pending() && state.pagination.next_cursor.is_some())
         {
-            return vec!["Searching…".italic().dim()].into();
+            return vec!["Поиск…".italic().dim()].into();
         }
         if state.pagination.reached_scan_cap {
             let msg = format!(
-                "Search scanned first {} sessions; more may exist",
+                "Поиск просмотрел первые {} сессий; возможно, есть ещё",
                 state.pagination.num_scanned_files
             );
             return vec![Span::from(msg).italic().dim()].into();
         }
-        return vec!["No results for your search".italic().dim()].into();
+        return vec!["По вашему запросу ничего не найдено".italic().dim()].into();
     }
 
     if state.pagination.loading.is_pending() {
         if state.all_rows.is_empty() && state.pagination.num_scanned_files == 0 {
-            return vec!["Loading sessions…".italic().dim()].into();
+            return vec!["Загрузка сессий…".italic().dim()].into();
         }
-        return vec!["Loading older sessions…".italic().dim()].into();
+        return vec!["Загрузка более ранних сессий…".italic().dim()].into();
     }
 
-    vec!["No sessions yet".italic().dim()].into()
+    vec!["Сессий пока нет".italic().dim()].into()
+}
+
+fn pluralized_time_unit(value: i64, forms: (&'static str, &'static str, &'static str)) -> String {
+    let normalized = value.max(0);
+    let rem100 = normalized % 100;
+    let rem10 = normalized % 10;
+    let form = if (11..=14).contains(&rem100) {
+        forms.2
+    } else if rem10 == 1 {
+        forms.0
+    } else if (2..=4).contains(&rem10) {
+        forms.1
+    } else {
+        forms.2
+    };
+    format!("{normalized} {form} назад")
 }
 
 fn human_time_ago(ts: DateTime<Utc>) -> String {
     let now = Utc::now();
     let delta = now - ts;
-    let secs = delta.num_seconds();
+    let secs = delta.num_seconds().max(0);
     if secs < 60 {
-        let n = secs.max(0);
-        if n == 1 {
-            format!("{n} second ago")
-        } else {
-            format!("{n} seconds ago")
-        }
+        pluralized_time_unit(secs, ("секунду", "секунды", "секунд"))
     } else if secs < 60 * 60 {
-        let m = secs / 60;
-        if m == 1 {
-            format!("{m} minute ago")
-        } else {
-            format!("{m} minutes ago")
-        }
+        let mins = secs / 60;
+        pluralized_time_unit(mins, ("минуту", "минуты", "минут"))
     } else if secs < 60 * 60 * 24 {
-        let h = secs / 3600;
-        if h == 1 {
-            format!("{h} hour ago")
-        } else {
-            format!("{h} hours ago")
-        }
+        let hours = secs / 3600;
+        pluralized_time_unit(hours, ("час", "часа", "часов"))
     } else {
-        let d = secs / (60 * 60 * 24);
-        if d == 1 {
-            format!("{d} day ago")
-        } else {
-            format!("{d} days ago")
-        }
+        let days = secs / (60 * 60 * 24);
+        pluralized_time_unit(days, ("день", "дня", "дней"))
     }
 }
 
@@ -1452,7 +1451,7 @@ fn render_column_headers(
     if visibility.show_created {
         let label = format!(
             "{text:<width$}",
-            text = "Created at",
+            text = "Создано",
             width = metrics.max_created_width
         );
         spans.push(Span::from(label).bold());
@@ -1461,7 +1460,7 @@ fn render_column_headers(
     if visibility.show_updated {
         let label = format!(
             "{text:<width$}",
-            text = "Updated at",
+            text = "Обновлено",
             width = metrics.max_updated_width
         );
         spans.push(Span::from(label).bold());
@@ -1470,7 +1469,7 @@ fn render_column_headers(
     if visibility.show_branch {
         let label = format!(
             "{text:<width$}",
-            text = "Branch",
+            text = "Ветка",
             width = metrics.max_branch_width
         );
         spans.push(Span::from(label).bold());
@@ -1479,13 +1478,13 @@ fn render_column_headers(
     if visibility.show_cwd {
         let label = format!(
             "{text:<width$}",
-            text = "CWD",
+            text = "Каталог",
             width = metrics.max_cwd_width
         );
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
-    spans.push("Conversation".bold());
+    spans.push("Диалог".bold());
     frame.render_widget_ref(Line::from(spans), area);
 }
 
@@ -1536,11 +1535,11 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     }
 
     let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
-    let mut max_created_width = UnicodeWidthStr::width("Created at");
-    let mut max_updated_width = UnicodeWidthStr::width("Updated at");
-    let mut max_branch_width = UnicodeWidthStr::width("Branch");
+    let mut max_created_width = UnicodeWidthStr::width("Создано");
+    let mut max_updated_width = UnicodeWidthStr::width("Обновлено");
+    let mut max_branch_width = UnicodeWidthStr::width("Ветка");
     let mut max_cwd_width = if include_cwd {
-        UnicodeWidthStr::width("CWD")
+        UnicodeWidthStr::width("Каталог")
     } else {
         0
     };
@@ -2005,7 +2004,7 @@ mod tests {
             SessionPickerAction::Resume,
         );
         state.inline_error = Some(String::from(
-            "Failed to read session metadata from /tmp/missing.jsonl",
+            "Не удалось прочитать метаданные сессии из /tmp/missing.jsonl",
         ));
 
         let width: u16 = 80;
@@ -2163,9 +2162,9 @@ mod tests {
     //             Line::from(vec![
     //                 "Resume a previous session".bold().cyan(),
     //                 "  ".into(),
-    //                 "Sort:".dim(),
+    //                 "Сортировка:".dim(),
     //                 " ".into(),
-    //                 "Created at".magenta(),
+    //                 "Дата создания".magenta(),
     //             ]),
     //             header,
     //         );
@@ -2609,7 +2608,7 @@ mod tests {
         assert_eq!(
             state.inline_error,
             Some(String::from(
-                "Failed to read session metadata from /tmp/missing.jsonl"
+                "Не удалось прочитать метаданные сессии из /tmp/missing.jsonl"
             ))
         );
     }

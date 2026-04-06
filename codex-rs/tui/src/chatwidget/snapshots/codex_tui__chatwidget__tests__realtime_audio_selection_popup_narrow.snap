@@ -2,10 +2,15 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Settings
-  Configure settings for Codex.
+  Голос и звук
+  Настройте микрофон и вывод для голосового режима.
 
-› 1. Microphone  Current: System default
-  2. Speaker     Current: System default
+  Найти настройку звука
+  ← Назад в настройки  Вернуться к общим настройкам
+                       модели, профилей и команд.
+› Микрофон            Сейчас используется: По
+                       умолчанию в системе
+  Вывод звука         Сейчас используется: По
+                       умолчанию в системе
 
-  Press enter to confirm or esc to go back
+  Нажмите enter для подтверждения или esc для возврата

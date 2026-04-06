@@ -46,14 +46,14 @@ impl WidgetRef for &TrustDirectoryWidget {
 
         column.push(Line::from(vec![
             "> ".into(),
-            "You are in ".bold(),
+            "Текущая директория: ".bold(),
             self.cwd.to_string_lossy().to_string().into(),
         ]));
         column.push("");
 
         column.push(
             Paragraph::new(
-                "Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.".to_string(),
+                "Вы доверяете содержимому этой директории? Работа с недоверенным кодом повышает риск вредоносных инструкций для модели.".to_string(),
             )
                 .wrap(Wrap { trim: true })
                 .inset(Insets::tlbr(/*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0)),
@@ -61,8 +61,8 @@ impl WidgetRef for &TrustDirectoryWidget {
         column.push("");
 
         let options: Vec<(&str, TrustDirectorySelection)> = vec![
-            ("Yes, continue", TrustDirectorySelection::Trust),
-            ("No, quit", TrustDirectorySelection::Quit),
+            ("Да, продолжить", TrustDirectorySelection::Trust),
+            ("Нет, выйти", TrustDirectorySelection::Quit),
         ];
 
         for (idx, (text, selection)) in options.iter().enumerate() {
@@ -89,12 +89,12 @@ impl WidgetRef for &TrustDirectoryWidget {
 
         column.push(
             Line::from(vec![
-                "Press ".dim(),
+                "Нажмите ".dim(),
                 key_hint::plain(KeyCode::Enter).into(),
                 if self.show_windows_create_sandbox_hint {
-                    " to continue and create a sandbox...".dim()
+                    " чтобы продолжить и создать песочницу...".dim()
                 } else {
-                    " to continue".dim()
+                    " чтобы продолжить".dim()
                 },
             ])
             .inset(Insets::tlbr(
@@ -146,7 +146,10 @@ impl TrustDirectoryWidget {
             resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
         if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Trusted) {
             tracing::error!("Failed to set project trusted: {e:?}");
-            self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
+            self.error = Some(format!(
+                "Не удалось установить доверие для {}: {e}",
+                target.display()
+            ));
         }
 
         self.selection = Some(TrustDirectorySelection::Trust);

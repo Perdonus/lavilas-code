@@ -12,7 +12,6 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
@@ -23,13 +22,11 @@ use super::bottom_pane_view::BottomPaneView;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
+use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::render_rows;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
-use crate::render::Insets;
-use crate::render::RectExt as _;
-use crate::style::user_message_style;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 
@@ -119,19 +116,19 @@ impl AppLinkView {
             AppLinkScreen::Link => {
                 if self.is_installed {
                     vec![
-                        "Manage on ChatGPT",
+                        "Открыть страницу приложения",
                         if self.is_enabled {
-                            "Disable app"
+                            "Отключить приложение"
                         } else {
-                            "Enable app"
+                            "Включить приложение"
                         },
-                        "Back",
+                        "Назад",
                     ]
                 } else {
-                    vec!["Install on ChatGPT", "Back"]
+                    vec!["Установить приложение", "Назад"]
                 }
             }
-            AppLinkScreen::InstallConfirmation => vec!["I already Installed it", "Back"],
+            AppLinkScreen::InstallConfirmation => vec!["Уже установил", "Назад"],
         }
     }
 
@@ -280,7 +277,10 @@ impl AppLinkView {
             lines.push(Line::from(""));
         }
         if self.is_installed {
-            for line in wrap("Use $ to insert this app into the prompt.", usable_width) {
+            for line in wrap(
+                "Нажмите $ чтобы вставить это приложение в запрос.",
+                usable_width,
+            ) {
                 lines.push(Line::from(line.into_owned()));
             }
             lines.push(Line::from(""));
@@ -292,14 +292,14 @@ impl AppLinkView {
                 lines.push(Line::from(line.into_owned()));
             }
             for line in wrap(
-                "Newly installed apps can take a few minutes to appear in /apps.",
+                "Новые приложения появляются в разделе /apps в течение нескольких минут.",
                 usable_width,
             ) {
                 lines.push(Line::from(line.into_owned()));
             }
             if !self.is_installed {
                 for line in wrap(
-                    "After installed, use $ to insert this app into the prompt.",
+                    "После установки снова нажмите $ чтобы добавить приложение в запрос.",
                     usable_width,
                 ) {
                     lines.push(Line::from(line.into_owned()));
@@ -315,24 +315,24 @@ impl AppLinkView {
         let usable_width = width.max(1) as usize;
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        lines.push(Line::from("Finish App Setup".bold()));
+        lines.push(Line::from("Завершите настройку приложения".bold()));
         lines.push(Line::from(""));
 
         for line in wrap(
-            "Complete app setup on ChatGPT in the browser window that just opened.",
+            "Завершите настройку в открывшемся окне браузера и вернитесь сюда, когда всё будет готово.",
             usable_width,
         ) {
             lines.push(Line::from(line.into_owned()));
         }
         for line in wrap(
-            "Sign in there if needed, then return here and select \"I already Installed it\".",
+            "Если нужно, выполните вход там и после завершения нажмите «Уже установил».",
             usable_width,
         ) {
             lines.push(Line::from(line.into_owned()));
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(vec!["Setup URL:".dim()]));
+        lines.push(Line::from(vec!["URL настройки:".dim()]));
         let url_line = Line::from(vec![self.url.clone().cyan().underlined()]);
         lines.extend(adaptive_wrap_lines(
             vec![url_line],
@@ -374,17 +374,17 @@ impl AppLinkView {
 
     fn hint_line(&self) -> Line<'static> {
         Line::from(vec![
-            "Use ".into(),
+            "Нажмите ".into(),
             key_hint::plain(KeyCode::Tab).into(),
             " / ".into(),
             key_hint::plain(KeyCode::Up).into(),
             " ".into(),
             key_hint::plain(KeyCode::Down).into(),
-            " to move, ".into(),
+            " чтобы перемещаться, ".into(),
             key_hint::plain(KeyCode::Enter).into(),
-            " to select, ".into(),
+            " чтобы выбрать, ".into(),
             key_hint::plain(KeyCode::Esc).into(),
-            " to close".into(),
+            " чтобы закрыть".into(),
         ])
     }
 }
@@ -492,10 +492,7 @@ impl crate::render::renderable::Renderable for AppLinkView {
         if area.height == 0 || area.width == 0 {
             return;
         }
-
-        Block::default()
-            .style(user_message_style())
-            .render(area, buf);
+        let content_area = render_menu_surface(area, buf);
 
         let actions_height = self.action_rows_height(area.width.saturating_sub(4));
         let [content_area, actions_area, hint_area] = Layout::vertical([
@@ -503,9 +500,9 @@ impl crate::render::renderable::Renderable for AppLinkView {
             Constraint::Length(actions_height),
             Constraint::Length(1),
         ])
-        .areas(area);
+        .areas(content_area);
 
-        let inner = content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2));
+        let inner = content_area;
         let content_width = inner.width.max(1);
         let lines = self.content_lines(content_width);
         Paragraph::new(lines)
@@ -527,7 +524,7 @@ impl crate::render::renderable::Renderable for AppLinkView {
                 &action_rows,
                 &action_state,
                 action_rows.len().max(1),
-                "No actions",
+                "Нет действий",
             );
         }
 
@@ -604,7 +601,7 @@ mod tests {
 
         assert_eq!(
             view.action_labels(),
-            vec!["Manage on ChatGPT", "Disable app", "Back"]
+            vec!["Открыть страницу приложения", "Отключить приложение", "Назад"]
         );
     }
 
@@ -641,7 +638,7 @@ mod tests {
 
         assert_eq!(
             view.action_labels(),
-            vec!["Manage on ChatGPT", "Enable app", "Back"]
+            vec!["Открыть страницу приложения", "Включить приложение", "Назад"]
         );
     }
 

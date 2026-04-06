@@ -2,7 +2,7 @@
 source: tui/src/status_indicator_widget.rs
 expression: terminal.backend()
 ---
-"• Working (0s • esc to interrupt)                                               "
+"• Выполняю (0s • esc чтобы прервать)                                               "
 "                                                                                "
 " ↳ first                                                                        "
 " ↳ second                                                                       "

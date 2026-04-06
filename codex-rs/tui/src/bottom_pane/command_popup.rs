@@ -1,12 +1,18 @@
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
+use super::selection_popup_common::ColumnWidthMode;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+use super::selection_popup_common::visible_row_line_counts;
 use super::slash_commands;
+use crate::bottom_pane::prompt_args::command_prefix;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
@@ -72,15 +78,15 @@ impl CommandPopup {
     }
 
     /// Update the filter string based on the current composer text. The text
-    /// passed in is expected to start with a leading '/'. Everything after the
-    /// *first* '/' on the *first* line becomes the active filter that is used
+    /// passed in is expected to start with the configured command prefix. Everything after
+    /// the first prefix character on the first line becomes the active filter that is used
     /// to narrow down the list of available commands.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
 
-        if let Some(stripped) = first_line.strip_prefix('/') {
+        if let Some(stripped) = first_line.strip_prefix(command_prefix()) {
             // Extract the *first* token (sequence of non-whitespace
-            // characters) after the slash so that `/clear something` still
+            // characters) after the prefix so that `/clear something` still
             // shows the help for `/clear`.
             let token = stripped.trim_start();
             let cmd_token = token.split_whitespace().next().unwrap_or("");
@@ -89,7 +95,7 @@ impl CommandPopup {
             // lower-case for now but this may change in the future).
             self.command_filter = cmd_token.to_string();
         } else {
-            // The composer no longer starts with '/'. Reset the filter so the
+            // The composer no longer starts with the configured prefix. Reset the filter so the
             // popup shows the *full* command list if it is still displayed
             // for some reason.
             self.command_filter.clear();
@@ -111,9 +117,39 @@ impl CommandPopup {
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
-    /// Compute exact/prefix matches over built-in commands and user prompts,
-    /// paired with optional highlight indices. Preserves the original
-    /// presentation order for built-ins and prompts.
+    /// Build the display label used in popup rows:
+    /// canonical English key first, then discoverable aliases in parentheses.
+    fn display_name(cmd: SlashCommand) -> String {
+        let aliases = cmd.popup_aliases();
+        if aliases.is_empty() {
+            cmd.command().to_string()
+        } else {
+            format!("{} ({})", cmd.command(), aliases.join(", "))
+        }
+    }
+
+    /// Char offset of an alias inside [`Self::display_name`].
+    fn alias_offset_chars(cmd: SlashCommand, alias_index: usize) -> usize {
+        let mut offset = cmd.command().chars().count() + 2; // " ("
+        for alias in cmd.popup_aliases().iter().take(alias_index) {
+            offset += alias.chars().count();
+            offset += 2; // ", "
+        }
+        offset
+    }
+
+    fn indices_for(offset: usize, filter_chars: usize) -> Option<Vec<usize>> {
+        Some((offset..offset + filter_chars).collect())
+    }
+
+    /// Compute exact/prefix matches over canonical command keys and aliases.
+    ///
+    /// Priority order keeps canonical keys primary while still making aliases
+    /// discoverable:
+    /// 1) canonical exact
+    /// 2) canonical prefix
+    /// 3) alias exact
+    /// 4) alias prefix
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>)> {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
@@ -129,37 +165,58 @@ impl CommandPopup {
 
         let filter_lower = filter.to_lowercase();
         let filter_chars = filter.chars().count();
-        let mut exact: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
-        let mut prefix: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
-        let indices_for = |offset| Some((offset..offset + filter_chars).collect());
 
-        let mut push_match =
-            |item: CommandItem, display: &str, name: Option<&str>, name_offset: usize| {
-                let display_lower = display.to_lowercase();
-                let name_lower = name.map(str::to_lowercase);
-                let display_exact = display_lower == filter_lower;
-                let name_exact = name_lower.as_deref() == Some(filter_lower.as_str());
-                if display_exact || name_exact {
-                    let offset = if display_exact { 0 } else { name_offset };
-                    exact.push((item, indices_for(offset)));
-                    return;
-                }
-                let display_prefix = display_lower.starts_with(&filter_lower);
-                let name_prefix = name_lower
-                    .as_ref()
-                    .is_some_and(|name| name.starts_with(&filter_lower));
-                if display_prefix || name_prefix {
-                    let offset = if display_prefix { 0 } else { name_offset };
-                    prefix.push((item, indices_for(offset)));
-                }
-            };
+        let mut exact_canonical: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
+        let mut prefix_canonical: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
+        let mut exact_alias: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
+        let mut prefix_alias: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
 
         for (_, cmd) in self.builtins.iter() {
-            push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
+            let item = CommandItem::Builtin(*cmd);
+            let canonical = cmd.command();
+            let canonical_lower = canonical.to_lowercase();
+
+            if canonical_lower == filter_lower {
+                exact_canonical.push((item, Self::indices_for(0, filter_chars)));
+                continue;
+            }
+
+            if canonical_lower.starts_with(&filter_lower) {
+                prefix_canonical.push((item, Self::indices_for(0, filter_chars)));
+                continue;
+            }
+
+            let mut matched_exact_alias: Option<Vec<usize>> = None;
+            let mut matched_prefix_alias: Option<Vec<usize>> = None;
+
+            for (alias_index, alias) in cmd.popup_aliases().iter().enumerate() {
+                let alias_lower = alias.to_lowercase();
+                let alias_offset = Self::alias_offset_chars(*cmd, alias_index);
+
+                if alias_lower == filter_lower {
+                    matched_exact_alias = Self::indices_for(alias_offset, filter_chars);
+                    break;
+                }
+
+                if matched_prefix_alias.is_none() && alias_lower.starts_with(&filter_lower) {
+                    matched_prefix_alias = Self::indices_for(alias_offset, filter_chars);
+                }
+            }
+
+            if let Some(indices) = matched_exact_alias {
+                exact_alias.push((item, Some(indices)));
+                continue;
+            }
+
+            if let Some(indices) = matched_prefix_alias {
+                prefix_alias.push((item, Some(indices)));
+            }
         }
 
-        out.extend(exact);
-        out.extend(prefix);
+        out.extend(exact_canonical);
+        out.extend(prefix_canonical);
+        out.extend(exact_alias);
+        out.extend(prefix_alias);
         out
     }
 
@@ -175,7 +232,7 @@ impl CommandPopup {
             .into_iter()
             .map(|(item, indices)| {
                 let CommandItem::Builtin(cmd) = item;
-                let name = format!("/{}", cmd.command());
+                let name = format!("{}{}", command_prefix(), Self::display_name(cmd));
                 let description = cmd.description().to_string();
                 GenericDisplayRow {
                     name,
@@ -214,6 +271,93 @@ impl CommandPopup {
             .selected_idx
             .and_then(|idx| matches.get(idx).copied())
     }
+
+    fn first_visible_index(&self, total_rows: usize) -> usize {
+        let visible_items = MAX_POPUP_ROWS.min(total_rows);
+        let mut start_idx = self.state.scroll_top.min(total_rows.saturating_sub(1));
+        if let Some(sel) = self.state.selected_idx {
+            if sel < start_idx {
+                start_idx = sel;
+            } else if visible_items > 0 {
+                let bottom = start_idx + visible_items - 1;
+                if sel > bottom {
+                    start_idx = sel + 1 - visible_items;
+                }
+            }
+        }
+        start_idx
+    }
+
+    fn point_in_rect(rect: Rect, column: u16, row: u16) -> bool {
+        column >= rect.x
+            && column < rect.x.saturating_add(rect.width)
+            && row >= rect.y
+            && row < rect.y.saturating_add(rect.height)
+    }
+
+    pub(crate) fn handle_mouse_event(
+        &mut self,
+        area: Rect,
+        mouse_event: MouseEvent,
+    ) -> Option<CommandItem> {
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+
+        match mouse_event.kind {
+            MouseEventKind::ScrollUp
+                if Self::point_in_rect(area, mouse_event.column, mouse_event.row) =>
+            {
+                self.move_up();
+                None
+            }
+            MouseEventKind::ScrollDown
+                if Self::point_in_rect(area, mouse_event.column, mouse_event.row) =>
+            {
+                self.move_down();
+                None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let list_area = area.inset(Insets::tlbr(
+                    /*top*/ 0,
+                    /*left*/ 2,
+                    /*bottom*/ 0,
+                    /*right*/ 0,
+                ));
+                if !Self::point_in_rect(list_area, mouse_event.column, mouse_event.row) {
+                    return None;
+                }
+
+                let rows = self.rows_from_matches(self.filtered());
+                if rows.is_empty() {
+                    return None;
+                }
+
+                let start_idx = self.first_visible_index(rows.len());
+                let visible_row_heights = visible_row_line_counts(
+                    &rows,
+                    &self.state,
+                    MAX_POPUP_ROWS,
+                    list_area.width,
+                    ColumnWidthMode::AutoVisible,
+                );
+
+                let mut cursor_y = list_area.y;
+                for (offset, height) in visible_row_heights.iter().enumerate() {
+                    let next_y = cursor_y.saturating_add(*height);
+                    if mouse_event.row >= cursor_y && mouse_event.row < next_y {
+                        self.state.selected_idx = Some(start_idx + offset);
+                        self.state
+                            .ensure_visible(rows.len(), MAX_POPUP_ROWS.min(rows.len()));
+                        return self.selected_item();
+                    }
+                    cursor_y = next_y;
+                }
+                None
+            }
+            _ => None,
+        }
+    }
 }
 
 impl WidgetRef for CommandPopup {
@@ -227,7 +371,7 @@ impl WidgetRef for CommandPopup {
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
-            "no matches",
+            "ничего не найдено",
         );
     }
 }
@@ -279,6 +423,34 @@ mod tests {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
             None => panic!("expected at least one match for '/mo'"),
         }
+    }
+
+    #[test]
+    fn russian_alias_filters_to_model_command() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        popup.on_composer_text_change("/мод".to_string());
+
+        let matches = popup.filtered_items();
+        match matches.first() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
+            None => panic!("expected at least one match for Russian alias"),
+        }
+    }
+
+    #[test]
+    fn russian_alias_highlighting_targets_alias_segment() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        popup.on_composer_text_change("/мод".to_string());
+
+        let model_match = popup
+            .filtered()
+            .into_iter()
+            .find(|(item, _)| *item == CommandItem::Builtin(SlashCommand::Model))
+            .expect("expected /model to match by Russian alias");
+
+        let rows = popup.rows_from_matches(vec![model_match]);
+        assert_eq!(rows[0].name, "model (модель)");
+        assert_eq!(rows[0].match_indices, Some(vec![7, 8, 9]));
     }
 
     #[test]
@@ -436,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_command_hidden_when_audio_device_selection_is_disabled() {
+    fn settings_command_visible_when_audio_device_selection_is_disabled() {
         let mut popup = CommandPopup::new(CommandPopupFlags {
             collaboration_modes_enabled: false,
             connectors_enabled: false,
@@ -458,8 +630,8 @@ mod tests {
             .collect();
 
         assert!(
-            !cmds.contains(&"settings"),
-            "expected '/settings' to be hidden when audio device selection is disabled, got {cmds:?}"
+            cmds.contains(&"settings"),
+            "expected '/settings' to stay visible when audio device selection is disabled, got {cmds:?}"
         );
     }
 

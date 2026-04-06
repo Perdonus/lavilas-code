@@ -30,17 +30,10 @@ pub(crate) enum CwdPromptAction {
 }
 
 impl CwdPromptAction {
-    fn verb(self) -> &'static str {
-        match self {
-            CwdPromptAction::Resume => "resume",
-            CwdPromptAction::Fork => "fork",
-        }
-    }
-
     fn past_participle(self) -> &'static str {
         match self {
-            CwdPromptAction::Resume => "resumed",
-            CwdPromptAction::Fork => "forked",
+            CwdPromptAction::Resume => "сохранённой",
+            CwdPromptAction::Fork => "исходной",
         }
     }
 }
@@ -96,6 +89,7 @@ pub(crate) async fn run_cwd_selection_prompt(
         if let Some(event) = events.next().await {
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
                     tui.draw(u16::MAX, |frame| {
@@ -195,21 +189,16 @@ impl WidgetRef for &CwdPromptScreen {
         Clear.render(area, buf);
         let mut column = ColumnRenderable::new();
 
-        let action_verb = self.action.verb();
         let action_past = self.action.past_participle();
         let current_cwd = self.current_cwd.as_str();
         let session_cwd = self.session_cwd.as_str();
 
         column.push("");
-        column.push(Line::from(vec![
-            "Choose working directory to ".into(),
-            action_verb.bold(),
-            " this session".into(),
-        ]));
+        column.push(Line::from("Выберите рабочую папку для этой сессии".bold()));
         column.push("");
         column.push(
             Line::from(format!(
-                "Session = latest cwd recorded in the {action_past} session"
+                "Сессия = последняя папка из {action_past} сессии"
             ))
             .dim()
             .inset(Insets::tlbr(
@@ -217,27 +206,27 @@ impl WidgetRef for &CwdPromptScreen {
             )),
         );
         column.push(
-            Line::from("Current = your current working directory".dim()).inset(Insets::tlbr(
+            Line::from("Текущая папка = ваша текущая рабочая папка".dim()).inset(Insets::tlbr(
                 /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
             )),
         );
         column.push("");
         column.push(selection_option_row(
             /*index*/ 0,
-            format!("Use session directory ({session_cwd})"),
+            format!("Использовать папку из сессии ({session_cwd})"),
             self.highlighted == CwdSelection::Session,
         ));
         column.push(selection_option_row(
             /*index*/ 1,
-            format!("Use current directory ({current_cwd})"),
+            format!("Использовать текущую папку ({current_cwd})"),
             self.highlighted == CwdSelection::Current,
         ));
         column.push("");
         column.push(
             Line::from(vec![
-                "Press ".dim(),
+                "Нажмите ".dim(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " to continue".dim(),
+                " чтобы продолжить".dim(),
             ])
             .inset(Insets::tlbr(
                 /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,

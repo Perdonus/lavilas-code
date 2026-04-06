@@ -51,8 +51,8 @@ impl MigrationMenuOption {
 
     fn label(self) -> &'static str {
         match self {
-            Self::TryNewModel => "Try new model",
-            Self::UseExistingModel => "Use existing model",
+            Self::TryNewModel => "Попробовать новую модель",
+            Self::UseExistingModel => "Оставить текущую модель",
         }
     }
 }
@@ -82,7 +82,7 @@ pub(crate) fn migration_copy_for_models(
     }
 
     let heading_text = Span::from(format!(
-        "Codex just got an upgrade. Introducing {target_display_name}."
+        "У Lavilas Codex обновление: теперь доступна {target_display_name}."
     ))
     .bold();
     let description_line: Line<'static>;
@@ -94,7 +94,7 @@ pub(crate) fn migration_copy_for_models(
             .map(Line::from)
             .unwrap_or_else(|| {
                 Line::from(format!(
-                    "{target_display_name} is recommended for better performance and reliability."
+                    "{target_display_name} рекомендуем как более стабильный и надёжный вариант для работы."
                 ))
             });
     }
@@ -102,14 +102,14 @@ pub(crate) fn migration_copy_for_models(
     let mut content = vec![];
     if migration_copy.is_none() {
         content.push(Line::from(format!(
-            "We recommend switching from {current_model} to {target_model}."
+            "Рекомендуем перейти с {current_model} на {target_model}."
         )));
         content.push(Line::from(""));
     }
 
     if let Some(model_link) = model_link {
         content.push(Line::from(vec![
-            format!("{description_line} Learn more about {target_display_name} at ").into(),
+            format!("{description_line} Подробнее о {target_display_name}: ").into(),
             model_link.cyan().underlined(),
         ]));
         content.push(Line::from(""));
@@ -120,10 +120,10 @@ pub(crate) fn migration_copy_for_models(
 
     if can_opt_out {
         content.push(Line::from(format!(
-            "You can continue using {current_model} if you prefer."
+            "Если хотите, можно остаться на {current_model}."
         )));
     } else {
-        content.push(Line::from("Press enter to continue".dim()));
+        content.push(Line::from("Нажмите Enter, чтобы продолжить".dim()));
     }
 
     ModelMigrationCopy {
@@ -152,6 +152,7 @@ pub(crate) async fn run_model_migration_prompt(
         if let Some(event) = events.next().await {
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
                     let _ = alt.tui.draw(u16::MAX, |frame| {
@@ -341,7 +342,7 @@ impl ModelMigrationScreen {
     fn render_menu(&self, column: &mut ColumnRenderable) {
         column.push(Line::from(""));
         column.push(
-            Paragraph::new("Choose how you'd like Codex to proceed.")
+            Paragraph::new("Выберите, как Lavilas Codex должен поступить дальше.")
                 .wrap(Wrap { trim: false })
                 .inset(Insets::tlbr(
                     /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
@@ -360,13 +361,13 @@ impl ModelMigrationScreen {
         column.push(Line::from(""));
         column.push(
             Line::from(vec![
-                "Use ".dim(),
+                "Стрелки ".dim(),
                 key_hint::plain(KeyCode::Up).into(),
-                "/".dim(),
+                " и ".dim(),
                 key_hint::plain(KeyCode::Down).into(),
-                " to move, press ".dim(),
+                " меняют выбор, ".dim(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " to confirm".dim(),
+                " подтверждает".dim(),
             ])
             .inset(Insets::tlbr(
                 /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
@@ -434,12 +435,12 @@ mod tests {
                 "gpt-5.1-codex-max",
                 /*model_link*/ None,
                 Some(
-                    "Upgrade to gpt-5.2-codex for the latest and greatest agentic coding model."
+                    "Переходите на gpt-5.2-codex: это актуальная флагманская агентная модель для кодинга."
                         .to_string(),
                 ),
                 /*migration_markdown*/ None,
                 "gpt-5.1-codex-max".to_string(),
-                Some("Codex-optimized flagship for deep and fast reasoning.".to_string()),
+                Some("Флагманская модель Codex для глубоких и быстрых рассуждений.".to_string()),
                 /*can_opt_out*/ true,
             ),
         );
@@ -468,7 +469,7 @@ mod tests {
                 /*migration_copy*/ None,
                 /*migration_markdown*/ None,
                 "gpt-5.1".to_string(),
-                Some("Broad world knowledge with strong general reasoning.".to_string()),
+                Some("Широкая эрудиция и сильные общие рассуждения.".to_string()),
                 /*can_opt_out*/ false,
             ),
         );
@@ -495,7 +496,7 @@ mod tests {
                 /*migration_copy*/ None,
                 /*migration_markdown*/ None,
                 "gpt-5.1-codex-max".to_string(),
-                Some("Codex-optimized flagship for deep and fast reasoning.".to_string()),
+                Some("Флагманская модель Codex для глубоких и быстрых рассуждений.".to_string()),
                 /*can_opt_out*/ false,
             ),
         );
@@ -522,7 +523,7 @@ mod tests {
                 /*migration_copy*/ None,
                 /*migration_markdown*/ None,
                 "gpt-5.1-codex-mini".to_string(),
-                Some("Optimized for codex. Cheaper, faster, but less capable.".to_string()),
+                Some("Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям.".to_string()),
                 /*can_opt_out*/ false,
             ),
         );
@@ -545,7 +546,7 @@ mod tests {
                 /*migration_copy*/ None,
                 /*migration_markdown*/ None,
                 "gpt-new".to_string(),
-                Some("Latest recommended model for better performance.".to_string()),
+                Some("Актуальная рекомендуемая модель для лучшей производительности.".to_string()),
                 /*can_opt_out*/ true,
             ),
         );
@@ -574,7 +575,7 @@ mod tests {
                 /*migration_copy*/ None,
                 /*migration_markdown*/ None,
                 "gpt-new".to_string(),
-                Some("Latest recommended model for better performance.".to_string()),
+                Some("Актуальная рекомендуемая модель для лучшей производительности.".to_string()),
                 /*can_opt_out*/ true,
             ),
         );

@@ -2,12 +2,12 @@
 source: tui/src/onboarding/trust_directory.rs
 expression: terminal.backend()
 ---
-> You are in /workspace/project
+> Текущая директория: /workspace/project
 
-  Do you trust the contents of this directory? Working with untrusted
-  contents comes with higher risk of prompt injection.
+  Вы доверяете содержимому этой директории? Работа с недоверенным кодом
+  повышает риск prompt-инъекций.
 
-› 1. Yes, continue                                                    
-  2. No, quit
+› 1. Да, продолжить                                                     
+  2. Нет, выйти
 
-  Press enter to continue
+  Нажмите enter чтобы продолжить

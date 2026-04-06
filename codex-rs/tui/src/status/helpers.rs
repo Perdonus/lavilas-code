@@ -19,14 +19,14 @@ pub(crate) fn compose_model_display(
 ) -> (String, Vec<String>) {
     let mut details: Vec<String> = Vec::new();
     if let Some((_, effort)) = entries.iter().find(|(k, _)| *k == "reasoning effort") {
-        details.push(format!("reasoning {}", effort.to_ascii_lowercase()));
+        details.push(format!("размышления {}", localize_reasoning_value(effort)));
     }
     if let Some((_, summary)) = entries.iter().find(|(k, _)| *k == "reasoning summaries") {
         let summary = summary.trim();
         if summary.eq_ignore_ascii_case("none") || summary.eq_ignore_ascii_case("off") {
-            details.push("summaries off".to_string());
+            details.push("сводки отключены".to_string());
         } else if !summary.is_empty() {
-            details.push(format!("summaries {}", summary.to_ascii_lowercase()));
+            details.push(format!("сводки {}", localize_summary_value(summary)));
         }
     }
 
@@ -41,7 +41,7 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
                 let file_name = p
                     .file_name()
                     .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                    .unwrap_or_else(|| "<неизвестно>".to_string());
                 let display = if let Some(parent) = p.parent() {
                     if parent == config.cwd.as_path() {
                         file_name.clone()
@@ -72,12 +72,12 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
                 rels.push(display);
             }
             if rels.is_empty() {
-                "<none>".to_string()
+                "<нет>".to_string()
             } else {
                 rels.join(", ")
             }
         }
-        Err(_) => "<none>".to_string(),
+        Err(_) => "<нет>".to_string(),
     }
 }
 
@@ -89,11 +89,19 @@ pub(crate) fn compose_account_display(
 
 pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
     if plan_type.is_team_like() {
-        "Business".to_string()
+        "Бизнес".to_string()
     } else if plan_type.is_business_like() {
-        "Enterprise".to_string()
+        "Корпоративный".to_string()
     } else {
-        title_case(format!("{plan_type:?}").as_str())
+        match plan_type {
+            PlanType::Free => "Бесплатный".to_string(),
+            PlanType::Go => "Go".to_string(),
+            PlanType::Plus => "Plus".to_string(),
+            PlanType::Pro => "Pro".to_string(),
+            PlanType::Edu => "Edu".to_string(),
+            PlanType::Unknown => "Неизвестно".to_string(),
+            other => title_case(format!("{other:?}").as_str()),
+        }
     }
 }
 
@@ -166,7 +174,28 @@ pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<
     if dt.date_naive() == captured_at.date_naive() {
         time
     } else {
-        format!("{time} on {}", dt.format("%-d %b"))
+        format!("{time} в {}", dt.format("%-d %b"))
+    }
+}
+
+fn localize_reasoning_value(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "none" => "выкл".to_string(),
+        "minimal" => "минимальные".to_string(),
+        "low" => "низкие".to_string(),
+        "medium" => "средние".to_string(),
+        "high" => "высокие".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn localize_summary_value(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "none" | "off" => "выкл".to_string(),
+        "auto" => "авто".to_string(),
+        "brief" => "краткие".to_string(),
+        "detailed" => "подробные".to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -190,17 +219,17 @@ mod tests {
     #[test]
     fn plan_type_display_name_remaps_display_labels() {
         let cases = [
-            (PlanType::Free, "Free"),
+            (PlanType::Free, "Бесплатный"),
             (PlanType::Go, "Go"),
             (PlanType::Plus, "Plus"),
             (PlanType::Pro, "Pro"),
-            (PlanType::Team, "Business"),
-            (PlanType::SelfServeBusinessUsageBased, "Business"),
-            (PlanType::Business, "Enterprise"),
-            (PlanType::EnterpriseCbpUsageBased, "Enterprise"),
-            (PlanType::Enterprise, "Enterprise"),
+            (PlanType::Team, "Бизнес"),
+            (PlanType::SelfServeBusinessUsageBased, "Бизнес"),
+            (PlanType::Business, "Корпоративный"),
+            (PlanType::EnterpriseCbpUsageBased, "Корпоративный"),
+            (PlanType::Enterprise, "Корпоративный"),
             (PlanType::Edu, "Edu"),
-            (PlanType::Unknown, "Unknown"),
+            (PlanType::Unknown, "Неизвестно"),
         ];
 
         for (plan_type, expected) in cases {

@@ -129,9 +129,9 @@ pub(super) fn render_device_code_login(
     state: &ContinueWithDeviceCodeState,
 ) {
     let banner = if state.device_code.is_some() {
-        "Finish signing in via your browser"
+        "Завершите вход в браузере"
     } else {
-        "Preparing device code login"
+        "Подготавливаем вход по коду устройства"
     };
 
     let mut spans = vec!["  ".into()];
@@ -149,16 +149,14 @@ pub(super) fn render_device_code_login(
 
     // Capture the verification URL for OSC 8 hyperlink marking after render.
     let verification_url = if let Some(device_code) = &state.device_code {
-        lines.push("  1. Open this link in your browser and sign in".into());
+        lines.push("  1. Откройте ссылку в браузере и выполните вход".into());
         lines.push("".into());
         lines.push(Line::from(vec![
             "  ".into(),
             device_code.verification_url.as_str().cyan().underlined(),
         ]));
         lines.push("".into());
-        lines.push(
-            "  2. Enter this one-time code after you are signed in (expires in 15 minutes)".into(),
-        );
+        lines.push("  2. После входа введите этот одноразовый код (действует 15 минут)".into());
         lines.push("".into());
         lines.push(Line::from(vec![
             "  ".into(),
@@ -166,19 +164,19 @@ pub(super) fn render_device_code_login(
         ]));
         lines.push("".into());
         lines.push(
-            "  Device codes are a common phishing target. Never share this code."
+            "  Коды устройства часто используют в фишинге. Никому не передавайте этот код."
                 .dim()
                 .into(),
         );
         lines.push("".into());
         Some(device_code.verification_url.clone())
     } else {
-        lines.push("  Requesting a one-time code...".dim().into());
+        lines.push("  Запрашиваем одноразовый код...".dim().into());
         lines.push("".into());
         None
     };
 
-    lines.push("  Press Esc to cancel".dim().into());
+    lines.push("  Нажмите Esc для отмены".dim().into());
     Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .render(area, buf);
@@ -308,7 +306,7 @@ async fn fallback_to_browser_login(
                 &request_frame,
                 &error,
                 &cancel,
-                format!("Unexpected account/login/start response: {other:?}"),
+                format!("Неожиданный ответ account/login/start: {other:?}"),
             );
         }
         Err(err) => {
@@ -386,7 +384,7 @@ fn apply_chatgpt_auth_tokens_login_response_for_active_attempt(
                 request_frame,
                 error,
                 cancel,
-                format!("Unexpected account/login/start response: {other:?}"),
+                format!("Неожиданный ответ account/login/start: {other:?}"),
             );
         }
         Err(err) => {

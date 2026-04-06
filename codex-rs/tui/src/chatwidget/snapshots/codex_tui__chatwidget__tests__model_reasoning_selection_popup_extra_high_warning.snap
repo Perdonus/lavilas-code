@@ -2,14 +2,22 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Select Reasoning Level for gpt-5.1-codex-max
+  Режим размышлений для gpt-5.1-codex-max
+  Провайдер: OpenAI. Подберите баланс между скоростью ответа, качеством и
+  расходом токенов.
 
-  1. Low                   Fast responses with lighter reasoning
-  2. Medium (default)      Balances speed and reasoning depth for everyday
-                           tasks
-  3. High                  Greater reasoning depth for complex problems
-› 4. Extra high (current)  Extra high reasoning depth for complex problems
-                           ⚠ Extra high reasoning effort can quickly consume
-                           Plus plan rate limits.
+  Найти режим размышлений
+  ← К списку моделей             Вернуться к каталогу моделей текущего
+                                  провайдера.
+  Лёгкий                          Самый быстрый режим: минимум паузы, минимум
+                                  размышлений.
+  Стандартный (рекомендуется)     Повседневный режим с нормальным балансом
+                                  скорости и качества.
+  Глубокий                        Больше времени на разбор сложных,
+                                  неоднозначных и многошаговых задач.
+› Максимальный (текущий)          Максимальный запас на тяжёлые задачи,
+                                  длинные цепочки решений и риск ошибки.
+                                  Максимальный: такой режим может быстро
+                                  расходовать лимиты плана Plus.
 
-  Press enter to confirm or esc to go back
+  Нажмите enter для подтверждения или esc для возврата

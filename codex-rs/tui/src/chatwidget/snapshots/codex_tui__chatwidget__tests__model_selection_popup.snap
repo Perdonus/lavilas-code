@@ -2,17 +2,24 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Select Model and Effort
-  Access legacy models by running codex -m <model_name> or in your config.toml
+  Все модели
+  Полный каталог моделей. Для ручного выбора из терминала можно использовать
+  codex -m <model_name> или config.toml
 
-› 1. gpt-5.3-codex (default)  Latest frontier agentic coding model.
-  2. gpt-5.4                  Latest frontier agentic coding model.
-  3. gpt-5.2-codex            Frontier agentic coding model.
-  4. gpt-5.1-codex-max        Codex-optimized flagship for deep and fast
-                              reasoning.
-  5. gpt-5.2                  Latest frontier model with improvements across
-                              knowledge, reasoning and coding
-  6. gpt-5.1-codex-mini       Optimized for codex. Cheaper, faster, but less
-                              capable.
+  Найти модель в каталоге
+  ← К быстрым пресетам          Вернуться к быстрым режимам выбора модели.
+› gpt-5.3-codex (по умолчанию)  Самая свежая агентная модель для разработки и
+                                 сложных кодовых задач.
+  gpt-5.4                        Самая свежая агентная модель для разработки и
+                                 сложных кодовых задач.
+  gpt-5.2-codex                  Сильная агентная модель для разработки и
+                                 рабочих сценариев с кодом.
+  gpt-5.1-codex-max              Флагманская модель, заточенная под Codex:
+                                 сильна в сложном коде и длинных цепочках
+                                 рассуждений.
+  gpt-5.2                        Свежая флагманская модель с заметным усилением
+                                 в знаниях, рассуждениях и работе с кодом.
+  gpt-5.1-codex-mini             Упор на скорость и цену: отвечает быстрее и
+                                 дешевле, но слабее на тяжёлых задачах.
 
-  Press enter to select reasoning effort, or esc to dismiss.
+  Enter открывает режим размышлений для выбранной модели, Esc закрывает окно.

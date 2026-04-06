@@ -2,10 +2,10 @@
 source: tui/src/app.rs
 expression: model_migration_copy_to_plain_text(&copy)
 ---
-**Codex just got an upgrade. Introducing gpt-5.3-codex.**
+**У Lavilas Codex обновление: теперь доступна gpt-5.3-codex.**
 
-Codex is now powered by gpt-5.3-codex, our most capable agentic coding model yet. It's built for long-running, project-scale work, with mid-turn steering + frequent progress updates so you can collaborate while it runs (and it's faster too).
+Lavilas Codex теперь работает на gpt-5.3-codex - это наша самая сильная агентная модель для разработки. Она лучше подходит для долгих задач по проекту, поддерживает управление на ходу и чаще сообщает о прогрессе, поэтому с ней проще работать в паре.
 
-Learn more: https://openai.com/index/introducing-gpt-5-3-codex/
+Подробнее: https://openai.com/index/introducing-gpt-5-3-codex/
 
-You can keep using gpt-5.1-codex if you prefer.
+Если хотите, можно остаться на gpt-5.1-codex.

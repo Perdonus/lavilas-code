@@ -3,10 +3,10 @@ source: tui/src/bottom_pane/mcp_server_elicitation.rs
 expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
 ---
                                                                                                                         
-  Field 1/1                                                                                                             
-  Allow this request?                                                                                                   
-  › 1. Allow   Run the tool and continue.                                                                               
-    2. Cancel  Cancel this tool call                                                                                    
+  Поле 1/1                                                                                                             
+  Разрешить этот запрос?                                                                                                   
+  › 1. Разрешить   Запустить инструмент и продолжить.                                                                               
+    2. Отменить  Отменить этот вызов инструмента.                                                                                    
                                                                                                                         
                                                                                                                         
                                                                                                                         
@@ -16,4 +16,4 @@ expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
                                                                                                                         
                                                                                                                         
                                                                                                                         
-  enter to submit | esc to cancel
+  Enter — подтвердить | Esc — отменить

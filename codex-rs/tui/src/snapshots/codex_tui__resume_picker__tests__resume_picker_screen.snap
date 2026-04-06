@@ -2,12 +2,11 @@
 source: tui/src/resume_picker.rs
 expression: snapshot
 ---
-Resume a previous session  Sort: Created at
-Type to search
-  Created at  Updated at  Branch  CWD  Conversation
-No sessions yet
+Продолжить предыдущую сессию  Сортировка: Дата создания
+Введите запрос
+  Создано  Обновлено  Ветка  Каталог  Диалог
+Сессий пока нет
 
 
 
-
-enter to resume     esc to start new     ctrl + c to quit     tab to toggle sort
+enter чтобы продолжить     esc чтобы начать новую     ctrl + c чтобы выйти     tab чтобы переключить сортировку

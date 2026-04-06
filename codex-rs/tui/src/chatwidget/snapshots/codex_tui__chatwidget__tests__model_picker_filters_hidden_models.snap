@@ -2,9 +2,12 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Select Model and Effort
-  Access legacy models by running codex -m <model_name> or in your config.toml
+  Все модели
+  Полный каталог моделей. Для ручного выбора из терминала можно использовать
+  codex -m <model_name> или config.toml
 
-› 1. test-visible-model (current)  test-visible-model description
+  Найти модель в каталоге
+  ← К быстрым пресетам        Вернуться к быстрым режимам выбора модели.
+› test-visible-model (текущий)  test-visible-model description
 
-  Press enter to select reasoning effort, or esc to dismiss.
+  Enter открывает режим размышлений для выбранной модели, Esc закрывает окно.

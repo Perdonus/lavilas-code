@@ -48,8 +48,7 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
   history navigation, etc).
 - After handling the key, `sync_popups()` runs so popup visibility/filters stay consistent with the
   latest text + cursor.
-- When a slash command name is completed and the user types a space, the `/command` token is
-  promoted into a text element so it renders distinctly and edits atomically.
+- When a command name using the active command prefix is completed and the user types a space, the prefix+command token (for example `/command` or `!command`) is promoted into a text element so it renders distinctly and edits atomically.
 
 ### History navigation (↑/↓)
 
@@ -80,8 +79,8 @@ Flags:
 Key effects when disabled:
 
 - When `popups_enabled` is `false`, `sync_popups()` forces `ActivePopup::None`.
-- When `slash_commands_enabled` is `false`, the composer does not treat `/...` input as commands.
-- When `slash_commands_enabled` is `false`, slash-context paste-burst exceptions are disabled.
+- When `slash_commands_enabled` is `false`, the composer does not treat command-prefixed input (for example `/...` or `!…`, depending on the active prefix) as commands.
+- When `slash_commands_enabled` is `false`, command-context paste-burst exceptions are disabled.
 - When `image_paste_enabled` is `false`, file-path paste image attachment is skipped.
 - `ChatWidget` may toggle `image_paste_enabled` at runtime based on the selected model's
   `input_modalities`; attach and submit paths also re-check support and emit a warning instead of
@@ -89,7 +88,8 @@ Key effects when disabled:
 
 Built-in slash command availability is centralized in
 `codex-rs/tui/src/bottom_pane/slash_commands.rs` and reused by both the composer and the command
-popup so gating stays in sync.
+popup so gating stays in sync. The command prefix itself is resolved via
+`codex-rs/tui/src/bottom_pane/prompt_args.rs`.
 
 ## Submission flow (Enter/Tab)
 
@@ -109,8 +109,7 @@ the input starts with `!` (shell command).
 4. Clears pending pastes on success and suppresses submission if the final text is empty and there
    are no attachments.
 
-The same preparation path is reused for slash commands with arguments (for example `/plan` and
-`/review`) so pasted content and text elements are preserved when extracting args.
+The same preparation path is reused for commands with inline args (for example `/plan`, `/review`, or the same commands behind a custom prefix) so pasted content and text elements are preserved when extracting args.
 
 The composer also treats the textarea kill buffer as separate editing state from the visible draft.
 After submit or slash-command dispatch clears the textarea, the most recent `Ctrl+K` payload is
@@ -238,8 +237,7 @@ When paste-burst buffering is active, Enter is treated as “append `\n` to the 
 “submit the message”. This prevents mid-paste submission for multiline pastes that are emitted as
 `Enter` key events.
 
-The composer also disables burst-based Enter suppression inside slash-command context (popup open
-or the first line begins with `/`) so command dispatch is predictable.
+The composer also disables burst-based Enter suppression inside command context (popup open or the first line begins with the active command prefix) so command dispatch is predictable.
 
 ## PasteBurst: event-level behavior (cheat sheet)
 
@@ -289,8 +287,7 @@ There are two distinct “Enter becomes newline” mechanisms:
   `newline_should_insert_instead_of_submit(now)` inserts `\n` into the textarea and calls
   `extend_window(now)` so a slightly-late Enter keeps behaving like “newline” rather than “submit”.
 
-Both are disabled inside slash-command context (command popup is active or the first line begins
-with `/`) so Enter keeps its normal “submit/execute” semantics while composing commands.
+Both are disabled inside command context (command popup is active or the first line begins with the active command prefix) so Enter keeps its normal “submit/execute” semantics while composing commands.
 
 ### Non-char keys / Ctrl+modified input
 

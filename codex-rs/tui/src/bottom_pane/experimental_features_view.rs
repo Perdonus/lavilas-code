@@ -7,17 +7,13 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
-use crate::render::Insets;
-use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
 
 use codex_features::Feature;
 
@@ -27,6 +23,7 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
+use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::render_rows;
 
 pub(crate) struct ExperimentalFeatureItem {
@@ -51,9 +48,9 @@ impl ExperimentalFeaturesView {
         app_event_tx: AppEventSender,
     ) -> Self {
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Experimental features".bold()));
+        header.push(Line::from("Экспериментальные возможности".bold()));
         header.push(Line::from(
-            "Toggle experimental features. Changes are saved to config.toml.".dim(),
+            "Включайте тестовые функции; изменения фиксируются в файле config.toml.".dim(),
         ));
 
         let mut view = Self {
@@ -222,10 +219,7 @@ impl Renderable for ExperimentalFeaturesView {
 
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
-
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let content_area = render_menu_surface(content_area, buf);
 
         let header_height = self
             .header
@@ -243,7 +237,7 @@ impl Renderable for ExperimentalFeaturesView {
             Constraint::Max(1),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
+        .areas(content_area);
 
         self.header.render(header_area, buf);
 
@@ -260,7 +254,7 @@ impl Renderable for ExperimentalFeaturesView {
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
-                "  No experimental features available for now",
+                "  Экспериментальные функции пока недоступны",
             );
         }
 
@@ -291,10 +285,10 @@ impl Renderable for ExperimentalFeaturesView {
 
 fn experimental_popup_hint_line() -> Line<'static> {
     Line::from(vec![
-        "Press ".into(),
+        "Нажмите ".into(),
         key_hint::plain(KeyCode::Char(' ')).into(),
-        " to select or ".into(),
+        " для переключения, ".into(),
         key_hint::plain(KeyCode::Enter).into(),
-        " to save for next conversation".into(),
+        " чтобы сохранить выбор".into(),
     ])
 }

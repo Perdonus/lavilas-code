@@ -124,6 +124,9 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -171,7 +174,9 @@ use super::skill_popup::SkillPopup;
 use super::slash_commands;
 use super::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::paste_burst::FlushResult;
+use crate::bottom_pane::prompt_args::command_prefix;
 use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::bottom_pane::prompt_args::starts_with_command_prefix;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
@@ -280,6 +285,7 @@ impl ChatComposerConfig {
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
+    last_render_area: RefCell<Option<Rect>>,
     active_popup: ActivePopup,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
@@ -410,6 +416,7 @@ impl ChatComposer {
         let mut this = Self {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
+            last_render_area: RefCell::new(None),
             active_popup: ActivePopup::None,
             app_event_tx,
             history: ChatComposerHistory::new(),
@@ -619,6 +626,13 @@ impl ChatComposer {
         } else {
             FOOTER_SPACING_HEIGHT
         }
+    }
+
+    fn point_in_rect(rect: Rect, column: u16, row: u16) -> bool {
+        column >= rect.x
+            && column < rect.x.saturating_add(rect.width)
+            && row >= rect.y
+            && row < rect.y.saturating_add(rect.height)
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -1219,6 +1233,52 @@ impl ChatComposer {
         !matches!(self.active_popup, ActivePopup::None)
     }
 
+    pub fn handle_mouse_event(&mut self, mouse_event: MouseEvent) -> (InputResult, bool) {
+        let Some(render_area) = *self.last_render_area.borrow() else {
+            return (InputResult::None, false);
+        };
+
+        let [_, _, _, popup_rect] = self.layout_areas(render_area);
+        let popup_result = match &mut self.active_popup {
+            ActivePopup::Command(popup) => {
+                let inside_popup =
+                    Self::point_in_rect(popup_rect, mouse_event.column, mouse_event.row);
+                let dismiss_popup =
+                    matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left))
+                        && !inside_popup;
+                let ignore_scroll =
+                    matches!(mouse_event.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
+                        && !inside_popup;
+                let selected_item = if inside_popup {
+                    popup.handle_mouse_event(popup_rect, mouse_event)
+                } else {
+                    None
+                };
+                (inside_popup, dismiss_popup, ignore_scroll, selected_item)
+            }
+            _ => return (InputResult::None, false),
+        };
+
+        let (inside_popup, dismiss_popup, ignore_scroll, selected_item) = popup_result;
+        if dismiss_popup {
+            self.active_popup = ActivePopup::None;
+            return (InputResult::None, true);
+        }
+        if ignore_scroll {
+            return (InputResult::None, false);
+        }
+
+        if let Some(CommandItem::Builtin(cmd)) = selected_item {
+            let command_text = format!("{}{} ", command_prefix(), cmd.command());
+            self.textarea.set_text_clearing_elements(&command_text);
+            self.textarea.set_cursor(self.textarea.text().len());
+            self.active_popup = ActivePopup::None;
+        }
+
+        self.sync_popups();
+        (InputResult::None, inside_popup)
+    }
+
     /// Handle key event when the slash-command popup is visible.
     fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
@@ -1282,12 +1342,17 @@ impl ChatComposer {
                         return (InputResult::Command(cmd), true);
                     }
 
-                    let starts_with_cmd = first_line
-                        .trim_start()
-                        .starts_with(&format!("/{}", cmd.command()));
+                    let starts_with_cmd = first_line.trim_start().starts_with(&format!(
+                        "{}{}",
+                        command_prefix(),
+                        cmd.command()
+                    ));
                     if !starts_with_cmd {
-                        self.textarea
-                            .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                        self.textarea.set_text_clearing_elements(&format!(
+                            "{}{} ",
+                            command_prefix(),
+                            cmd.command()
+                        ));
                     }
                     if !self.textarea.text().is_empty() {
                         self.textarea.set_cursor(self.textarea.text().len());
@@ -2093,7 +2158,8 @@ impl ChatComposer {
                         .is_some();
                 if !is_builtin {
                     let message = format!(
-                        r#"Неизвестная команда '/{name}'. Введите "/" для списка доступных команд."#
+                        "Неизвестная команда '{prefix}{name}'. Введите '{prefix}' для списка доступных команд.",
+                        prefix = command_prefix()
                     );
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_info_event(message, /*hint*/ None),
@@ -2188,7 +2254,7 @@ impl ChatComposer {
                     .lines()
                     .next()
                     .unwrap_or("")
-                    .starts_with('/'));
+                    .starts_with(command_prefix()));
         if !self.disable_paste_burst
             && self.paste_burst.is_active()
             && !in_slash_context
@@ -2341,8 +2407,9 @@ impl ChatComposer {
             return false;
         }
         let message = format!(
-            "'/{}' is disabled while a task is in progress.",
-            cmd.command()
+            "Команда '{prefix}{}' недоступна, пока выполняется задача.",
+            cmd.command(),
+            prefix = command_prefix()
         );
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::new_error_event(message),
@@ -2934,7 +3001,7 @@ impl ChatComposer {
             let Some(payload) = elem.placeholder(text) else {
                 continue;
             };
-            if payload.strip_prefix('/').is_none() {
+            if payload.strip_prefix(command_prefix()).is_none() {
                 continue;
             }
             let range = elem.byte_range.start..elem.byte_range.end;
@@ -2984,7 +3051,7 @@ impl ChatComposer {
     /// extract the command name and the rest of the line after it.
     /// Returns None if the cursor is outside a slash command.
     fn slash_command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)> {
-        if !first_line.starts_with('/') {
+        if !starts_with_command_prefix(first_line) {
             return None;
         }
 
@@ -3457,6 +3524,7 @@ impl Renderable for ChatComposer {
 
 impl ChatComposer {
     pub(crate) fn render_with_mask(&self, area: Rect, buf: &mut Buffer, mask_char: Option<char>) {
+        *self.last_render_area.borrow_mut() = Some(area);
         let [composer_rect, remote_images_rect, textarea_rect, popup_rect] =
             self.layout_areas(area);
         match &self.active_popup {
@@ -3757,7 +3825,7 @@ impl ChatComposer {
             } else {
                 self.input_disabled_placeholder
                     .as_deref()
-                    .unwrap_or("Input disabled.")
+                    .unwrap_or("Ввод недоступен.")
                     .to_string()
             };
             if !textarea_rect.is_empty() {
@@ -3805,7 +3873,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -3824,7 +3892,7 @@ mod tests {
         let mut hint_row: Option<(u16, String)> = None;
         for y in 0..area.height {
             let row = row_to_string(y);
-            if row.contains("? for shortcuts") {
+            if row.contains("? для подсказок") {
                 hint_row = Some((y, row));
                 break;
             }
@@ -3859,7 +3927,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_footer_hint_override(Some(vec![("K".to_string(), "label".to_string())]));
@@ -3898,7 +3966,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -3917,7 +3985,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_footer_hint_override(Some(vec![("K".to_string(), "label".to_string())]));
@@ -3966,7 +4034,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             enhanced_keys_supported,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         setup(&mut composer);
@@ -4006,7 +4074,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ true,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.is_zellij = true;
@@ -4367,7 +4435,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ true,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -4394,7 +4462,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -4418,7 +4486,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -4444,7 +4512,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -4506,7 +4574,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -4549,7 +4617,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         let remote_image_url = "https://example.com/one.png".to_string();
@@ -4591,7 +4659,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -4634,7 +4702,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -4676,7 +4744,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -4705,7 +4773,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_connectors_enabled(/*enabled*/ true);
@@ -4747,7 +4815,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_connectors_enabled(/*enabled*/ true);
@@ -4785,7 +4853,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
@@ -4818,7 +4886,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_connectors_enabled(/*enabled*/ true);
@@ -4978,7 +5046,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_connectors_enabled(/*enabled*/ true);
@@ -5016,7 +5084,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5266,7 +5334,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5301,7 +5369,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5332,7 +5400,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5356,7 +5424,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5389,7 +5457,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5437,7 +5505,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5474,7 +5542,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5528,7 +5596,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5557,7 +5625,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5592,7 +5660,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5625,7 +5693,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5654,7 +5722,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5683,7 +5751,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5717,7 +5785,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_steer_enabled(true);
@@ -5745,7 +5813,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_steer_enabled(true);
@@ -5787,7 +5855,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_steer_enabled(false);
@@ -5832,7 +5900,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -5873,7 +5941,7 @@ mod tests {
                 /*has_input_focus*/ true,
                 sender.clone(),
                 /*enhanced_keys_supported*/ false,
-                "Ask Codex to do anything".to_string(),
+                "Спросите помощника Lavilas о чём угодно".to_string(),
                 /*disable_paste_burst*/ false,
             );
 
@@ -5986,7 +6054,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6014,7 +6082,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
@@ -6042,7 +6110,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6067,7 +6135,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         type_chars_humanlike(&mut composer, &['/', 'r', 'e', 's']);
@@ -6120,7 +6188,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6163,7 +6231,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_steer_enabled(true);
@@ -6197,7 +6265,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.textarea.insert_str("restore me");
@@ -6235,7 +6303,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_task_running(/*running*/ true);
@@ -6278,7 +6346,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6299,7 +6367,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6337,7 +6405,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_collaboration_modes_enabled(/*enabled*/ true);
@@ -6359,7 +6427,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_collaboration_modes_enabled(/*enabled*/ true);
@@ -6380,7 +6448,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6412,7 +6480,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6440,7 +6508,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_task_running(/*running*/ false);
@@ -6469,7 +6537,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6510,7 +6578,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         composer.set_collaboration_modes_enabled(/*enabled*/ true);
@@ -6548,7 +6616,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6606,7 +6674,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6685,7 +6753,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6759,7 +6827,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6798,7 +6866,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6838,7 +6906,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6886,7 +6954,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         let path = PathBuf::from("/tmp/image1.png");
@@ -6924,7 +6992,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -6957,7 +7025,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         let remote_image_url = "https://example.com/remote.png".to_string();
@@ -6991,7 +7059,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         let remote_image_urls = vec![
@@ -7023,7 +7091,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7066,7 +7134,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7091,7 +7159,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7134,7 +7202,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7177,7 +7245,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7220,7 +7288,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7266,7 +7334,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         let path = PathBuf::from("/tmp/image2.png");
@@ -7305,7 +7373,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         let path = PathBuf::from("/tmp/image_dup.png");
@@ -7328,7 +7396,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
         let path = PathBuf::from("/tmp/image3.png");
@@ -7370,7 +7438,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7396,7 +7464,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7456,7 +7524,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7519,7 +7587,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7557,7 +7625,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7581,7 +7649,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7617,7 +7685,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7655,7 +7723,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7684,7 +7752,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7731,7 +7799,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7770,7 +7838,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7795,7 +7863,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7825,7 +7893,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7868,7 +7936,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7902,7 +7970,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7927,7 +7995,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7955,7 +8023,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -7980,7 +8048,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -8008,7 +8076,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -8029,7 +8097,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -8051,7 +8119,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -8088,7 +8156,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -8108,7 +8176,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 
@@ -8147,7 +8215,7 @@ mod tests {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
+            "Спросите помощника Lavilas о чём угодно".to_string(),
             /*disable_paste_burst*/ false,
         );
 

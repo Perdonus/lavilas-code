@@ -85,9 +85,9 @@ impl WidgetRef for &WelcomeWidget {
         }
         lines.push(Line::from(vec![
             "  ".into(),
-            "Welcome to ".into(),
-            "Lavilas Codex".bold(),
-            ", command-line coding agent by Lavilas".into(),
+            "Добро пожаловать в ".into(),
+            "CLI-агент Lavilas".bold(),
+            ", который помогает в разработке".into(),
         ]));
 
         Paragraph::new(lines)
@@ -138,7 +138,7 @@ mod tests {
         let frame_lines = widget.animation.current_frame().lines().count() as u16;
         (&widget).render(area, &mut buf);
 
-        let welcome_row = row_containing(&buf, "Welcome");
+        let welcome_row = row_containing(&buf, "Добро пожаловать");
         assert_eq!(welcome_row, Some(frame_lines + 1));
     }
 
@@ -153,7 +153,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         (&widget).render(area, &mut buf);
 
-        let welcome_row = row_containing(&buf, "Welcome");
+        let welcome_row = row_containing(&buf, "Добро пожаловать");
         assert_eq!(welcome_row, Some(0));
     }
 
@@ -176,7 +176,7 @@ mod tests {
 
         assert_ne!(
             before, after,
-            "expected ctrl+. to switch welcome animation variant"
+            "ожидалось, что Ctrl+. переключит вариант анимации приветствия"
         );
     }
 }

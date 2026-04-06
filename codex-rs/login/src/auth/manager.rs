@@ -76,12 +76,12 @@ impl PartialEq for CodexAuth {
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 
-const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
-const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
-const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
+const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Не удалось обновить токен доступа: срок действия refresh-токена истёк. Выйдите из аккаунта и войдите снова.";
+const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Не удалось обновить токен доступа: refresh-токен уже был использован. Выйдите из аккаунта и войдите снова.";
+const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Не удалось обновить токен доступа: refresh-токен был отозван. Выйдите из аккаунта и войдите снова.";
 const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
-    "Your access token could not be refreshed. Please log out and sign in again.";
-const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
+    "Не удалось обновить токен доступа. Выйдите из аккаунта и войдите снова.";
+const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Не удалось обновить токен доступа: вы вышли из аккаунта или вошли в другой аккаунт. Войдите снова.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 

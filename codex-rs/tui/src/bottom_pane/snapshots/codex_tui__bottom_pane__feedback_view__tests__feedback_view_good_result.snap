@@ -2,8 +2,8 @@
 source: tui/src/bottom_pane/feedback_view.rs
 expression: rendered
 ---
-▌ Tell us more (good result)
+▌ Что понравилось?
 ▌
-▌ (optional) Write a short description to help us further
+▌ (необязательно) Укажите, какие детали оказались полезными
 
-Press enter to confirm or esc to go back
+Нажмите Enter для подтверждения или Esc для возврата

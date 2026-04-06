@@ -32,7 +32,7 @@ use crate::render::renderable::Renderable;
 #[derive(EnumIter, EnumString, Display, Debug, Clone, Copy, Eq, PartialEq, Hash)]
 #[strum(serialize_all = "kebab-case")]
 pub(crate) enum TerminalTitleItem {
-    /// Codex app name.
+    /// Название приложения.
     AppName,
     /// Project root name, or a compact cwd fallback.
     Project,
@@ -53,17 +53,17 @@ pub(crate) enum TerminalTitleItem {
 impl TerminalTitleItem {
     pub(crate) fn description(self) -> &'static str {
         match self {
-            TerminalTitleItem::AppName => "Codex app name",
-            TerminalTitleItem::Project => "Project name (falls back to current directory name)",
+            TerminalTitleItem::AppName => "Название приложения",
+            TerminalTitleItem::Project => "Название проекта (или текущей директории)",
             TerminalTitleItem::Spinner => {
-                "Animated task spinner (omitted while idle or when animations are off)"
+                "Анимированный индикатор задачи (скрывается в простое или без анимации)"
             }
-            TerminalTitleItem::Status => "Compact session status text (Ready, Working, Thinking)",
-            TerminalTitleItem::Thread => "Current thread title (omitted until available)",
-            TerminalTitleItem::GitBranch => "Current Git branch (omitted when unavailable)",
-            TerminalTitleItem::Model => "Current model name",
+            TerminalTitleItem::Status => "Краткий статус сессии (Готов, В работе, Размышляет)",
+            TerminalTitleItem::Thread => "Текущий заголовок треда (скрывается, пока недоступен)",
+            TerminalTitleItem::GitBranch => "Текущая ветка Git (скрывается, если недоступна)",
+            TerminalTitleItem::Model => "Текущее имя модели",
             TerminalTitleItem::TaskProgress => {
-                "Latest task progress from update_plan (omitted until available)"
+                "Последний прогресс задач из update_plan (скрывается, пока недоступен)"
             }
         }
     }
@@ -74,14 +74,14 @@ impl TerminalTitleItem {
     /// session.
     pub(crate) fn preview_example(self) -> &'static str {
         match self {
-            TerminalTitleItem::AppName => "codex",
-            TerminalTitleItem::Project => "my-project",
+            TerminalTitleItem::AppName => "мой-клиент",
+            TerminalTitleItem::Project => "мой-проект",
             TerminalTitleItem::Spinner => "⠋",
-            TerminalTitleItem::Status => "Working",
-            TerminalTitleItem::Thread => "Investigate flaky test",
-            TerminalTitleItem::GitBranch => "feat/awesome-feature",
-            TerminalTitleItem::Model => "gpt-5.2-codex",
-            TerminalTitleItem::TaskProgress => "Tasks 2/5",
+            TerminalTitleItem::Status => "В работе",
+            TerminalTitleItem::Thread => "Разобрать нестабильный тест",
+            TerminalTitleItem::GitBranch => "feat/крутая-фича",
+            TerminalTitleItem::Model => "gpt-5.2",
+            TerminalTitleItem::TaskProgress => "Задачи 2/5",
         }
     }
 
@@ -151,12 +151,12 @@ impl TerminalTitleSetupView {
 
         Self {
             picker: MultiSelectPicker::builder(
-                "Configure Terminal Title".to_string(),
-                Some("Select which items to display in the terminal title.".to_string()),
+                "Настройка заголовка терминала".to_string(),
+                Some("Выберите элементы для отображения в заголовке терминала.".to_string()),
                 app_event_tx,
             )
             .instructions(vec![
-                "Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel."
+                "↑↓ навигация, ←→ перемещение, пробел переключить, Enter подтвердить, Esc отмена."
                     .into(),
             ])
             .items(items)

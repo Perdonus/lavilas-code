@@ -68,7 +68,7 @@ impl Renderable for DelayedLoadingHeader {
         }
 
         let mut lines = Vec::with_capacity(3);
-        lines.push(Line::from("Plugins".bold()));
+        lines.push(Line::from("Плагины".bold()));
 
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.started_at);
@@ -132,8 +132,8 @@ impl ChatWidget {
     pub(crate) fn add_plugins_output(&mut self) {
         if !self.config.features.enabled(Feature::Plugins) {
             self.add_info_message(
-                "Plugins are disabled.".to_string(),
-                Some("Enable the plugins feature to use /plugins.".to_string()),
+                "Плагины отключены.".to_string(),
+                Some("Включите функцию плагинов, чтобы пользоваться /plugins.".to_string()),
             );
             return;
         }
@@ -298,8 +298,8 @@ impl ChatWidget {
                 self.plugin_install_auth_flow = None;
                 if self.plugin_install_apps_needing_auth.is_empty() {
                     self.add_info_message(
-                        format!("Installed {plugin_display_name} plugin."),
-                        Some("No additional app authentication is required.".to_string()),
+                        format!("Плагин {plugin_display_name} установлен."),
+                        Some("Дополнительная авторизация приложений не нужна.".to_string()),
                     );
                     true
                 } else {
@@ -310,9 +310,9 @@ impl ChatWidget {
                         .collect::<Vec<_>>()
                         .join(", ");
                     self.add_info_message(
-                        format!("Installed {plugin_display_name} plugin."),
+                        format!("Плагин {plugin_display_name} установлен."),
                         Some(format!(
-                            "{} app(s) still need authentication: {app_names}",
+                            "Ещё нужна авторизация для приложений ({}) : {app_names}",
                             self.plugin_install_apps_needing_auth.len()
                         )),
                     );
@@ -355,8 +355,8 @@ impl ChatWidget {
                 self.plugin_install_apps_needing_auth.clear();
                 self.plugin_install_auth_flow = None;
                 self.add_info_message(
-                    format!("Uninstalled {plugin_display_name} plugin."),
-                    Some("Bundled apps remain installed.".to_string()),
+                    format!("Плагин {plugin_display_name} удалён."),
+                    Some("Связанные приложения останутся установленными.".to_string()),
                 );
             }
             Err(err) => {
@@ -416,17 +416,17 @@ impl ChatWidget {
         let current = flow.next_app_index + 1;
         let is_installed = self.plugin_install_auth_app_is_installed(app.id.as_str());
         let status_label = if is_installed {
-            "Already installed in this session."
+            "В этой сессии уже установлено."
         } else {
-            "Install the required Apps in ChatGPT to continue:"
+            "Чтобы продолжить, установите нужные приложения в ChatGPT:"
         };
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
+        header.push(Line::from("Плагины".bold()));
         header.push(Line::from(
-            format!("{} plugin installed.", flow.plugin_display_name).bold(),
+            format!("Плагин {} установлен.", flow.plugin_display_name).bold(),
         ));
         header.push(Line::from(
-            format!("App setup {current}/{total}: {}", app.name).dim(),
+            format!("Настройка приложения {current}/{total}: {}", app.name).dim(),
         ));
         header.push(Line::from(status_label.dim()));
 
@@ -434,14 +434,14 @@ impl ChatWidget {
 
         if let Some(install_url) = app.install_url.clone() {
             let install_label = if is_installed {
-                "Manage on ChatGPT"
+                "Открыть в ChatGPT"
             } else {
-                "Install on ChatGPT"
+                "Установить в ChatGPT"
             };
             items.push(SelectionItem {
                 name: install_label.to_string(),
-                description: Some("Open the ChatGPT app management page".to_string()),
-                selected_description: Some("Open the app page in your browser.".to_string()),
+                description: Some("Открыть страницу приложения в ChatGPT.".to_string()),
+                selected_description: Some("Откроет страницу приложения в браузере.".to_string()),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenUrlInBrowser {
                         url: install_url.clone(),
@@ -451,8 +451,8 @@ impl ChatWidget {
             });
         } else {
             items.push(SelectionItem {
-                name: "ChatGPT apps link unavailable".to_string(),
-                description: Some("This app did not provide an install/manage URL.".to_string()),
+                name: "Ссылка на приложение недоступна".to_string(),
+                description: Some("У приложения нет ссылки на установку или управление.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             });
@@ -460,9 +460,9 @@ impl ChatWidget {
 
         if is_installed {
             items.push(SelectionItem {
-                name: "Continue".to_string(),
-                description: Some("This app is already installed.".to_string()),
-                selected_description: Some("Advance to the next app.".to_string()),
+                name: "Продолжить".to_string(),
+                description: Some("Это приложение уже установлено.".to_string()),
+                selected_description: Some("Перейти к следующему приложению.".to_string()),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::PluginInstallAuthAdvance {
                         refresh_connectors: false,
@@ -472,13 +472,9 @@ impl ChatWidget {
             });
         } else {
             items.push(SelectionItem {
-                name: "I've installed it".to_string(),
-                description: Some(
-                    "Trust your confirmation and continue to the next app.".to_string(),
-                ),
-                selected_description: Some(
-                    "Continue without waiting for refresh to complete.".to_string(),
-                ),
+                name: "Уже установил".to_string(),
+                description: Some("Подтвердить установку и перейти дальше.".to_string()),
+                selected_description: Some("Продолжить без ожидания обновления списка.".to_string()),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::PluginInstallAuthAdvance {
                         refresh_connectors: true,
@@ -489,9 +485,9 @@ impl ChatWidget {
         }
 
         items.push(SelectionItem {
-            name: "Skip remaining app setup".to_string(),
-            description: Some("Stop this follow-up flow for this plugin.".to_string()),
-            selected_description: Some("Abandon remaining required app setup.".to_string()),
+            name: "Пропустить остальную настройку".to_string(),
+            description: Some("Остановить этот этап для текущего плагина.".to_string()),
+            selected_description: Some("Прервать оставшуюся обязательную настройку.".to_string()),
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::PluginInstallAuthAbandon);
             })],
@@ -524,18 +520,18 @@ impl ChatWidget {
         if abandoned {
             self.add_info_message(
                 format!(
-                    "Skipped remaining app setup for {} plugin.",
+                    "Оставшаяся настройка плагина {} пропущена.",
                     flow.plugin_display_name
                 ),
-                Some("The plugin may not be usable until required apps are installed.".to_string()),
+                Some("Плагин может не заработать, пока не будут установлены нужные приложения.".to_string()),
             );
         } else {
             self.add_info_message(
                 format!(
-                    "Completed app setup flow for {} plugin.",
+                    "Настройка приложений для плагина {} завершена.",
                     flow.plugin_display_name
                 ),
-                Some("You can now continue managing plugins from /plugins.".to_string()),
+                Some("Дальше плагином можно управлять через /plugins.".to_string()),
             );
         }
 
@@ -564,12 +560,12 @@ impl ChatWidget {
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
                 self.config.animations,
-                "Loading available plugins...".to_string(),
-                Some("This first pass shows the ChatGPT marketplace only.".to_string()),
+                "Загружаю список плагинов...".to_string(),
+                Some("Пока показывается только маркетплейс ChatGPT.".to_string()),
             )),
             items: vec![SelectionItem {
-                name: "Loading plugins...".to_string(),
-                description: Some("This updates when the marketplace list is ready.".to_string()),
+                name: "Загрузка плагинов...".to_string(),
+                description: Some("Список обновится, когда маркетплейс ответит.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -583,12 +579,12 @@ impl ChatWidget {
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
                 self.config.animations,
-                format!("Loading details for {plugin_display_name}..."),
+                format!("Загружаю детали плагина {plugin_display_name}..."),
                 /*note*/ None,
             )),
             items: vec![SelectionItem {
-                name: "Loading plugin details...".to_string(),
-                description: Some("This updates when plugin details load.".to_string()),
+                name: "Загрузка деталей плагина...".to_string(),
+                description: Some("Карточка обновится, когда детали загрузятся.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -601,17 +597,17 @@ impl ChatWidget {
         plugin_display_name: &str,
     ) -> SelectionViewParams {
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
+        header.push(Line::from("Плагины".bold()));
         header.push(Line::from(
-            format!("Installing {plugin_display_name}...").dim(),
+            format!("Устанавливаю {plugin_display_name}...").dim(),
         ));
 
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(header),
             items: vec![SelectionItem {
-                name: "Installing plugin...".to_string(),
-                description: Some("This updates when plugin installation completes.".to_string()),
+                name: "Установка плагина...".to_string(),
+                description: Some("Экран обновится после завершения установки.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -624,17 +620,17 @@ impl ChatWidget {
         plugin_display_name: &str,
     ) -> SelectionViewParams {
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
+        header.push(Line::from("Плагины".bold()));
         header.push(Line::from(
-            format!("Uninstalling {plugin_display_name}...").dim(),
+            format!("Удаляю {plugin_display_name}...").dim(),
         ));
 
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(header),
             items: vec![SelectionItem {
-                name: "Uninstalling plugin...".to_string(),
-                description: Some("This updates when the plugin removal completes.".to_string()),
+                name: "Удаление плагина...".to_string(),
+                description: Some("Экран обновится после завершения удаления.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -644,14 +640,14 @@ impl ChatWidget {
 
     fn plugins_error_popup_params(&self, err: &str) -> SelectionViewParams {
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from("Failed to load plugins.".dim()));
+        header.push(Line::from("Плагины".bold()));
+        header.push(Line::from("Не удалось загрузить плагины.".dim()));
 
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(header),
             items: vec![SelectionItem {
-                name: "Plugin marketplace unavailable".to_string(),
+                name: "Маркетплейс плагинов недоступен".to_string(),
                 description: Some(err.to_string()),
                 is_disabled: true,
                 ..Default::default()
@@ -666,11 +662,11 @@ impl ChatWidget {
         plugins_response: Option<&PluginListResponse>,
     ) -> SelectionViewParams {
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from("Failed to load plugin details.".dim()));
+        header.push(Line::from("Плагины".bold()));
+        header.push(Line::from("Не удалось загрузить детали плагина.".dim()));
 
         let mut items = vec![SelectionItem {
-            name: "Plugin detail unavailable".to_string(),
+            name: "Детали плагина недоступны".to_string(),
             description: Some(err.to_string()),
             is_disabled: true,
             ..Default::default()
@@ -678,9 +674,9 @@ impl ChatWidget {
         if let Some(plugins_response) = plugins_response.cloned() {
             let cwd = self.config.cwd.to_path_buf();
             items.push(SelectionItem {
-                name: "Back to plugins".to_string(),
-                description: Some("Return to the plugin list.".to_string()),
-                selected_description: Some("Return to the plugin list.".to_string()),
+                name: "Назад к плагинам".to_string(),
+                description: Some("Вернуться к списку плагинов.".to_string()),
+                selected_description: Some("Вернуться к списку плагинов.".to_string()),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::PluginsLoaded {
                         cwd: cwd.clone(),
@@ -714,16 +710,16 @@ impl ChatWidget {
             .count();
 
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
+        header.push(Line::from("Плагины".bold()));
         header.push(Line::from(
-            "Browse plugins from available marketplaces.".dim(),
+            "Просматривайте плагины из доступных маркетплейсов.".dim(),
         ));
         header.push(Line::from(
-            format!("Installed {installed} of {total} available plugins.").dim(),
+            format!("Установлено {installed} из {total} доступных плагинов.").dim(),
         ));
         if let Some(remote_sync_error) = response.remote_sync_error.as_deref() {
             header.push(Line::from(
-                format!("Using cached marketplace data: {remote_sync_error}").dim(),
+                format!("Показываю кэшированные данные маркетплейса: {remote_sync_error}").dim(),
             ));
         }
 
@@ -765,7 +761,7 @@ impl ChatWidget {
                 plugin_brief_description(plugin, &marketplace_label, status_label_width);
             let selected_status_label = format!("{status_label:<status_label_width$}");
             let selected_description =
-                format!("{selected_status_label}   Press Enter to view plugin details.");
+                format!("{selected_status_label}   Enter открывает карточку плагина.");
             let search_value = format!(
                 "{display_name} {} {} {}",
                 plugin.id, plugin.name, marketplace_label
@@ -798,9 +794,9 @@ impl ChatWidget {
 
         if items.is_empty() {
             items.push(SelectionItem {
-                name: "No marketplace plugins available".to_string(),
+                name: "Плагины не найдены".to_string(),
                 description: Some(
-                    "No plugins are available in the discovered marketplaces.".to_string(),
+                    "В найденных маркетплейсах пока нет доступных плагинов.".to_string(),
                 ),
                 is_disabled: true,
                 ..Default::default()
@@ -813,7 +809,7 @@ impl ChatWidget {
             footer_hint: Some(plugins_popup_hint_line()),
             items,
             is_searchable: true,
-            search_placeholder: Some("Type to search plugins".to_string()),
+            search_placeholder: Some("Начните вводить для поиска по плагинам".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
             ..Default::default()
         }
@@ -828,31 +824,31 @@ impl ChatWidget {
         let display_name = plugin_display_name(&plugin.summary);
         let detail_status_label = if plugin.summary.installed {
             if plugin.summary.enabled {
-                "Installed"
+                "Установлен"
             } else {
-                "Installed · Disabled"
+                "Установлен · Отключен"
             }
         } else {
             match plugin.summary.install_policy {
-                PluginInstallPolicy::NotAvailable => "Not installable",
-                PluginInstallPolicy::Available => "Can be installed",
-                PluginInstallPolicy::InstalledByDefault => "Available by default",
+                PluginInstallPolicy::NotAvailable => "Недоступен для установки",
+                PluginInstallPolicy::Available => "Можно установить",
+                PluginInstallPolicy::InstalledByDefault => "Доступен по умолчанию",
             }
         };
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
+        header.push(Line::from("Плагины".bold()));
         header.push(Line::from(
             format!("{display_name} · {detail_status_label} · {marketplace_label}").bold(),
         ));
         if !plugin.summary.installed {
             header.push(PluginDisclosureLine {
                 line: Line::from(vec![
-                    "Data shared with this app is subject to the app's ".into(),
-                    "terms of service".bold(),
-                    " and ".into(),
-                    "privacy policy".bold(),
+                    "Данные, переданные этому приложению, регулируются его ".into(),
+                    "условиями использования".bold(),
+                    " и ".into(),
+                    "политикой конфиденциальности".bold(),
                     ". ".into(),
-                    "Learn more".cyan().underlined(),
+                    "Подробнее".cyan().underlined(),
                     ".".into(),
                 ]),
             });
@@ -864,9 +860,9 @@ impl ChatWidget {
         let cwd = self.config.cwd.to_path_buf();
         let plugins_response = plugins_response.clone();
         let mut items = vec![SelectionItem {
-            name: "Back to plugins".to_string(),
-            description: Some("Return to the plugin list.".to_string()),
-            selected_description: Some("Return to the plugin list.".to_string()),
+            name: "Назад к плагинам".to_string(),
+            description: Some("Вернуться к списку плагинов.".to_string()),
+            selected_description: Some("Вернуться к списку плагинов.".to_string()),
             actions: vec![Box::new(move |tx| {
                 tx.send(AppEvent::PluginsLoaded {
                     cwd: cwd.clone(),
@@ -881,9 +877,9 @@ impl ChatWidget {
             let plugin_id = plugin.summary.id.clone();
             let plugin_display_name = display_name;
             items.push(SelectionItem {
-                name: "Uninstall plugin".to_string(),
-                description: Some("Remove this plugin now.".to_string()),
-                selected_description: Some("Remove this plugin now.".to_string()),
+                name: "Удалить плагин".to_string(),
+                description: Some("Удалить этот плагин сейчас.".to_string()),
+                selected_description: Some("Удалить этот плагин сейчас.".to_string()),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenPluginUninstallLoading {
                         plugin_display_name: plugin_display_name.clone(),
@@ -898,10 +894,8 @@ impl ChatWidget {
             });
         } else if plugin.summary.install_policy == PluginInstallPolicy::NotAvailable {
             items.push(SelectionItem {
-                name: "Install plugin".to_string(),
-                description: Some(
-                    "This plugin is not installable from this marketplace.".to_string(),
-                ),
+                name: "Установить плагин".to_string(),
+                description: Some("Этот плагин нельзя установить из текущего маркетплейса.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             });
@@ -911,9 +905,9 @@ impl ChatWidget {
             let plugin_name = plugin.summary.name.clone();
             let plugin_display_name = display_name;
             items.push(SelectionItem {
-                name: "Install plugin".to_string(),
-                description: Some("Install this plugin now.".to_string()),
-                selected_description: Some("Install this plugin now.".to_string()),
+                name: "Установить плагин".to_string(),
+                description: Some("Установить этот плагин сейчас.".to_string()),
+                selected_description: Some("Установить этот плагин сейчас.".to_string()),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenPluginInstallLoading {
                         plugin_display_name: plugin_display_name.clone(),
@@ -930,19 +924,19 @@ impl ChatWidget {
         }
 
         items.push(SelectionItem {
-            name: "Skills".to_string(),
+            name: "Навыки".to_string(),
             description: Some(plugin_skill_summary(plugin)),
             is_disabled: true,
             ..Default::default()
         });
         items.push(SelectionItem {
-            name: "Apps".to_string(),
+            name: "Приложения".to_string(),
             description: Some(plugin_app_summary(plugin)),
             is_disabled: true,
             ..Default::default()
         });
         items.push(SelectionItem {
-            name: "MCP Servers".to_string(),
+            name: "MCP-серверы".to_string(),
             description: Some(plugin_mcp_summary(plugin)),
             is_disabled: true,
             ..Default::default()
@@ -960,7 +954,7 @@ impl ChatWidget {
 }
 
 fn plugins_popup_hint_line() -> Line<'static> {
-    Line::from("Press esc to close.")
+    Line::from("Esc закрывает окно.")
 }
 
 fn marketplace_display_name(marketplace: &PluginMarketplaceEntry) -> String {
@@ -1001,15 +995,15 @@ fn plugin_brief_description(
 fn plugin_status_label(plugin: &PluginSummary) -> &'static str {
     if plugin.installed {
         if plugin.enabled {
-            "Installed"
+            "Установлен"
         } else {
-            "Installed · Disabled"
+            "Установлен · Отключен"
         }
     } else {
         match plugin.install_policy {
-            PluginInstallPolicy::NotAvailable => "Not installable",
-            PluginInstallPolicy::Available => "Available",
-            PluginInstallPolicy::InstalledByDefault => "Available by default",
+            PluginInstallPolicy::NotAvailable => "Недоступен для установки",
+            PluginInstallPolicy::Available => "Доступен",
+            PluginInstallPolicy::InstalledByDefault => "Доступен по умолчанию",
         }
     }
 }
@@ -1054,7 +1048,7 @@ fn plugin_detail_description(plugin: &PluginDetail) -> Option<String> {
 
 fn plugin_skill_summary(plugin: &PluginDetail) -> String {
     if plugin.skills.is_empty() {
-        "No plugin skills.".to_string()
+        "У плагина нет навыков.".to_string()
     } else {
         plugin
             .skills
@@ -1067,7 +1061,7 @@ fn plugin_skill_summary(plugin: &PluginDetail) -> String {
 
 fn plugin_app_summary(plugin: &PluginDetail) -> String {
     if plugin.apps.is_empty() {
-        "No plugin apps.".to_string()
+        "У плагина нет приложений.".to_string()
     } else {
         plugin
             .apps
@@ -1080,7 +1074,7 @@ fn plugin_app_summary(plugin: &PluginDetail) -> String {
 
 fn plugin_mcp_summary(plugin: &PluginDetail) -> String {
     if plugin.mcp_servers.is_empty() {
-        "No plugin MCP servers.".to_string()
+        "У плагина нет MCP-серверов.".to_string()
     } else {
         plugin.mcp_servers.join(", ")
     }

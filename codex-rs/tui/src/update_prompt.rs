@@ -56,6 +56,7 @@ pub(crate) async fn run_update_prompt_if_needed(
         if let Some(event) = events.next().await {
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
                     tui.draw(u16::MAX, |frame| {
@@ -191,7 +192,7 @@ impl WidgetRef for &UpdatePromptScreen {
         column.push("");
         column.push(Line::from(vec![
             padded_emoji("  ✨").bold().cyan(),
-            "Update available!".bold(),
+            "Доступно обновление!".bold(),
             " ".into(),
             format!(
                 "{current} -> {latest}",
@@ -203,8 +204,8 @@ impl WidgetRef for &UpdatePromptScreen {
         column.push("");
         column.push(
             Line::from(vec![
-                "Release notes: ".dim(),
-                "https://github.com/openai/codex/releases/latest"
+                "Что нового: ".dim(),
+                "https://github.com/Perdonus/lavilas-code/releases/latest"
                     .dim()
                     .underlined(),
             ])
@@ -213,25 +214,25 @@ impl WidgetRef for &UpdatePromptScreen {
         column.push("");
         column.push(selection_option_row(
             0,
-            format!("Update now (runs `{update_command}`)"),
+            format!("Обновить сейчас (запустит `{update_command}`)"),
             self.highlighted == UpdateSelection::UpdateNow,
         ));
         column.push(selection_option_row(
             1,
-            "Skip".to_string(),
+            "Пропустить".to_string(),
             self.highlighted == UpdateSelection::NotNow,
         ));
         column.push(selection_option_row(
             2,
-            "Skip until next version".to_string(),
+            "Пропустить до следующей версии".to_string(),
             self.highlighted == UpdateSelection::DontRemind,
         ));
         column.push("");
         column.push(
             Line::from(vec![
-                "Press ".dim(),
+                "Нажмите ".dim(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " to continue".dim(),
+                " чтобы продолжить".dim(),
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );

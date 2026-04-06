@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::bottom_pane::selection_popup_common::menu_surface_inset;
@@ -22,6 +22,7 @@ use crate::render::renderable::Renderable;
 use super::DESIRED_SPACERS_BETWEEN_SECTIONS;
 use super::RequestUserInputOverlay;
 use super::TIP_SEPARATOR;
+use super::russian_question_phrase;
 
 const MIN_OVERLAY_HEIGHT: usize = 8;
 const PROGRESS_ROW_HEIGHT: usize = 1;
@@ -116,14 +117,15 @@ impl Renderable for RequestUserInputOverlay {
 impl RequestUserInputOverlay {
     fn unanswered_confirmation_data(&self) -> UnansweredConfirmationData {
         let unanswered = self.unanswered_question_count();
-        let subtitle = format!(
-            "{unanswered} unanswered question{}",
-            if unanswered == 1 { "" } else { "s" }
-        );
+        let subtitle = if unanswered == 0 {
+            "Нет вопросов без ответа".to_string()
+        } else {
+            format("{} без ответа", russian_question_phrase(unanswered, None))
+        };
         UnansweredConfirmationData {
             title_line: Line::from(super::UNANSWERED_CONFIRM_TITLE.bold()),
             subtitle_line: Line::from(subtitle.dim()),
-            hint_line: standard_popup_hint_line(),
+            hint_line: Line::from("Нажмите Enter для подтверждения или Esc для возврата".dim()),
             rows: self.unanswered_confirmation_rows(),
             state: self.confirm_unanswered.unwrap_or_default(),
         }
@@ -220,7 +222,7 @@ impl RequestUserInputOverlay {
             &layout.rows,
             &layout.state,
             layout.rows.len().max(1),
-            "No choices",
+            "Нет вариантов",
         );
 
         cursor_y = cursor_y.saturating_add(rows_height);
@@ -267,14 +269,15 @@ impl RequestUserInputOverlay {
         let progress_line = if self.question_count() > 0 {
             let idx = self.current_index() + 1;
             let total = self.question_count();
-            let base = format!("Question {idx}/{total}");
+            let base = format!("Вопрос {idx}/{total}");
             if unanswered > 0 {
-                Line::from(format!("{base} ({unanswered} unanswered)").dim())
+                let phrase = russian_question_phrase(unanswered, None);
+                Line::from(format!("{base} ({phrase} без ответа)").dim())
             } else {
                 Line::from(base.dim())
             }
         } else {
-            Line::from("No questions".dim())
+            Line::from("Вопросов нет".dim())
         };
         Paragraph::new(progress_line).render(sections.progress_area, buf);
 
@@ -322,7 +325,7 @@ impl RequestUserInputOverlay {
                     &option_rows,
                     &options_state,
                     option_rows.len().max(1),
-                    "No options",
+                    "Нет опций",
                 );
             }
         }
@@ -350,7 +353,7 @@ impl RequestUserInputOverlay {
         let option_tip = if options_hidden {
             let selected = self.selected_option_index().unwrap_or(0).saturating_add(1);
             let total = self.options_len();
-            Some(super::FooterTip::new(format!("option {selected}/{total}")))
+            Some(super::FooterTip::new(format!("вариант {selected}/{total}")))
         } else {
             None
         };

@@ -2,9 +2,9 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-"  / for commands                             ! for shell commands               "
-"  ctrl + j for newline                       tab to queue message               "
-"  @ for file paths                           ctrl + v to paste images           "
-"  ctrl + g to edit in external editor        esc esc to edit previous message   "
-"  ctrl + c to exit                           shift + tab to change mode         "
-"                                             ctrl + t to view transcript        "
+"  / для команд                             ! для shell-команд               "
+"  ctrl + j новая строка                       tab в очередь               "
+"  @ пути к файлам                           ctrl + v вставить изображение           "
+"  ctrl + g открыть во внешнем редакторе        esc дважды для правки предыдущего сообщения   "
+"  ctrl + c выход                           shift + tab сменить режим         "
+"                                             ctrl + t показать стенограмму        "

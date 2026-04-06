@@ -5,19 +5,19 @@ expression: sanitized
 /status
 
 ╭─────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                                           │
+│  >_ Lavilas Codex (v0.0.0)                                           │
 │                                                                     │
-│ Visit https://chatgpt.com/codex/settings/usage for up-to-date       │
-│ information on rate limits and credits                              │
+│ Откройте https://chatgpt.com/codex/settings/usage для актуальной       │
+│ информации о лимитах и кредитах                              │
 │                                                                     │
-│  Model:            gpt-5.1-codex (reasoning none, summaries auto)   │
-│  Directory: [[workspace]]                                           │
-│  Permissions:      Custom (read-only, on-request)                   │
-│  Agents.md:        <none>                                           │
+│  Модель:            gpt-5.1-codex (размышления выкл, сводки авто)   │
+│  Каталог: [[workspace]]                                           │
+│  Доступ:      Пользовательский (Только чтение, по запросу)                   │
+│  AGENTS.md:        <нет>                                           │
 │                                                                     │
-│  Token usage:      1.05K total  (700 input + 350 output)            │
-│  Context window:   100% left (1.45K used / 272K)                    │
-│  5h limit:         [████████░░░░░░░░░░░░] 40% left (resets 11:32)   │
-│  Weekly limit:     [█████████████░░░░░░░] 65% left (resets 11:52)   │
-│  Warning:          limits may be stale - start new turn to refresh. │
+│  Токены:      1.05K всего  (700 вход + 350 выход)            │
+│  Контекстное окно:   100% осталось (1.45K использовано / 272K)                    │
+│  5ч лимит:         [████████░░░░░░░░░░░░] 40% осталось (сброс 11:32)   │
+│  Недельный лимит:     [█████████████░░░░░░░] 65% осталось (сброс 11:52)   │
+│  Предупреждение:          лимиты могут быть устаревшими, начните новый запрос для обновления. │
 ╰─────────────────────────────────────────────────────────────────────╯

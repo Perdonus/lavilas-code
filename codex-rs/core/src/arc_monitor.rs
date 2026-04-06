@@ -196,7 +196,7 @@ pub(crate) async fn monitor_action(
                 ArcMonitorOutcome::AskUser(rationale.to_string())
             } else {
                 ArcMonitorOutcome::AskUser(
-                    "Additional confirmation is required before this tool call can continue."
+                    "Перед продолжением вызова инструмента требуется дополнительное подтверждение."
                         .to_string(),
                 )
             }
@@ -208,7 +208,7 @@ pub(crate) async fn monitor_action(
                 ArcMonitorOutcome::SteerModel(short_reason.to_string())
             } else {
                 ArcMonitorOutcome::SteerModel(
-                    "Tool call was cancelled because of safety risks.".to_string(),
+                    "Вызов инструмента был отменён из-за рисков безопасности.".to_string(),
                 )
             }
         }

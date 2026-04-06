@@ -27,7 +27,7 @@ use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
 const BASE_CLI_BUG_ISSUE_URL: &str =
-    "https://github.com/openai/codex/issues/new?template=3-cli.yml";
+    "https://github.com/Perdonus/lavilas-code/issues/new?template=3-cli.yml";
 /// Internal routing link for employee feedback follow-ups. This must not be shown to external users.
 const CODEX_FEEDBACK_INTERNAL_URL: &str = "http://go/codex-feedback-internal";
 
@@ -270,24 +270,24 @@ fn gutter() -> Span<'static> {
 fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String) {
     match category {
         FeedbackCategory::BadResult => (
-            "Tell us more (bad result)".to_string(),
-            "(optional) Write a short description to help us further".to_string(),
+            "Что пошло не так?".to_string(),
+            "(необязательно) Опишите, почему ответ не устроил".to_string(),
         ),
         FeedbackCategory::GoodResult => (
-            "Tell us more (good result)".to_string(),
-            "(optional) Write a short description to help us further".to_string(),
+            "Что понравилось?".to_string(),
+            "(необязательно) Укажите, какие детали оказались полезными".to_string(),
         ),
         FeedbackCategory::Bug => (
-            "Tell us more (bug)".to_string(),
-            "(optional) Write a short description to help us further".to_string(),
+            "Опишите ошибку".to_string(),
+            "(необязательно) Расскажите, где и как повторяется сбой".to_string(),
         ),
         FeedbackCategory::SafetyCheck => (
-            "Tell us more (safety check)".to_string(),
-            "(optional) Share what was refused and why it should have been allowed".to_string(),
+            "Проверка безопасности?".to_string(),
+            "(необязательно) Объясните, почему этот запрос должен пройти".to_string(),
         ),
         FeedbackCategory::Other => (
-            "Tell us more (other)".to_string(),
-            "(optional) Write a short description to help us further".to_string(),
+            "Что хотите сообщить?".to_string(),
+            "(необязательно) Поделитесь идеей, замечанием или наблюдением".to_string(),
         ),
     }
 }
@@ -309,17 +309,17 @@ pub(crate) fn feedback_success_cell(
     feedback_audience: FeedbackAudience,
 ) -> history_cell::PlainHistoryCell {
     let prefix = if include_logs {
-        "• Feedback uploaded."
+        "• Отзыв отправлен."
     } else {
-        "• Feedback recorded (no logs)."
+        "• Отзыв сохранен (без логов)."
     };
     let issue_url = issue_url_for_category(category, thread_id, feedback_audience);
     let mut lines = vec![Line::from(match issue_url.as_ref() {
         Some(_) if feedback_audience == FeedbackAudience::OpenAiEmployee => {
-            format!("{prefix} Please report this in #codex-feedback:")
+            format!("{prefix} Сообщите об этом в #codex-feedback:")
         }
-        Some(_) => format!("{prefix} Please open an issue using the following URL:"),
-        None => format!("{prefix} Thanks for the feedback!"),
+        Some(_) => format!("{prefix} Создайте обращение по ссылке ниже:"),
+        None => format!("{prefix} Спасибо за отзыв!"),
     })];
     match issue_url {
         Some(url) if feedback_audience == FeedbackAudience::OpenAiEmployee => {
@@ -327,7 +327,7 @@ pub(crate) fn feedback_success_cell(
                 "".into(),
                 Line::from(vec!["  ".into(), url.cyan().underlined()]),
                 "".into(),
-                Line::from("  Share this and add some info about your problem:"),
+                Line::from("  Поделитесь этим и добавьте немного деталей о проблеме:"),
                 Line::from(vec![
                     "    ".into(),
                     format!("https://go/codex-feedback/{thread_id}").bold(),
@@ -340,16 +340,16 @@ pub(crate) fn feedback_success_cell(
                 Line::from(vec!["  ".into(), url.cyan().underlined()]),
                 "".into(),
                 Line::from(vec![
-                    "  Or mention your thread ID ".into(),
+                    "  Или укажите ID треда ".into(),
                     thread_id.to_string().bold(),
-                    " in an existing issue.".into(),
+                    " в существующем обращении.".into(),
                 ]),
             ]);
         }
         None => {
             lines.extend([
                 "".into(),
-                Line::from(vec!["  Thread ID: ".into(), thread_id.to_string().bold()]),
+                Line::from(vec!["  ID треда: ".into(), thread_id.to_string().bold()]),
             ]);
         }
     }
@@ -391,36 +391,36 @@ pub(crate) fn feedback_selection_params(
     app_event_tx: AppEventSender,
 ) -> super::SelectionViewParams {
     super::SelectionViewParams {
-        title: Some("How was this?".to_string()),
+        title: Some("Как прошла сессия?".to_string()),
         items: vec![
             make_feedback_item(
                 app_event_tx.clone(),
-                "bug",
-                "Crash, error message, hang, or broken UI/behavior.",
+                "Ошибка",
+                "Сбой, сообщение об ошибке, зависание или некорректное поведение интерфейса.",
                 FeedbackCategory::Bug,
             ),
             make_feedback_item(
                 app_event_tx.clone(),
-                "bad result",
-                "Output was off-target, incorrect, incomplete, or unhelpful.",
+                "Плохой результат",
+                "Ответ был неточным, неполным или не помог.",
                 FeedbackCategory::BadResult,
             ),
             make_feedback_item(
                 app_event_tx.clone(),
-                "good result",
-                "Helpful, correct, high‑quality, or delightful result worth celebrating.",
+                "Хороший результат",
+                "Ответ оказался полезным, точным и понятным.",
                 FeedbackCategory::GoodResult,
             ),
             make_feedback_item(
                 app_event_tx.clone(),
-                "safety check",
-                "Benign usage blocked due to safety checks or refusals.",
+                "Проверка безопасности",
+                "Безопасный запрос блокируется системой безопасности или получает отказ.",
                 FeedbackCategory::SafetyCheck,
             ),
             make_feedback_item(
                 app_event_tx,
-                "other",
-                "Slowness, feature suggestion, UX feedback, or anything else.",
+                "Другое",
+                "Медленная работа, идея по функции, замечание по UX или другое наблюдение.",
                 FeedbackCategory::Other,
             ),
         ],
@@ -431,11 +431,11 @@ pub(crate) fn feedback_selection_params(
 /// Build the selection popup params shown when feedback is disabled.
 pub(crate) fn feedback_disabled_params() -> super::SelectionViewParams {
     super::SelectionViewParams {
-        title: Some("Sending feedback is disabled".to_string()),
-        subtitle: Some("This action is disabled by configuration.".to_string()),
+        title: Some("Сбор отзывов отключён".to_string()),
+        subtitle: Some("Эта возможность отключена в настройках.".to_string()),
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![super::SelectionItem {
-            name: "Close".to_string(),
+            name: "Закрыть".to_string(),
             dismiss_on_select: true,
             ..Default::default()
         }],
@@ -493,9 +493,9 @@ pub(crate) fn feedback_upload_consent_params(
 
     // Build header listing files that would be sent if user consents.
     let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
-        Line::from("Upload logs?".bold()).into(),
+        Line::from("Поделиться логами?".bold()).into(),
         Line::from("").into(),
-        Line::from("The following files will be sent:".dim()).into(),
+        Line::from("Будут отправлены файлы:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
     ];
     if let Some(path) = rollout_path.as_deref()
@@ -514,7 +514,7 @@ pub(crate) fn feedback_upload_consent_params(
     }
     if should_show_feedback_connectivity_details(category, feedback_diagnostics) {
         header_lines.push(Line::from("").into());
-        header_lines.push(Line::from("Connectivity diagnostics".bold()).into());
+        header_lines.push(Line::from("Диагностика подключения".bold()).into());
         for diagnostic in feedback_diagnostics.diagnostics() {
             header_lines
                 .push(Line::from(vec!["  - ".into(), diagnostic.headline.clone().into()]).into());
@@ -528,17 +528,19 @@ pub(crate) fn feedback_upload_consent_params(
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![
             super::SelectionItem {
-                name: "Yes".to_string(),
+                name: "Да".to_string(),
                 description: Some(
-                    "Share the current Codex session logs with the team for troubleshooting."
-                        .to_string(),
+                    "Поделитесь логами текущей сессии с командой для диагностики.".to_string(),
                 ),
                 actions: vec![yes_action],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             super::SelectionItem {
-                name: "No".to_string(),
+                name: "Нет".to_string(),
+                description: Some(
+                    "Отправить сообщение без логов.".to_string(),
+                ),
                 actions: vec![no_action],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -765,7 +767,7 @@ mod tests {
         );
         let bug_url_non_employee =
             issue_url_for_category(FeedbackCategory::Bug, "t", FeedbackAudience::External);
-        let expected_external_url = "https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20t";
+        let expected_external_url = "https://github.com/Perdonus/lavilas-code/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20t";
         assert_eq!(bug_url_non_employee.as_deref(), Some(expected_external_url));
     }
 
@@ -782,7 +784,7 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "• Feedback uploaded. Please open an issue using the following URL:\n\n  https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20thread-1\n\n  Or mention your thread ID thread-1 in an existing issue."
+            "• Отзыв отправлен. Создайте обращение по ссылке ниже:\n\n  https://github.com/Perdonus/lavilas-code/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20thread-1\n\n  Или укажите ID треда thread-1 в существующем обращении."
         );
     }
 
@@ -799,7 +801,7 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "• Feedback uploaded. Please report this in #codex-feedback:\n\n  http://go/codex-feedback-internal\n\n  Share this and add some info about your problem:\n    https://go/codex-feedback/thread-2"
+            "• Отзыв отправлен. Сообщите об этом в #codex-feedback:\n\n  http://go/codex-feedback-internal\n\n  Поделитесь этим и добавьте немного деталей о проблеме:\n    https://go/codex-feedback/thread-2"
         );
     }
 
@@ -816,7 +818,7 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "• Feedback recorded (no logs). Thanks for the feedback!\n\n  Thread ID: thread-3"
+            "• Отзыв сохранен (без логов). Спасибо за отзыв!\n\n  ID треда: thread-3"
         );
     }
 
@@ -836,7 +838,7 @@ mod tests {
                 ),
                 /*width*/ 120,
             );
-            assert!(rendered.contains("Please open an issue using the following URL:"));
+            assert!(rendered.contains("Создайте обращение по ссылке ниже:"));
             assert!(rendered.contains("thread-4"));
         }
     }

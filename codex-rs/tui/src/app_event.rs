@@ -307,6 +307,53 @@ pub(crate) enum AppEvent {
         service_tier: Option<ServiceTier>,
     },
 
+    /// Open the unified custom settings popup.
+    OpenCustomSettings,
+
+    /// Open the quick model picker popup.
+    OpenModelPopup,
+
+    /// Open the personality picker popup.
+    OpenPersonalityPopup,
+
+    /// Open profiles manager popup.
+    OpenProfilesManager,
+
+    /// Open provider picker to add an account profile.
+    OpenAddAccountProviderPicker,
+
+    /// Create a profile template for a provider.
+    CreateProfileTemplate {
+        provider: String,
+    },
+
+    /// Open language picker for interface/profile settings.
+    OpenLanguagePicker,
+
+    /// Persist preferred UI/profile language.
+    SetProfilesLanguage {
+        lang: String,
+    },
+
+    /// Open command prefix picker.
+    OpenCommandPrefixPicker,
+
+    /// Persist slash-command prefix.
+    SetCommandPrefix {
+        prefix: char,
+    },
+
+    /// Open slash-command visibility picker.
+    OpenCommandVisibilityPicker,
+
+    /// Toggle visibility of one slash command by canonical key.
+    ToggleCommandVisibility {
+        command_key: String,
+    },
+
+    /// Open the realtime audio settings popup.
+    OpenRealtimeAudioPopup,
+
     /// Open the device picker for a realtime microphone or speaker.
     OpenRealtimeAudioDeviceSelection {
         kind: RealtimeAudioDeviceKind,

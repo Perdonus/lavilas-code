@@ -2,9 +2,11 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Implement this plan?
+  Переходить к коду по этому плану?
 
-› 1. Yes, implement this plan  Switch to Default and start coding.
-  2. No, stay in Plan mode     Continue planning with the model.
+› 1. Да, начать реализацию  Выйти из Plan, перейти в обычный режим и начать
+                             выполнять шаги плана.
+  2. Пока остаться в Plan   Остаться в режиме Plan и ещё уточнить шаги перед
+                             переходом к коду.
 
-  Press enter to confirm or esc to go back
+  Нажмите enter для подтверждения или esc для возврата

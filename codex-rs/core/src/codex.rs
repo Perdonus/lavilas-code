@@ -2263,8 +2263,8 @@ impl Session {
                         &turn_context,
                         EventMsg::Warning(WarningEvent {
                             message: format!(
-                                "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
-                         Consider switching back to `{prev}` as it may affect Codex performance."
+                                "Эта сессия была записана на модели `{prev}`, а сейчас возобновляется на `{curr}`. \
+                         Рекомендуется вернуться к `{prev}`: смена модели может повлиять на качество работы Lavilas Codex."
                             ),
                         }),
                     )
@@ -2563,7 +2563,7 @@ impl Session {
                 tc,
                 EventMsg::Warning(WarningEvent {
                     message: format!(
-                        "Model metadata for `{}` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+                        "Метаданные модели `{}` недоступны. Используются резервные метаданные. Результат может быть менее предсказуемым (качество рассуждений, работа инструментов и лимиты контекста).",
                         tc.model_info.slug
                     ),
                 }),
