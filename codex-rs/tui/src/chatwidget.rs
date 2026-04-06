@@ -2519,11 +2519,6 @@ impl ChatWidget {
         });
         self.notify(Notification::PlanModePrompt { title });
     }
-
-    fn has_queued_follow_up_messages(&self) -> bool {
-        !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
-    }
-
     fn has_queued_follow_up_messages(&self) -> bool {
         !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
     }
@@ -3778,10 +3773,8 @@ impl ChatWidget {
             action,
         } = ev;
         let mut handled = false;
-        if let Some(cell) = self
-            .active_cell
-            .as_mut()
-            .and_then(|cell| cell.as_any_mut().downcast_mut::<WebSearchCell>())
+        if let Some(active_cell) = self.active_cell.as_mut()
+            && let Some(cell) = active_cell.as_any_mut().downcast_mut::<WebSearchCell>()
             && cell.call_id() == call_id
         {
             cell.update(action.clone(), query.clone());
@@ -4610,13 +4603,22 @@ impl ChatWidget {
             result,
         } = ev;
 
-        let extra_cell = match self
-            .active_cell
-            .as_mut()
-            .and_then(|cell| cell.as_any_mut().downcast_mut::<McpToolCallCell>())
-        {
-            Some(cell) if cell.call_id() == call_id => cell.complete(duration, result),
-            _ => {
+        let extra_cell = if let Some(active_cell) = self.active_cell.as_mut() {
+            if let Some(cell) = active_cell.as_any_mut().downcast_mut::<McpToolCallCell>() {
+                if cell.call_id() == call_id {
+                    cell.complete(duration, result)
+                } else {
+                    self.flush_active_cell();
+                    let mut cell = history_cell::new_active_mcp_tool_call(
+                        call_id,
+                        invocation,
+                        self.config.animations,
+                    );
+                    let extra_cell = cell.complete(duration, result);
+                    self.active_cell = Some(Box::new(cell));
+                    extra_cell
+                }
+            } else {
                 self.flush_active_cell();
                 let mut cell = history_cell::new_active_mcp_tool_call(
                     call_id,
@@ -4627,6 +4629,16 @@ impl ChatWidget {
                 self.active_cell = Some(Box::new(cell));
                 extra_cell
             }
+        } else {
+            self.flush_active_cell();
+            let mut cell = history_cell::new_active_mcp_tool_call(
+                call_id,
+                invocation,
+                self.config.animations,
+            );
+            let extra_cell = cell.complete(duration, result);
+            self.active_cell = Some(Box::new(cell));
+            extra_cell
         };
 
         self.flush_active_cell();
@@ -8087,52 +8099,6 @@ impl ChatWidget {
             self.bottom_pane.show_selection_view(params);
         }
     }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn prefetch_rate_limits(&mut self) {
-        self.stop_rate_limit_poller();
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn should_prefetch_rate_limits(&self) -> bool {
-        self.config.model_provider.requires_openai_auth && self.has_chatgpt_account
-    }
-
-    fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.model_catalog.try_list_models().ok()?;
-        models
-            .iter()
-            .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
-            .cloned()
-    }
-
-    fn rate_limit_switch_prompt_hidden(&self) -> bool {
-        self.config
-            .notices
-            .hide_rate_limit_model_nudge
-            .unwrap_or(false)
-    }
-
-    fn maybe_show_pending_rate_limit_prompt(&mut self) {
-        if self.rate_limit_switch_prompt_hidden() {
-            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
-            return;
-        }
-        if !matches!(
-            self.rate_limit_switch_prompt,
-            RateLimitSwitchPromptState::Pending
-        ) {
-            return;
-        }
-        if let Some(preset) = self.lower_cost_preset() {
-            self.open_rate_limit_switch_prompt(preset);
-            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Shown;
-        } else {
-            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
-        }
-    }
-
-
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn open_realtime_audio_popup(&mut self) {
         let is_ru = self.ui_language().is_ru();
@@ -9448,7 +9414,7 @@ impl ChatWidget {
 
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
-        let supported = preset.supported_reasoning_efforts;
+        let supported = preset.supported_reasoning_efforts.clone();
         let in_plan_mode =
             self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
         let is_ru = self.ui_language().is_ru();

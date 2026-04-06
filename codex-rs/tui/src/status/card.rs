@@ -233,10 +233,8 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         refreshing_rate_limits,
     );
 
-    (
-        CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)]),
-        handle,
-    )
+    let cells: Vec<Box<dyn HistoryCell>> = vec![Box::new(command), Box::new(card)];
+    (CompositeHistoryCell::new(cells), handle)
 }
 
 impl StatusHistoryCell {
