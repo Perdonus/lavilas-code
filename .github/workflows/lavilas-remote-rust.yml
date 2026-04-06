@@ -1,0 +1,42 @@
+name: lavilas-remote-rust
+
+on:
+  workflow_dispatch:
+    inputs:
+      cargo_test_filter:
+        description: Optional cargo test substring filter
+        required: false
+        type: string
+        default: thread_list_includes_original_codex_custom_sources_by_default
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - 'codex-rs/**'
+      - '.github/workflows/lavilas-remote-rust.yml'
+
+jobs:
+  remote-rust-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cargo fmt check
+        run: cargo fmt --check
+
+      - name: Targeted app-server test
+        env:
+          CARGO_TEST_FILTER: ${{ inputs.cargo_test_filter }}
+        run: |
+          if [ -n "$CARGO_TEST_FILTER" ]; then
+            cargo test -p codex-app-server "$CARGO_TEST_FILTER"
+          else
+            cargo test -p codex-app-server
+          fi

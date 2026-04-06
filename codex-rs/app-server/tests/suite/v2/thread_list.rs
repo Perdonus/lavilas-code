@@ -195,6 +195,52 @@ async fn thread_list_basic_empty() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_list_includes_original_codex_custom_sources_by_default() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let atlas_id = create_fake_rollout_with_source(
+        codex_home.path(),
+        "2026-01-27T12-34-56",
+        "2026-01-27T12:34:56Z",
+        "atlas session",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Custom("atlas".to_string()),
+    )?;
+    let chatgpt_id = create_fake_rollout_with_source(
+        codex_home.path(),
+        "2026-01-27T12-35-56",
+        "2026-01-27T12:35:56Z",
+        "chatgpt session",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Custom("chatgpt".to_string()),
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let response = list_threads(
+        &mut mcp,
+        /*cursor*/ None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        /*source_kinds*/ None,
+        /*archived*/ None,
+    )
+    .await?;
+
+    let returned_ids = response
+        .data
+        .into_iter()
+        .map(|thread| thread.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(returned_ids, vec![chatgpt_id, atlas_id]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Result<()> {
     let responses = vec![
         create_final_assistant_message_sse_response("seeded")?,
