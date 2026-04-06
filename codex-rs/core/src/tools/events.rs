@@ -303,6 +303,16 @@ impl ToolEmitter {
         }
     }
 
+    fn maybe_enrich_apply_patch_failure_output(
+        &self,
+        output: ExecToolCallOutput,
+    ) -> ExecToolCallOutput {
+        match self {
+            Self::ApplyPatch { .. } => enrich_nonzero_exec_failure_diagnostics(output),
+            _ => output,
+        }
+    }
+
     pub async fn finish(
         &self,
         ctx: ToolEventCtx<'_>,
@@ -310,6 +320,7 @@ impl ToolEmitter {
     ) -> Result<String, FunctionCallError> {
         let (event, result) = match out {
             Ok(output) => {
+                let output = self.maybe_enrich_apply_patch_failure_output(output);
                 let content = self.format_exec_output_for_model(&output, ctx);
                 let exit_code = output.exit_code;
                 let event = ToolEventStage::Success(output);
@@ -322,8 +333,9 @@ impl ToolEmitter {
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
             | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. }))) => {
+                let output = self.maybe_enrich_apply_patch_failure_output(*output);
                 let response = self.format_exec_output_for_model(&output, ctx);
-                let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
+                let event = ToolEventStage::Failure(ToolEventFailure::Output(output));
                 let result = Err(FunctionCallError::RespondToModel(response));
                 (event, result)
             }
@@ -400,6 +412,33 @@ struct ExecCommandResult {
     duration: Duration,
     formatted_output: String,
     status: ExecCommandStatus,
+}
+
+fn enrich_nonzero_exec_failure_diagnostics(mut output: ExecToolCallOutput) -> ExecToolCallOutput {
+    if output.exit_code == 0 || !output.stderr.text.trim().is_empty() {
+        return output;
+    }
+
+    let fallback = [
+        output.aggregated_output.text.as_str(),
+        output.stdout.text.as_str(),
+    ]
+    .into_iter()
+    .find(|text| !text.trim().is_empty())
+    .map(str::to_owned)
+    .unwrap_or_else(|| {
+        "apply_patch exited with a non-zero status and produced no diagnostics".to_string()
+    });
+
+    output.stderr.text = fallback;
+    if output.stderr.truncated_after_lines.is_none() {
+        output.stderr.truncated_after_lines = output
+            .aggregated_output
+            .truncated_after_lines
+            .or(output.stdout.truncated_after_lines);
+    }
+
+    output
 }
 
 async fn emit_exec_stage(

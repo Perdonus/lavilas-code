@@ -1,12 +1,3 @@
-use crate::app_backtrack::BacktrackState;
-use crate::app_command::AppCommand;
-use crate::app_command::AppCommandView;
-use crate::app_event::AppEvent;
-use crate::app_event::ExitMode;
-use crate::app_event::FeedbackCategory;
-use crate::app_event::RealtimeAudioDeviceKind;
-#[cfg(target_os = "windows")]
-use crate::app_event::WindowsSandboxEnableMode;
 use crate::account_profiles::API_KEY_QUESTION_ID;
 use crate::account_profiles::BASE_URL_QUESTION_ID;
 use crate::account_profiles::PROFILE_NAME_QUESTION_ID;
@@ -17,6 +8,15 @@ use crate::account_profiles::load_stored_profile;
 use crate::account_profiles::provider_display_name;
 use crate::account_profiles::stored_profile_has_saved_key;
 use crate::account_profiles::stored_profile_path;
+use crate::app_backtrack::BacktrackState;
+use crate::app_command::AppCommand;
+use crate::app_command::AppCommandView;
+use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
+use crate::app_event::FeedbackCategory;
+use crate::app_event::RealtimeAudioDeviceKind;
+#[cfg(target_os = "windows")]
+use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
 use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::AppServerSession;
@@ -129,8 +129,8 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
-use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -176,7 +176,8 @@ use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
-const EXTERNAL_EDITOR_HINT: &str = "Сохраните изменения и закройте внешний редактор, чтобы продолжить.";
+const EXTERNAL_EDITOR_HINT: &str =
+    "Сохраните изменения и закройте внешний редактор, чтобы продолжить.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
 enum ThreadInteractiveRequest {
@@ -1129,7 +1130,9 @@ impl App {
             .harness_overrides(overrides)
             .build()
             .await
-            .wrap_err_with(|| format!("Не удалось пересобрать конфигурацию для каталога {cwd_display}"))
+            .wrap_err_with(|| {
+                format!("Не удалось пересобрать конфигурацию для каталога {cwd_display}")
+            })
     }
 
     async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
@@ -1179,12 +1182,27 @@ impl App {
     }
 
     fn model_catalog_for_config(&self, config: &Config) -> Arc<ModelCatalog> {
-        let mut models = config
+        let models = config
             .model_catalog
             .as_ref()
-            .map(|catalog| catalog.models.clone().into_iter().map(ModelPreset::from).collect())
+            .map(|catalog| {
+                catalog
+                    .models
+                    .clone()
+                    .into_iter()
+                    .map(ModelPreset::from)
+                    .collect()
+            })
             .filter(|models: &Vec<ModelPreset>| !models.is_empty())
             .unwrap_or_else(|| self.model_catalog.try_list_models().unwrap_or_default());
+        self.model_catalog_from_available_models(models, config)
+    }
+
+    fn model_catalog_from_available_models(
+        &self,
+        mut models: Vec<ModelPreset>,
+        config: &Config,
+    ) -> Arc<ModelCatalog> {
         ModelPreset::mark_default_by_picker_visibility(&mut models);
         Arc::new(ModelCatalog::new(
             models,
@@ -1207,7 +1225,21 @@ impl App {
         app_server: &mut AppServerSession,
     ) -> Result<()> {
         app_server.reload_user_config().await?;
+        let refreshed_models = match app_server.list_models().await {
+            Ok(models) if !models.is_empty() => Some(models),
+            Ok(_) => None,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to refresh model catalog after reloading active profile"
+                );
+                None
+            }
+        };
         self.refresh_in_memory_config_from_disk().await?;
+        if let Some(models) = refreshed_models {
+            self.model_catalog = self.model_catalog_from_available_models(models, &self.config);
+        }
         let model_catalog = self.model_catalog.clone();
         self.chat_widget
             .sync_runtime_profile_config(&self.config, model_catalog);
@@ -1224,9 +1256,8 @@ impl App {
             .config_profile
             .clone()
             .unwrap_or_else(|| profile_key.to_string());
-        let provider_spec = account_provider_spec(stored.provider.as_str()).ok_or_else(|| {
-            color_eyre::eyre::eyre!("unsupported provider `{}`", stored.provider)
-        })?;
+        let provider_spec = account_provider_spec(stored.provider.as_str())
+            .ok_or_else(|| color_eyre::eyre::eyre!("unsupported provider `{}`", stored.provider))?;
         let provider_key = provider_spec
             .builtin_model_provider_id
             .map(str::to_string)
@@ -1238,7 +1269,8 @@ impl App {
             } else {
                 "Saved API key not found. Re-create the account through /profiles -> Add account."
             };
-            self.chat_widget.add_error_message(recreate_hint.to_string());
+            self.chat_widget
+                .add_error_message(recreate_hint.to_string());
             return Ok(());
         }
 
@@ -1502,7 +1534,9 @@ impl App {
             return Ok(true);
         };
         if provider_spec.requires_base_url
-            && base_url.as_deref().is_none_or(|value| value.trim().is_empty())
+            && base_url
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
         {
             let message = if is_ru {
                 format!("Для кастомного провайдера `{provider}` нужен OpenAI-compatible base URL.")
@@ -1513,7 +1547,9 @@ impl App {
             return Ok(true);
         }
         if !provider_spec.api_key_optional
-            && api_key.as_deref().is_none_or(|value| value.trim().is_empty())
+            && api_key
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
         {
             let message = if is_ru {
                 format!("Для провайдера `{provider}` нужен API-ключ.")
@@ -1768,8 +1804,9 @@ impl App {
         // durable config update succeeds.
         if let Err(err) = builder.apply().await {
             tracing::error!(error = %err, "failed to persist feature flags");
-            self.chat_widget
-                .add_error_message(format!("Не удалось обновить экспериментальные функции: {err}"));
+            self.chat_widget.add_error_message(format!(
+                "Не удалось обновить экспериментальные функции: {err}"
+            ));
             return;
         }
 
@@ -1868,8 +1905,10 @@ impl App {
             return;
         }
 
-        self.chat_widget
-            .add_info_message(format!("Ссылка открыта в браузере: {url}."), /*hint*/ None);
+        self.chat_widget.add_info_message(
+            format!("Ссылка открыта в браузере: {url}."),
+            /*hint*/ None,
+        );
     }
 
     fn clear_ui_header_lines_with_version(
@@ -3253,8 +3292,10 @@ impl App {
         }
 
         if self.agent_navigation.is_empty() {
-            self.chat_widget
-                .add_info_message("Субагенты пока не доступны.".to_string(), /*hint*/ None);
+            self.chat_widget.add_info_message(
+                "Субагенты пока не доступны.".to_string(),
+                /*hint*/ None,
+            );
             return;
         }
 
@@ -3704,7 +3745,10 @@ impl App {
                 } else if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
-                        let spans = vec!["Чтобы продолжить эту сессию, выполните ".into(), command.cyan()];
+                        let spans = vec![
+                            "Чтобы продолжить эту сессию, выполните ".into(),
+                            command.cyan(),
+                        ];
                         lines.push(spans.into());
                     }
                     self.chat_widget.add_plain_history_lines(lines);
@@ -4527,7 +4571,8 @@ impl App {
                                                 vec![summary.usage_line.clone().into()];
                                             if let Some(command) = summary.resume_command {
                                                 let spans = vec![
-                                                    "Чтобы продолжить эту сессию, выполните ".into(),
+                                                    "Чтобы продолжить эту сессию, выполните "
+                                                        .into(),
                                                     command.cyan(),
                                                 ];
                                                 lines.push(spans.into());
@@ -4610,8 +4655,7 @@ impl App {
                     }
                 } else {
                     self.chat_widget.add_error_message(
-                        "Чтобы форкнуть тред, в нём должен быть хотя бы один ход."
-                            .to_string(),
+                        "Чтобы форкнуть тред, в нём должен быть хотя бы один ход.".to_string(),
                     );
                 }
 
@@ -4676,25 +4720,24 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
-            AppEvent::CodexOp(op) => {
-                match op {
-                    Op::UserInputAnswer { id, response } => {
-                        if !self
-                            .handle_local_profile_create_answer(app_server, &id, &response)
-                            .await?
-                        {
-                            self.submit_active_thread_op(
-                                app_server,
-                                AppCommand::user_input_answer(id, response),
-                            )
-                            .await?;
-                        }
-                    }
-                    other => {
-                        self.submit_active_thread_op(app_server, other.into()).await?;
+            AppEvent::CodexOp(op) => match op {
+                Op::UserInputAnswer { id, response } => {
+                    if !self
+                        .handle_local_profile_create_answer(app_server, &id, &response)
+                        .await?
+                    {
+                        self.submit_active_thread_op(
+                            app_server,
+                            AppCommand::user_input_answer(id, response),
+                        )
+                        .await?;
                     }
                 }
-            }
+                other => {
+                    self.submit_active_thread_op(app_server, other.into())
+                        .await?;
+                }
+            },
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op.into())
                     .await?;
@@ -4914,7 +4957,8 @@ impl App {
                 self.open_local_profile_create_prompt(provider, suggested_profile_name);
             }
             AppEvent::ActivateStoredProfile { profile_key } => {
-                self.activate_stored_profile(app_server, &profile_key).await?;
+                self.activate_stored_profile(app_server, &profile_key)
+                    .await?;
             }
             AppEvent::OpenLanguagePicker => {
                 self.chat_widget.open_language_picker_popup();
@@ -5349,8 +5393,9 @@ impl App {
                                 "Не удалось сохранить модель для профиля `{profile}`: {err}"
                             ));
                         } else {
-                            self.chat_widget
-                                .add_error_message(format!("Не удалось сохранить модель по умолчанию: {err}"));
+                            self.chat_widget.add_error_message(format!(
+                                "Не удалось сохранить модель по умолчанию: {err}"
+                            ));
                         }
                     }
                 }
@@ -5427,7 +5472,11 @@ impl App {
                     .await
                 {
                     Ok(()) => {
-                        let status = if service_tier.is_some() { "вкл" } else { "выкл" };
+                        let status = if service_tier.is_some() {
+                            "вкл"
+                        } else {
+                            "выкл"
+                        };
                         let mut message = format!("Режим Fast: {status}");
                         if let Some(profile) = profile {
                             message.push_str(" в профиле ");
@@ -5477,7 +5526,8 @@ impl App {
                         if self.chat_widget.realtime_conversation_is_live() {
                             self.chat_widget.open_realtime_audio_restart_prompt(kind);
                         } else {
-                            let selection = name.unwrap_or_else(|| "Система по умолчанию".to_string());
+                            let selection =
+                                name.unwrap_or_else(|| "Система по умолчанию".to_string());
                             self.chat_widget.add_info_message(
                                 format!("Устройство realtime-{}: {selection}", kind.noun()),
                                 /*hint*/ None,
@@ -5536,8 +5586,9 @@ impl App {
                 self.config = config;
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
-                    self.chat_widget
-                        .add_error_message(format!("Не удалось установить политику песочницы: {err}"));
+                    self.chat_widget.add_error_message(format!(
+                        "Не удалось установить политику песочницы: {err}"
+                    ));
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_sandbox_policy_override =
@@ -5599,8 +5650,9 @@ impl App {
                         error = %err,
                         "failed to persist approvals reviewer update"
                     );
-                    self.chat_widget
-                        .add_error_message(format!("Не удалось сохранить рецензента подтверждений: {err}"));
+                    self.chat_widget.add_error_message(format!(
+                        "Не удалось сохранить рецензента подтверждений: {err}"
+                    ));
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
@@ -5924,8 +5976,9 @@ impl App {
                     }
                     Err(err) => {
                         tracing::error!(error = %err, "failed to persist status line items; keeping previous selection");
-                        self.chat_widget
-                            .add_error_message(format!("Не удалось сохранить элементы статусной строки: {err}"));
+                        self.chat_widget.add_error_message(format!(
+                            "Не удалось сохранить элементы статусной строки: {err}"
+                        ));
                     }
                 }
             }
@@ -6368,8 +6421,9 @@ impl App {
                 }
                 if let Err(err) = self.clear_terminal_ui(tui, /*redraw_header*/ false) {
                     tracing::warn!(error = %err, "failed to clear terminal UI");
-                    self.chat_widget
-                        .add_error_message(format!("Не удалось очистить интерфейс терминала: {err}"));
+                    self.chat_widget.add_error_message(format!(
+                        "Не удалось очистить интерфейс терминала: {err}"
+                    ));
                 } else {
                     self.reset_app_ui_state_after_clear();
                     self.queue_clear_ui_header(tui);
@@ -8075,7 +8129,9 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            format!("Тред агента {thread_id} пока недоступен для воспроизведения или live-подключения.")
+            format!(
+                "Тред агента {thread_id} пока недоступен для воспроизведения или live-подключения."
+            )
         );
         assert!(!app.thread_event_channels.contains_key(&thread_id));
         Ok(())
@@ -8107,7 +8163,9 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            format!("Тред агента {thread_id} пока недоступен для воспроизведения или live-подключения.")
+            format!(
+                "Тред агента {thread_id} пока недоступен для воспроизведения или live-подключения."
+            )
         );
         assert!(!app.thread_event_channels.contains_key(&thread_id));
         Ok(())

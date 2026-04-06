@@ -439,6 +439,8 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status: PatchApplyStatus::InProgress,
+            stdout: None,
+            stderr: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -452,6 +454,8 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status: PatchApplyStatus::InProgress,
+            stdout: None,
+            stderr: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -466,6 +470,8 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status,
+            stdout: (!payload.stdout.trim().is_empty()).then(|| payload.stdout.clone()),
+            stderr: (!payload.stderr.trim().is_empty()).then(|| payload.stderr.clone()),
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -2026,6 +2032,8 @@ mod tests {
                     diff: "hello\n".into(),
                 }],
                 status: PatchApplyStatus::Declined,
+                stdout: None,
+                stderr: Some("patch rejected by user".into()),
             }
         );
     }
@@ -2247,6 +2255,8 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    stdout: None,
+                    stderr: None,
                 },
             ]
         );
@@ -2311,6 +2321,8 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    stdout: None,
+                    stderr: None,
                 },
             ]
         );

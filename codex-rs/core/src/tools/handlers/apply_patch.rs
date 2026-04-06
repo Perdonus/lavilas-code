@@ -21,8 +21,11 @@ use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -115,6 +118,24 @@ fn enrich_apply_patch_failure_output(mut output: ExecToolCallOutput) -> ExecTool
     }
 
     output
+}
+
+fn enrich_apply_patch_failure_error(err: ToolError) -> ToolError {
+    match err {
+        ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })) => {
+            ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout {
+                output: Box::new(enrich_apply_patch_failure_output(*output)),
+            }))
+        }
+        ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+            output,
+            network_policy_decision,
+        })) => ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(enrich_apply_patch_failure_output(*output)),
+            network_policy_decision,
+        })),
+        other => other,
+    }
 }
 
 async fn effective_patch_permissions(
@@ -247,7 +268,8 @@ impl ToolHandler for ApplyPatchHandler {
                                 turn.approval_policy.value(),
                             )
                             .await
-                            .map(|result| enrich_apply_patch_failure_output(result.output));
+                            .map(|result| enrich_apply_patch_failure_output(result.output))
+                            .map_err(enrich_apply_patch_failure_error);
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
@@ -349,7 +371,8 @@ pub(crate) async fn intercept_apply_patch(
                             turn.approval_policy.value(),
                         )
                         .await
-                        .map(|result| enrich_apply_patch_failure_output(result.output));
+                        .map(|result| enrich_apply_patch_failure_output(result.output))
+                        .map_err(enrich_apply_patch_failure_error);
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
                         turn.as_ref(),

@@ -157,6 +157,8 @@ async fn live_app_server_file_change_item_started_preserves_changes() {
                     diff: "hello\n".to_string(),
                 }],
                 status: AppServerPatchApplyStatus::InProgress,
+                stdout: None,
+                stderr: None,
             },
         }),
         /*replay_kind*/ None,
@@ -584,4 +586,47 @@ async fn live_app_server_thread_closed_requests_immediate_exit() {
     );
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
+}
+
+#[tokio::test]
+async fn replayed_declined_file_change_renders_patch_failure_with_diagnostics() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::FileChange {
+                id: "patch-1".to_string(),
+                changes: vec![FileUpdateChange {
+                    path: "foo.txt".to_string(),
+                    kind: PatchChangeKind::Update { move_path: None },
+                    diff: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+                }],
+                status: AppServerPatchApplyStatus::Declined,
+                stdout: None,
+                stderr: Some("patch rejected by user".to_string()),
+            },
+        }),
+        /*replay_kind*/ Some(TurnReplayKind::Resume),
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected replayed patch failure to be rendered"
+    );
+    let transcript = cells
+        .iter()
+        .map(lines_to_single_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        transcript.contains("Failed to apply patch"),
+        "missing failure title: {transcript}"
+    );
+    assert!(
+        transcript.contains("patch rejected by user"),
+        "missing replayed diagnostics: {transcript}"
+    );
 }

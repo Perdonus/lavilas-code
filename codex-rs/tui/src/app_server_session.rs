@@ -644,6 +644,28 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn list_models(&mut self) -> Result<Vec<ModelPreset>> {
+        let request_id = self.next_request_id();
+        let models: ModelListResponse = self
+            .client
+            .request_typed(ClientRequest::ModelList {
+                request_id,
+                params: ModelListParams {
+                    cursor: None,
+                    limit: None,
+                    include_hidden: Some(true),
+                },
+            })
+            .await
+            .wrap_err("model/list failed in TUI")?;
+
+        Ok(models
+            .data
+            .into_iter()
+            .map(model_preset_from_api_model)
+            .collect())
+    }
+
     pub(crate) async fn thread_realtime_start(
         &mut self,
         thread_id: ThreadId,

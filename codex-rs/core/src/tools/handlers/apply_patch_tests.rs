@@ -1,12 +1,15 @@
 use super::*;
+use crate::tools::sandboxing::ToolError;
 use codex_apply_patch::MaybeApplyPatchVerified;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
-use tempfile::TempDir;
 use std::time::Duration;
+use tempfile::TempDir;
 
 #[test]
 fn approval_keys_include_move_destination() {
@@ -88,7 +91,9 @@ fn enrich_apply_patch_failure_output_uses_aggregated_output_when_stderr_missing(
         exit_code: 1,
         stdout: StreamOutput::new(String::new()),
         stderr: StreamOutput::new(String::new()),
-        aggregated_output: StreamOutput::new("Failed to find expected lines in file.txt".to_string()),
+        aggregated_output: StreamOutput::new(
+            "Failed to find expected lines in file.txt".to_string(),
+        ),
         duration: Duration::from_millis(25),
         timed_out: false,
     };
@@ -148,5 +153,59 @@ fn enrich_apply_patch_failure_output_keeps_successful_output_unchanged() {
 
     assert_eq!(enriched.stderr.text, output.stderr.text);
     assert_eq!(enriched.stdout.text, output.stdout.text);
-    assert_eq!(enriched.aggregated_output.text, output.aggregated_output.text);
+    assert_eq!(
+        enriched.aggregated_output.text,
+        output.aggregated_output.text
+    );
+}
+
+#[test]
+fn enrich_apply_patch_failure_error_enriches_timeout_output_when_stderr_missing() {
+    let output = ExecToolCallOutput {
+        exit_code: 124,
+        stdout: StreamOutput::new(String::new()),
+        stderr: StreamOutput::new(String::new()),
+        aggregated_output: StreamOutput::new("timed out while applying patch".to_string()),
+        duration: Duration::from_secs(2),
+        timed_out: true,
+    };
+
+    let err = ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout {
+        output: Box::new(output),
+    }));
+
+    let enriched = enrich_apply_patch_failure_error(err);
+
+    match enriched {
+        ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })) => {
+            assert_eq!(output.stderr.text, "timed out while applying patch");
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+}
+
+#[test]
+fn enrich_apply_patch_failure_error_enriches_denied_output_when_stderr_missing() {
+    let output = ExecToolCallOutput {
+        exit_code: 1,
+        stdout: StreamOutput::new("stdout denied fallback".to_string()),
+        stderr: StreamOutput::new("\n".to_string()),
+        aggregated_output: StreamOutput::new(String::new()),
+        duration: Duration::from_millis(35),
+        timed_out: false,
+    };
+
+    let err = ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+        output: Box::new(output),
+        network_policy_decision: None,
+    }));
+
+    let enriched = enrich_apply_patch_failure_error(err);
+
+    match enriched {
+        ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => {
+            assert_eq!(output.stderr.text, "stdout denied fallback");
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
 }

@@ -548,6 +548,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                             id: item_id.clone(),
                             changes: patch_changes.clone(),
                             status: PatchApplyStatus::InProgress,
+                            stdout: None,
+                            stderr: None,
                         };
                         let notification = ItemStartedNotification {
                             thread_id: conversation_id.to_string(),
@@ -1569,6 +1571,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     id: item_id.clone(),
                     changes,
                     status: PatchApplyStatus::InProgress,
+                    stdout: None,
+                    stderr: None,
                 };
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
@@ -1587,11 +1591,17 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             let status: PatchApplyStatus = (&patch_end_event.status).into();
             let changes = convert_patch_changes(&patch_end_event.changes);
+            let stdout =
+                (!patch_end_event.stdout.trim().is_empty()).then(|| patch_end_event.stdout.clone());
+            let stderr =
+                (!patch_end_event.stderr.trim().is_empty()).then(|| patch_end_event.stderr.clone());
             complete_file_change_item(
                 conversation_id,
                 item_id,
                 changes,
                 status,
+                stdout,
+                stderr,
                 event_turn_id.clone(),
                 &outgoing,
                 &thread_state,
@@ -1968,6 +1978,8 @@ async fn complete_file_change_item(
     item_id: String,
     changes: Vec<FileUpdateChange>,
     status: PatchApplyStatus,
+    stdout: Option<String>,
+    stderr: Option<String>,
     turn_id: String,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
@@ -1980,6 +1992,8 @@ async fn complete_file_change_item(
         id: item_id,
         changes,
         status,
+        stdout,
+        stderr,
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -2594,6 +2608,8 @@ async fn on_file_change_request_approval_response(
             item_id.clone(),
             changes,
             status,
+            None,
+            None,
             event_turn_id.clone(),
             &outgoing,
             &thread_state,
