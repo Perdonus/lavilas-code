@@ -2,6 +2,9 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "mistral-vibe-cli";
+pub(crate) const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiLanguage {
     Ru,
@@ -73,6 +76,74 @@ pub(crate) fn default_profile_model(provider: &str) -> String {
         .unwrap_or_else(|| "custom-model".to_string())
 }
 
+pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
+    if provider.eq_ignore_ascii_case("mistral")
+        && model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL)
+    {
+        MISTRAL_DEFAULT_PROFILE_MODEL.to_string()
+    } else {
+        model.to_string()
+    }
+}
+
+pub(crate) fn repair_profile_model_catalog(path: &Path, provider: &str) -> io::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let contents = std::fs::read_to_string(path)?;
+    let mut payload: serde_json::Value = serde_json::from_str(&contents)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let Some(models) = payload.get_mut("models").and_then(serde_json::Value::as_array_mut) else {
+        return Ok(false);
+    };
+
+    let mut changed = false;
+    for entry in models {
+        let Some(model) = entry.as_object_mut() else {
+            continue;
+        };
+        let Some(current_slug) = model
+            .get("slug")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+
+        let normalized_slug = normalize_profile_model(provider, &current_slug);
+        if normalized_slug == current_slug {
+            continue;
+        }
+
+        model.insert(
+            "slug".to_string(),
+            serde_json::Value::String(normalized_slug.clone()),
+        );
+        if model
+            .get("display_name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|display_name| display_name == current_slug)
+        {
+            model.insert(
+                "display_name".to_string(),
+                serde_json::Value::String(normalized_slug),
+            );
+        }
+        changed = true;
+    }
+
+    if !changed {
+        return Ok(false);
+    }
+
+    let body = serde_json::to_string_pretty(&payload)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+        + "\n";
+    std::fs::write(path, body)?;
+    Ok(true)
+}
+
 pub(crate) fn ensure_profile_model_catalog(
     codex_home: &Path,
     profile_stem: &str,
@@ -83,6 +154,7 @@ pub(crate) fn ensure_profile_model_catalog(
 
     let path = profile_model_catalog_path(codex_home, profile_stem);
     if path.exists() {
+        repair_profile_model_catalog(&path, provider)?;
         return Ok(path);
     }
 
@@ -260,17 +332,10 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         ],
         "mistral" => vec![
             ProfileCatalogSeed {
-                model: "mistral-vibe-cli-with-tools",
-                description: "Подготовленный профиль Mistral с включённым tool-use, чтобы не падать в fallback metadata.",
+                model: MISTRAL_DEFAULT_PROFILE_MODEL,
+                description: "Подготовленный профиль Mistral для tool-use, MCP и CLI без фейкового alias-а модели.",
                 default_reasoning_level: "medium",
                 supports_parallel_tool_calls: true,
-                supports_image_input: false,
-            },
-            ProfileCatalogSeed {
-                model: "mistral-vibe-cli",
-                description: "Базовый CLI-профиль Mistral без расширенного tool-use.",
-                default_reasoning_level: "medium",
-                supports_parallel_tool_calls: false,
                 supports_image_input: false,
             },
             ProfileCatalogSeed {
@@ -437,7 +502,32 @@ mod tests {
             profile_model_catalog_path(codex_home.path(), "mistral-profile")
         );
         let contents = std::fs::read_to_string(&catalog_path).expect("catalog contents");
-        assert!(contents.contains("mistral-vibe-cli-with-tools"));
-        assert_eq!(default_profile_model("mistral"), "mistral-vibe-cli-with-tools");
+        assert!(contents.contains(MISTRAL_DEFAULT_PROFILE_MODEL));
+        assert_eq!(default_profile_model("mistral"), MISTRAL_DEFAULT_PROFILE_MODEL);
+    }
+
+    #[test]
+    fn profile_catalog_helper_repairs_legacy_mistral_sidecar() {
+        let codex_home = tempdir().expect("tempdir");
+        let catalog_path = profile_model_catalog_path(codex_home.path(), "mistral-profile");
+        std::fs::create_dir_all(catalog_path.parent().expect("catalog dir")).expect("mkdirs");
+        std::fs::write(
+            &catalog_path,
+            serde_json::json!({
+                "models": [{
+                    "slug": MISTRAL_LEGACY_TOOL_MODEL,
+                    "display_name": MISTRAL_LEGACY_TOOL_MODEL,
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write legacy sidecar");
+
+        ensure_profile_model_catalog(codex_home.path(), "mistral-profile", "mistral")
+            .expect("repair catalog");
+
+        let contents = std::fs::read_to_string(&catalog_path).expect("catalog contents");
+        assert!(contents.contains(MISTRAL_DEFAULT_PROFILE_MODEL));
+        assert!(!contents.contains(MISTRAL_LEGACY_TOOL_MODEL));
     }
 }

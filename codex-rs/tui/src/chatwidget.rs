@@ -232,7 +232,9 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -4896,6 +4898,18 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
+            } if modifiers.contains(KeyModifiers::CONTROL)
+                && modifiers.contains(KeyModifiers::ALT)
+                && c.eq_ignore_ascii_case(&'v') =>
+            {
+                self.paste_image_from_system_clipboard();
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => {
                 self.on_ctrl_c();
                 return;
@@ -4918,26 +4932,11 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            } if modifiers.contains(KeyModifiers::CONTROL)
+                && !modifiers.contains(KeyModifiers::ALT)
                 && c.eq_ignore_ascii_case(&'v') =>
             {
-                match paste_image_to_temp_png() {
-                    Ok((path, info)) => {
-                        tracing::debug!(
-                            "pasted image size={}x{} format={}",
-                            info.width,
-                            info.height,
-                            info.encoded_format.label()
-                        );
-                        self.attach_image(path);
-                    }
-                    Err(err) => {
-                        tracing::warn!("failed to paste image: {err}");
-                        self.add_to_history(history_cell::new_error_event(format!(
-                            "Failed to paste image: {err}",
-                        )));
-                    }
-                }
+                self.paste_text_from_system_clipboard();
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -5061,6 +5060,47 @@ impl ChatWidget {
         }
     }
 
+    fn paste_text_from_system_clipboard(&mut self) {
+        match clipboard_text::paste_text_from_clipboard() {
+            Ok(text) => {
+                let pasted = text.replace("\r\n", "\n").replace('\r', "\n");
+                self.bottom_pane.handle_paste(pasted);
+                self.request_redraw();
+            }
+            Err(err) => {
+                tracing::warn!("failed to paste text: {err}");
+                let message = if self.ui_language().is_ru() {
+                    format!("Не удалось вставить текст: {err}")
+                } else {
+                    format!("Failed to paste text: {err}")
+                };
+                self.add_to_history(history_cell::new_error_event(message));
+                self.request_redraw();
+            }
+        }
+    }
+
+    fn paste_image_from_system_clipboard(&mut self) {
+        match paste_image_to_temp_png() {
+            Ok((path, info)) => {
+                tracing::debug!(
+                    "pasted image size={}x{} format={}",
+                    info.width,
+                    info.height,
+                    info.encoded_format.label()
+                );
+                self.attach_image(path);
+            }
+            Err(err) => {
+                tracing::warn!("failed to paste image: {err}");
+                self.add_to_history(history_cell::new_error_event(format!(
+                    "Failed to paste image: {err}",
+                )));
+                self.request_redraw();
+            }
+        }
+    }
+
     /// Attach a local image to the composer when the active model supports image inputs.
     ///
     /// When the model does not advertise image support, we keep the draft unchanged and surface a
@@ -5105,6 +5145,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Right)) {
+            self.paste_text_from_system_clipboard();
+            return;
+        }
         self.bottom_pane.handle_mouse_event(mouse_event);
     }
 
@@ -8617,9 +8661,7 @@ impl ChatWidget {
 
         let provider_name = self.config.model_provider.name.as_str();
         let reasoning_levels = preset.supported_reasoning_efforts.len();
-        let variant_hint = if preset.model.ends_with("-with-tools")
-            || preset.model.ends_with("-tools")
-        {
+        let variant_hint = if Self::looks_like_tool_model(preset.model.as_str()) {
             if is_ru {
                 Some(format!(
                     "Вариант {provider_name} для рабочих сценариев с инструментами, MCP и командами терминала."
@@ -8629,7 +8671,7 @@ impl ChatWidget {
                     "{provider_name} variant tuned for tool use, MCP, and exec-heavy turns."
                 ))
             }
-        } else if preset.model.ends_with("-latest") {
+        } else if Self::looks_like_latest_model(preset.model.as_str()) {
             if is_ru {
                 Some(format!(
                     "Основной свежий вариант {provider_name} для повседневной работы."
@@ -8639,7 +8681,7 @@ impl ChatWidget {
                     "Current general-purpose {provider_name} variant for everyday work."
                 ))
             }
-        } else if preset.model.ends_with("-fast") {
+        } else if Self::looks_like_fast_model(preset.model.as_str()) {
             if is_ru {
                 Some(format!(
                     "Быстрый вариант {provider_name} для черновых проходов, быстрых правок и частых итераций."
@@ -8909,7 +8951,9 @@ impl ChatWidget {
 
     fn looks_like_tool_model(model: &str) -> bool {
         let slug = model.to_ascii_lowercase();
-        slug.contains("with-tools")
+        let terminal_segment = slug.rsplit('/').next().unwrap_or(slug.as_str());
+        terminal_segment == "mistral-vibe-cli"
+            || slug.contains("with-tools")
             || slug.ends_with("-tools")
             || slug.contains("-tools-")
             || slug.contains("tool-use")

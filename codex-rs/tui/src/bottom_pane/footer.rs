@@ -994,18 +994,10 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     },
     ShortcutDescriptor {
         id: ShortcutId::PasteImage,
-        // Show Ctrl+Alt+V when running under WSL (terminals often intercept plain
-        // Ctrl+V); otherwise fall back to Ctrl+V.
-        bindings: &[
-            ShortcutBinding {
-                key: key_hint::ctrl_alt(KeyCode::Char('v')),
-                condition: DisplayCondition::WhenUnderWSL,
-            },
-            ShortcutBinding {
-                key: key_hint::ctrl(KeyCode::Char('v')),
-                condition: DisplayCondition::Always,
-            },
-        ],
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl_alt(KeyCode::Char('v')),
+            condition: DisplayCondition::Always,
+        }],
         prefix: "",
         label: " вставить изображение",
     },

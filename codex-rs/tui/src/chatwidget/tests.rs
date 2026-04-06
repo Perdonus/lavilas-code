@@ -263,3 +263,11 @@ mod status_command_tests;
 pub(crate) use helpers::make_chatwidget_manual_with_sender;
 pub(crate) use helpers::set_chatgpt_auth;
 pub(super) use helpers::*;
+
+#[test]
+fn mistral_vibe_cli_counts_as_tool_model() {
+    assert!(ChatWidget::looks_like_tool_model("mistral-vibe-cli"));
+    assert!(ChatWidget::looks_like_tool_model(
+        "mistral/mistral-vibe-cli"
+    ));
+}

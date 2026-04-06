@@ -9,6 +9,8 @@ use serde::Serialize;
 
 use crate::ui_preferences::default_profile_model;
 use crate::ui_preferences::ensure_profile_model_catalog;
+use crate::ui_preferences::normalize_profile_model;
+use crate::ui_preferences::repair_profile_model_catalog;
 use crate::ui_preferences::profiles_dir;
 
 pub(crate) const PROFILE_NAME_QUESTION_ID: &str = "profile_name";
@@ -173,10 +175,60 @@ pub(crate) fn stored_profile_path(codex_home: &Path, profile_key: &str) -> PathB
     profiles_dir(codex_home).join(format!("{profile_key}.json"))
 }
 
+fn derived_profile_model_catalog_path(profile_path: &Path) -> Option<PathBuf> {
+    let stem = profile_path.file_stem()?.to_str()?;
+    Some(profile_path.with_file_name(format!("{stem}.models.json")))
+}
+
+fn write_stored_profile_file(
+    profile_path: &Path,
+    profile: &StoredAccountProfile,
+) -> io::Result<()> {
+    let body = serde_json::to_string_pretty(profile)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+        + "\n";
+    std::fs::write(profile_path, body)
+}
+
+fn repair_profile_catalogs(
+    profile_path: &Path,
+    profile: &StoredAccountProfile,
+) -> io::Result<()> {
+    let mut candidates = Vec::new();
+    if let Some(path) = profile.model_catalog_json.clone() {
+        candidates.push(path);
+    }
+    if let Some(path) = derived_profile_model_catalog_path(profile_path)
+        && !candidates.iter().any(|candidate| candidate == &path)
+    {
+        candidates.push(path);
+    }
+
+    for candidate in candidates {
+        match repair_profile_model_catalog(candidate.as_path(), profile.provider.as_str()) {
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn load_stored_profile(profile_path: &Path) -> io::Result<StoredAccountProfile> {
     let contents = std::fs::read_to_string(profile_path)?;
-    serde_json::from_str::<StoredAccountProfile>(&contents)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+    let mut profile = serde_json::from_str::<StoredAccountProfile>(&contents)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let normalized_model = normalize_profile_model(profile.provider.as_str(), profile.model.as_str());
+    let changed = normalized_model != profile.model;
+    if changed {
+        profile.model = normalized_model;
+    }
+    repair_profile_catalogs(profile_path, &profile)?;
+    if changed {
+        write_stored_profile_file(profile_path, &profile)?;
+    }
+    Ok(profile)
 }
 
 pub(crate) fn save_stored_profile(
@@ -187,10 +239,10 @@ pub(crate) fn save_stored_profile(
     let dir = profiles_dir(codex_home);
     std::fs::create_dir_all(&dir)?;
     let path = stored_profile_path(codex_home, profile_key);
-    let body = serde_json::to_string_pretty(profile)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
-        + "\n";
-    std::fs::write(&path, body)?;
+    let mut profile = profile.clone();
+    profile.model = normalize_profile_model(profile.provider.as_str(), profile.model.as_str());
+    write_stored_profile_file(&path, &profile)?;
+    repair_profile_catalogs(&path, &profile)?;
     Ok(path)
 }
 
@@ -353,5 +405,59 @@ pub(crate) fn build_create_profile_request(
         call_id: request_id.clone(),
         turn_id: request_id,
         questions,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_stored_profile_repairs_legacy_mistral_model_and_sidecar() {
+        let codex_home = tempdir().expect("tempdir");
+        let profiles = profiles_dir(codex_home.path());
+        std::fs::create_dir_all(&profiles).expect("profiles dir");
+
+        let profile_path = profiles.join("mistral1.json");
+        let sidecar_path = profiles.join("mistral1.models.json");
+        std::fs::write(
+            &profile_path,
+            serde_json::json!({
+                "provider": "mistral",
+                "name": "mistral1",
+                "model": "mistral-vibe-cli-with-tools",
+                "model_catalog_json": sidecar_path,
+                "config_profile": "mistral1",
+                "model_provider_id": "mistral1-provider",
+                "experimental_bearer_token": "secret"
+            })
+            .to_string(),
+        )
+        .expect("write profile");
+        std::fs::write(
+            &sidecar_path,
+            serde_json::json!({
+                "models": [{
+                    "slug": "mistral-vibe-cli-with-tools",
+                    "display_name": "mistral-vibe-cli-with-tools"
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write sidecar");
+
+        let loaded = load_stored_profile(&profile_path).expect("load repaired profile");
+        assert_eq!(loaded.model, "mistral-vibe-cli");
+        assert!(
+            !std::fs::read_to_string(&profile_path)
+                .expect("profile contents")
+                .contains("mistral-vibe-cli-with-tools")
+        );
+        assert!(
+            !std::fs::read_to_string(&sidecar_path)
+                .expect("sidecar contents")
+                .contains("mistral-vibe-cli-with-tools")
+        );
     }
 }

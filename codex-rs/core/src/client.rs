@@ -24,6 +24,7 @@
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 use std::collections::HashMap;
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -129,9 +130,27 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
+const MISTRAL_LEGACY_TOOL_MODEL_ALIAS: &str = "mistral-vibe-cli-with-tools";
+const MISTRAL_CANONICAL_TOOL_MODEL: &str = "mistral-vibe-cli";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
+
+fn normalize_request_model_for_provider<'a>(
+    provider: &ModelProviderInfo,
+    model: &'a str,
+) -> Cow<'a, str> {
+    let uses_mistral_api = provider.name.eq_ignore_ascii_case("mistral")
+        || provider
+            .base_url
+            .as_deref()
+            .is_some_and(|base_url| base_url.contains("api.mistral.ai"));
+    if uses_mistral_api && model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL_ALIAS) {
+        Cow::Borrowed(MISTRAL_CANONICAL_TOOL_MODEL)
+    } else {
+        Cow::Borrowed(model)
+    }
+}
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
@@ -415,8 +434,10 @@ impl ModelClient {
             None
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
+        let request_model =
+            normalize_request_model_for_provider(&self.state.provider, &model_info.slug);
         let payload = ApiCompactionInput {
-            model: &model_info.slug,
+            model: request_model.as_ref(),
             input: &input,
             instructions: &instructions,
             tools,
@@ -468,8 +489,10 @@ impl ModelClient {
             ApiMemoriesClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
 
+        let request_model =
+            normalize_request_model_for_provider(&self.state.provider, &model_info.slug);
         let payload = ApiMemorySummarizeInput {
-            model: model_info.slug.clone(),
+            model: request_model.into_owned(),
             raw_memories,
             reasoning: effort.map(|effort| Reasoning {
                 effort: Some(effort),
@@ -792,8 +815,12 @@ impl ModelClientSession {
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
         let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
+        let request_model = normalize_request_model_for_provider(
+            &self.client.state.provider,
+            &model_info.slug,
+        );
         let request = ResponsesApiRequest {
-            model: model_info.slug.clone(),
+            model: request_model.into_owned(),
             instructions: instructions.clone(),
             input,
             tools,
