@@ -108,7 +108,7 @@ struct PageLoadRequest {
     sort_key: ThreadSortKey,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ProviderFilter {
     Any,
     MatchDefault(String),
@@ -434,6 +434,7 @@ struct PickerState {
     page_loader: PageLoader,
     view_rows: Option<usize>,
     provider_filter: ProviderFilter,
+    provider_fallback_applied: bool,
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
@@ -597,6 +598,7 @@ impl PickerState {
             page_loader,
             view_rows: None,
             provider_filter,
+            provider_fallback_applied: false,
             show_all,
             filter_cwd,
             action,
@@ -760,6 +762,9 @@ impl PickerState {
                 let page = page.map_err(color_eyre::Report::from)?;
                 self.ingest_page(page);
                 self.update_thread_names().await;
+                if self.maybe_fallback_to_any_provider_after_empty_page() {
+                    return Ok(());
+                }
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
             }
@@ -799,6 +804,26 @@ impl PickerState {
         }
 
         self.apply_filter();
+    }
+
+    fn maybe_fallback_to_any_provider_after_empty_page(&mut self) -> bool {
+        if self.provider_fallback_applied {
+            return false;
+        }
+        if !self.all_rows.is_empty() || !self.filtered_rows.is_empty() {
+            return false;
+        }
+        if self.pagination.next_cursor.is_some() {
+            return false;
+        }
+        if !matches!(self.provider_filter, ProviderFilter::MatchDefault(_)) {
+            return false;
+        }
+
+        self.provider_filter = ProviderFilter::Any;
+        self.provider_fallback_applied = true;
+        self.start_initial_load();
+        true
     }
 
     async fn update_thread_names(&mut self) {
@@ -2852,5 +2877,55 @@ mod tests {
         assert!(state.filtered_rows.is_empty());
         assert!(!state.search_state.is_active());
         assert!(state.pagination.reached_scan_cap);
+    }
+
+    #[tokio::test]
+    async fn empty_provider_filtered_page_falls_back_to_any_provider() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("mistral1-provider")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        state.start_initial_load();
+        let first_request = {
+            let guard = recorded_requests.lock().unwrap();
+            assert_eq!(guard.len(), 1);
+            assert_eq!(
+                guard[0].provider_filter,
+                ProviderFilter::MatchDefault(String::from("mistral1-provider"))
+            );
+            guard[0].clone()
+        };
+
+        state
+            .handle_background_event(BackgroundEvent::PageLoaded {
+                request_token: first_request.request_token,
+                search_token: first_request.search_token,
+                page: Ok(page(
+                    Vec::new(),
+                    /*next_cursor*/ None,
+                    /*num_scanned_files*/ 0,
+                    /*reached_scan_cap*/ false,
+                )),
+            })
+            .await
+            .unwrap();
+
+        let guard = recorded_requests.lock().unwrap();
+        assert_eq!(guard.len(), 2);
+        assert_eq!(guard[1].provider_filter, ProviderFilter::Any);
+        assert!(state.provider_fallback_applied);
+        assert_eq!(state.provider_filter, ProviderFilter::Any);
     }
 }
