@@ -194,7 +194,7 @@ fn save_settings_json(codex_home: &Path, value: &serde_json::Value) -> io::Resul
 
 fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
     match provider {
-        "openai" => vec![
+        "codex_oauth" | "openai" => vec![
             ProfileCatalogSeed {
                 model: "gpt-5.3-codex",
                 description: "Стартовый профиль Lavilas Codex для основного coding-потока.",

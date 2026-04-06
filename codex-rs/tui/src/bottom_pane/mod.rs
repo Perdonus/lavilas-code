@@ -915,6 +915,11 @@ impl BottomPane {
         self.can_launch_external_editor()
     }
 
+    /// Returns true when bottom-pane UI currently expects mouse events.
+    pub(crate) fn wants_mouse_capture(&self) -> bool {
+        !self.view_stack.is_empty() || self.composer.wants_mouse_capture()
+    }
+
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
     }

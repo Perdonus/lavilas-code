@@ -322,9 +322,15 @@ pub(crate) enum AppEvent {
     /// Open provider picker to add an account profile.
     OpenAddAccountProviderPicker,
 
-    /// Create a profile template for a provider.
-    CreateProfileTemplate {
+    /// Open the local account-creation form for the selected provider.
+    OpenAddAccountDetailsPrompt {
         provider: String,
+        suggested_profile_name: Option<String>,
+    },
+
+    /// Activate a stored account profile from the Profiles directory.
+    ActivateStoredProfile {
+        profile_key: String,
     },
 
     /// Open language picker for interface/profile settings.

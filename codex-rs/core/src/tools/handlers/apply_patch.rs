@@ -23,6 +23,7 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -87,6 +88,33 @@ fn write_permissions_for_paths(
     })?;
 
     normalize_additional_permissions(permissions).ok()
+}
+
+fn enrich_apply_patch_failure_output(mut output: ExecToolCallOutput) -> ExecToolCallOutput {
+    if output.exit_code == 0 || !output.stderr.text.trim().is_empty() {
+        return output;
+    }
+
+    let fallback = [
+        output.aggregated_output.text.as_str(),
+        output.stdout.text.as_str(),
+    ]
+    .into_iter()
+    .find(|text| !text.trim().is_empty())
+    .map(str::to_owned)
+    .unwrap_or_else(|| {
+        "apply_patch exited with a non-zero status and produced no diagnostics".to_string()
+    });
+
+    output.stderr.text = fallback;
+    if output.stderr.truncated_after_lines.is_none() {
+        output.stderr.truncated_after_lines = output
+            .aggregated_output
+            .truncated_after_lines
+            .or(output.stdout.truncated_after_lines);
+    }
+
+    output
 }
 
 async fn effective_patch_permissions(
@@ -219,7 +247,7 @@ impl ToolHandler for ApplyPatchHandler {
                                 turn.approval_policy.value(),
                             )
                             .await
-                            .map(|result| result.output);
+                            .map(|result| enrich_apply_patch_failure_output(result.output));
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
@@ -321,7 +349,7 @@ pub(crate) async fn intercept_apply_patch(
                             turn.approval_policy.value(),
                         )
                         .await
-                        .map(|result| result.output);
+                        .map(|result| enrich_apply_patch_failure_output(result.output));
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
                         turn.as_ref(),

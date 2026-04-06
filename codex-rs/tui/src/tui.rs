@@ -65,7 +65,6 @@ pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
-    let _ = execute!(stdout(), EnableMouseCapture);
 
     enable_raw_mode()?;
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
@@ -263,6 +262,7 @@ pub struct Tui {
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    mouse_capture_enabled: bool,
 }
 
 impl Tui {
@@ -293,6 +293,7 @@ impl Tui {
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             is_zellij,
             alt_screen_enabled: true,
+            mouse_capture_enabled: false,
         }
     }
 
@@ -303,6 +304,35 @@ impl Tui {
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
         self.notification_backend = Some(detect_backend(method));
+    }
+
+    /// Toggle terminal mouse capture at runtime.
+    ///
+    /// Mouse capture is enabled only while an interactive popup/menu is active.
+    /// This keeps default terminal text selection and copy behavior intact.
+    pub fn set_mouse_capture_enabled(&mut self, enabled: bool) {
+        if self.mouse_capture_enabled == enabled {
+            return;
+        }
+
+        let result = if enabled {
+            execute!(stdout(), EnableMouseCapture)
+        } else {
+            execute!(stdout(), DisableMouseCapture)
+        };
+
+        match result {
+            Ok(()) => {
+                self.mouse_capture_enabled = enabled;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    enabled,
+                    "failed to toggle terminal mouse capture"
+                );
+            }
+        }
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -338,6 +368,7 @@ impl Tui {
         F: FnOnce() -> Fut,
         Fut: Future<Output = R>,
     {
+        let was_mouse_capture_enabled = self.mouse_capture_enabled;
         // Pause crossterm events to avoid stdin conflicts with external program `f`.
         self.pause_events();
 
@@ -350,11 +381,16 @@ impl Tui {
         if let Err(err) = mode.restore() {
             tracing::warn!("failed to restore terminal modes before external program: {err}");
         }
+        self.mouse_capture_enabled = false;
 
         let output = f().await;
 
         if let Err(err) = set_modes() {
             tracing::warn!("failed to re-enable terminal modes after external program: {err}");
+        }
+        self.mouse_capture_enabled = false;
+        if was_mouse_capture_enabled {
+            self.set_mouse_capture_enabled(true);
         }
         // After the external program `f` finishes, reset terminal state and flush any buffered keypresses.
         flush_terminal_input_buffer();

@@ -626,6 +626,40 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
     assert_eq!(app.destructive_enabled, Some(false));
 }
 
+#[tokio::test]
+async fn reload_user_config_layer_updates_active_profile_provider() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &config_toml_path,
+        r#"profile = "test-profile"
+
+[model_providers.test-provider]
+name = "Test Provider"
+base_url = "https://example.com/v1"
+experimental_bearer_token = "test-token"
+wire_api = "responses"
+
+[profiles.test-profile]
+model_provider = "test-provider"
+model = "test-model"
+"#,
+    )
+    .expect("write user config");
+
+    session.reload_user_config_layer().await;
+
+    let provider = session.provider().await;
+    assert_eq!(provider.name, "Test Provider");
+
+    let config = session.get_config().await;
+    assert_eq!(config.active_profile.as_deref(), Some("test-profile"));
+    assert_eq!(config.model_provider_id, "test-provider");
+    assert_eq!(config.model.as_deref(), Some("test-model"));
+}
+
 #[test]
 fn filter_connectors_for_input_skips_duplicate_slug_mentions() {
     let connectors = vec![

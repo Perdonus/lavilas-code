@@ -1233,6 +1233,11 @@ impl ChatComposer {
         !matches!(self.active_popup, ActivePopup::None)
     }
 
+    /// Return true when the active popup expects mouse interactions.
+    pub(crate) fn wants_mouse_capture(&self) -> bool {
+        matches!(self.active_popup, ActivePopup::Command(_))
+    }
+
     pub fn handle_mouse_event(&mut self, mouse_event: MouseEvent) -> (InputResult, bool) {
         let Some(render_area) = *self.last_render_area.borrow() else {
             return (InputResult::None, false);

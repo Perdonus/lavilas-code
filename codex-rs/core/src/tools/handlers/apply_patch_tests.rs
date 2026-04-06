@@ -1,9 +1,12 @@
 use super::*;
 use codex_apply_patch::MaybeApplyPatchVerified;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use std::time::Duration;
 
 #[test]
 fn approval_keys_include_move_destination() {
@@ -77,4 +80,73 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
         permissions.and_then(|profile| profile.file_system.and_then(|fs| fs.write)),
         Some(vec![expected_outside])
     );
+}
+
+#[test]
+fn enrich_apply_patch_failure_output_uses_aggregated_output_when_stderr_missing() {
+    let output = ExecToolCallOutput {
+        exit_code: 1,
+        stdout: StreamOutput::new(String::new()),
+        stderr: StreamOutput::new(String::new()),
+        aggregated_output: StreamOutput::new("Failed to find expected lines in file.txt".to_string()),
+        duration: Duration::from_millis(25),
+        timed_out: false,
+    };
+
+    let enriched = enrich_apply_patch_failure_output(output);
+
+    assert_eq!(
+        enriched.stderr.text,
+        "Failed to find expected lines in file.txt"
+    );
+}
+
+#[test]
+fn enrich_apply_patch_failure_output_falls_back_to_stdout_when_aggregated_output_missing() {
+    let output = ExecToolCallOutput {
+        exit_code: 2,
+        stdout: StreamOutput::new("stdout fallback".to_string()),
+        stderr: StreamOutput::new("\n".to_string()),
+        aggregated_output: StreamOutput::new(String::new()),
+        duration: Duration::from_millis(10),
+        timed_out: false,
+    };
+
+    let enriched = enrich_apply_patch_failure_output(output);
+
+    assert_eq!(enriched.stderr.text, "stdout fallback");
+}
+
+#[test]
+fn enrich_apply_patch_failure_output_keeps_non_empty_stderr() {
+    let output = ExecToolCallOutput {
+        exit_code: 1,
+        stdout: StreamOutput::new("stdout text".to_string()),
+        stderr: StreamOutput::new("real stderr".to_string()),
+        aggregated_output: StreamOutput::new("aggregated text".to_string()),
+        duration: Duration::from_millis(12),
+        timed_out: false,
+    };
+
+    let enriched = enrich_apply_patch_failure_output(output);
+
+    assert_eq!(enriched.stderr.text, "real stderr");
+}
+
+#[test]
+fn enrich_apply_patch_failure_output_keeps_successful_output_unchanged() {
+    let output = ExecToolCallOutput {
+        exit_code: 0,
+        stdout: StreamOutput::new("ok".to_string()),
+        stderr: StreamOutput::new(String::new()),
+        aggregated_output: StreamOutput::new("ok".to_string()),
+        duration: Duration::from_millis(1),
+        timed_out: false,
+    };
+
+    let enriched = enrich_apply_patch_failure_output(output.clone());
+
+    assert_eq!(enriched.stderr.text, output.stderr.text);
+    assert_eq!(enriched.stdout.text, output.stdout.text);
+    assert_eq!(enriched.aggregated_output.text, output.aggregated_output.text);
 }

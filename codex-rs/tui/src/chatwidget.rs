@@ -43,6 +43,12 @@ use url::Url;
 use self::realtime::PendingSteerCompareKey;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::account_profiles::StoredAccountProfile;
+use crate::account_profiles::build_create_profile_request;
+use crate::account_profiles::load_stored_profile;
+use crate::account_profiles::provider_display_name;
+use crate::account_profiles::stored_profile_has_saved_key;
+use crate::account_profiles::supported_account_providers;
 use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::ThreadSessionState;
 #[cfg(not(target_os = "linux"))]
@@ -376,7 +382,6 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::ui_preferences::UiLanguage;
 use crate::ui_preferences::default_profile_model as default_profile_model_for_provider;
-use crate::ui_preferences::ensure_profile_model_catalog as ensure_profile_model_catalog_for_profile;
 use crate::ui_preferences::load_ui_preferences;
 use crate::ui_preferences::profile_model_catalog_path as ui_profile_model_catalog_path;
 use crate::ui_preferences::profiles_dir as ui_profiles_dir;
@@ -477,11 +482,14 @@ impl UnifiedExecWaitStreak {
 }
 
 struct ProfilePreview {
+    profile_key: String,
     provider: Option<String>,
     display_name: Option<String>,
     model: Option<String>,
+    config_profile: Option<String>,
     linked_catalog_path: Option<PathBuf>,
     derived_catalog_path: Option<PathBuf>,
+    has_saved_api_key: bool,
 }
 
 fn is_unified_exec_source(source: ExecCommandSource) -> bool {
@@ -5087,6 +5095,10 @@ impl ChatWidget {
         self.bottom_pane.handle_mouse_event(mouse_event);
     }
 
+    pub(crate) fn wants_mouse_capture(&self) -> bool {
+        self.bottom_pane.wants_mouse_capture()
+    }
+
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
     }
@@ -5541,15 +5553,10 @@ impl ChatWidget {
                     );
                     return;
                 }
-                let supported = [
-                    "openai",
-                    "openrouter",
-                    "gemini",
-                    "anthropic",
-                    "mistral",
-                    "groq",
-                    "ollama",
-                ];
+                let supported = supported_account_providers()
+                    .iter()
+                    .map(|provider| provider.id)
+                    .collect::<Vec<_>>();
                 if !supported.contains(&provider.as_str()) {
                     self.add_error_message(format!(
                         "Неподдерживаемый провайдер: {provider}. Доступны: {}",
@@ -5557,15 +5564,10 @@ impl ChatWidget {
                     ));
                     return;
                 }
-                match self.create_profile_template(&provider, &profile_name) {
-                    Ok(path) => self.add_info_message(
-                        format!("Создан профиль: {}", path.display()),
-                        Some(self.profile_setup_hint(path.as_path())),
-                    ),
-                    Err(err) => {
-                        self.add_error_message(format!("Не удалось создать профиль: {err}"))
-                    }
-                }
+                self.app_event_tx.send(AppEvent::OpenAddAccountDetailsPrompt {
+                    provider,
+                    suggested_profile_name: (!profile_name.is_empty()).then_some(profile_name),
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
@@ -9751,13 +9753,8 @@ impl ChatWidget {
         &self,
         profile_path: &std::path::Path,
     ) -> Option<PathBuf> {
-        self.profile_json_value(profile_path)
-            .and_then(|value| {
-                value
-                    .get("model_catalog_json")
-                    .and_then(serde_json::Value::as_str)
-                    .map(PathBuf::from)
-            })
+        self.stored_profile(profile_path)
+            .and_then(|profile| profile.model_catalog_json)
             .or_else(|| {
                 let stem = profile_path.file_stem()?.to_str()?;
                 Some(ui_profile_model_catalog_path(
@@ -9767,44 +9764,37 @@ impl ChatWidget {
             })
     }
 
-    fn profile_json_value(&self, profile_path: &std::path::Path) -> Option<serde_json::Value> {
+    fn stored_profile(&self, profile_path: &std::path::Path) -> Option<StoredAccountProfile> {
         let extension = profile_path.extension()?.to_str()?;
         if extension != "json" {
             return None;
         }
-        let contents = std::fs::read_to_string(profile_path).ok()?;
-        serde_json::from_str::<serde_json::Value>(&contents).ok()
+        load_stored_profile(profile_path).ok()
     }
 
     fn profile_preview(&self, profile_path: &std::path::Path) -> ProfilePreview {
-        let json = self.profile_json_value(profile_path);
-        let derived_catalog_path = profile_path
+        let stored = self.stored_profile(profile_path);
+        let profile_key = profile_path
             .file_stem()
             .and_then(|value| value.to_str())
-            .map(|stem| ui_profile_model_catalog_path(self.config.codex_home.as_path(), stem));
+            .unwrap_or_default()
+            .to_string();
+        let derived_catalog_path = (!profile_key.is_empty())
+            .then(|| ui_profile_model_catalog_path(self.config.codex_home.as_path(), &profile_key));
 
         ProfilePreview {
-            provider: json
+            profile_key,
+            provider: stored.as_ref().map(|profile| profile.provider.clone()),
+            display_name: stored.as_ref().map(|profile| profile.name.clone()),
+            model: stored.as_ref().map(|profile| profile.model.clone()),
+            config_profile: stored.as_ref().and_then(|profile| profile.config_profile.clone()),
+            linked_catalog_path: stored
                 .as_ref()
-                .and_then(|value| value.get("provider"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
-            display_name: json
-                .as_ref()
-                .and_then(|value| value.get("name"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
-            model: json
-                .as_ref()
-                .and_then(|value| value.get("model"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
-            linked_catalog_path: json
-                .as_ref()
-                .and_then(|value| value.get("model_catalog_json"))
-                .and_then(serde_json::Value::as_str)
-                .map(PathBuf::from),
+                .and_then(|profile| profile.model_catalog_json.clone()),
             derived_catalog_path,
+            has_saved_api_key: stored
+                .as_ref()
+                .is_some_and(stored_profile_has_saved_key),
         }
     }
 
@@ -9818,7 +9808,7 @@ impl ChatWidget {
         if name == "settings.json" || name.ends_with(".models.json") {
             return false;
         }
-        name.ends_with(".json") || name.ends_with(".toml")
+        name.ends_with(".json")
     }
 
     fn ui_language_label(&self, language: UiLanguage) -> &'static str {
@@ -9856,25 +9846,51 @@ impl ChatWidget {
 
     fn profile_setup_hint(&self, profile_path: &std::path::Path) -> String {
         let prefix = self.current_command_prefix();
-        let catalog_path = self.profile_model_catalog_path_for_profile(profile_path);
+        let preview = self.profile_preview(profile_path);
+        let catalog_path = preview
+            .linked_catalog_path
+            .clone()
+            .or_else(|| preview.derived_catalog_path.clone());
         if self.ui_language().is_ru() {
+            if preview.has_saved_api_key {
+                match catalog_path {
+                    Some(path) => format!(
+                        "Нажмите Enter, чтобы переключиться на этот аккаунт. Каталог моделей уже привязан: {}. Вернуться сюда можно через {prefix}settings.",
+                        path.display()
+                    ),
+                    None => format!(
+                        "Нажмите Enter, чтобы переключиться на этот аккаунт. Вернуться сюда можно через {prefix}settings."
+                    ),
+                }
+            } else {
+                match catalog_path {
+                    Some(path) => format!(
+                        "У этого профиля нет сохранённого API-ключа. Проще пересоздать его через {prefix}profiles -> Add account. Каталог моделей: {}.",
+                        path.display()
+                    ),
+                    None => format!(
+                        "У этого профиля нет сохранённого API-ключа. Пересоздайте его через {prefix}profiles -> Add account."
+                    ),
+                }
+            }
+        } else if preview.has_saved_api_key {
             match catalog_path {
                 Some(path) => format!(
-                    "Откройте профиль, добавьте ключ и при необходимости поправьте каталог моделей {}. Он уже подключён к профилю, поэтому метаданные кастомных моделей сохранятся. Вернуться сюда можно через {prefix}settings.",
+                    "Press Enter to switch to this account. The model catalog is already attached at {}. You can come back through {prefix}settings.",
                     path.display()
                 ),
                 None => format!(
-                    "Откройте профиль и заполните ключ, адрес API и модель. Вернуться сюда можно через {prefix}settings."
+                    "Press Enter to switch to this account. You can come back through {prefix}settings."
                 ),
             }
         } else {
             match catalog_path {
                 Some(path) => format!(
-                    "Open the profile, add the API key, and adjust the seeded model catalog at {} if needed. It is already attached to the profile, so custom model metadata stays intact. You can jump back here through {prefix}settings.",
+                    "This profile has no saved API key. Re-create it through {prefix}profiles -> Add account. Model catalog: {}.",
                     path.display()
                 ),
                 None => format!(
-                    "Open the profile and fill in the API key, API base URL, and model. You can jump back here through {prefix}settings."
+                    "This profile has no saved API key. Re-create it through {prefix}profiles -> Add account."
                 ),
             }
         }
@@ -10649,6 +10665,7 @@ impl ChatWidget {
         let profiles_dir = self.profiles_dir();
         let prefix = self.current_command_prefix();
         let is_ru = self.ui_language().is_ru();
+        let active_profile = self.config.active_profile.clone();
         let replace_active = self.bottom_pane.active_view_id() == Some(PROFILES_MANAGER_VIEW_ID);
         let initial_selected_idx =
             self.bottom_pane.selected_index_for_active_view(PROFILES_MANAGER_VIEW_ID);
@@ -10660,14 +10677,16 @@ impl ChatWidget {
                 "Add account".to_string()
             },
             description: Some(if is_ru {
-                "Создать профиль провайдера и сразу подготовить каталог моделей".to_string()
+                "Открыть визуальную форму создания аккаунта: провайдер, имя профиля, API-ключ и base URL."
+                    .to_string()
             } else {
-                "Create a provider profile and seed its model catalog".to_string()
+                "Open the visual account-creation flow: provider, profile name, API key, and base URL."
+                    .to_string()
             }),
             search_value: Some(if is_ru {
-                "добавить аккаунт профиль провайдер".to_string()
+                "добавить аккаунт профиль провайдер api ключ".to_string()
             } else {
-                "add account profile provider".to_string()
+                "add account profile provider api key".to_string()
             }),
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenAddAccountProviderPicker)
@@ -10714,17 +10733,25 @@ impl ChatWidget {
         for (file_name, path) in profile_files {
             let display_path = path.display().to_string();
             let preview = self.profile_preview(path.as_path());
+            let profile_key = preview
+                .config_profile
+                .clone()
+                .unwrap_or_else(|| preview.profile_key.clone());
             let catalog_path = preview
                 .linked_catalog_path
                 .clone()
                 .or_else(|| preview.derived_catalog_path.clone());
-            let provider = preview.provider.unwrap_or_else(|| {
-                if is_ru {
-                    "провайдер не указан".to_string()
-                } else {
-                    "provider missing".to_string()
-                }
-            });
+            let provider = preview
+                .provider
+                .as_deref()
+                .map(|provider| provider_display_name(provider, is_ru))
+                .unwrap_or_else(|| {
+                    if is_ru {
+                        "провайдер не указан".to_string()
+                    } else {
+                        "provider missing".to_string()
+                    }
+                });
             let model = preview.model.unwrap_or_else(|| {
                 if is_ru {
                     "модель не указана".to_string()
@@ -10733,6 +10760,17 @@ impl ChatWidget {
                 }
             });
             let display_name = preview.display_name.unwrap_or(file_name);
+            let account_status = if preview.has_saved_api_key {
+                if is_ru {
+                    "готов к переключению".to_string()
+                } else {
+                    "ready to switch".to_string()
+                }
+            } else if is_ru {
+                "нет API-ключа".to_string()
+            } else {
+                "no API key".to_string()
+            };
             let catalog_status = match catalog_path.as_ref() {
                 Some(path) if path.exists() && is_ru => format!("каталог: {}", path.display()),
                 Some(path) if path.exists() => format!("catalog: {}", path.display()),
@@ -10741,29 +10779,24 @@ impl ChatWidget {
                 None if is_ru => "каталог не привязан".to_string(),
                 None => "catalog not linked".to_string(),
             };
-            let info_title = if is_ru {
-                format!("Профиль: {display_path}")
-            } else {
-                format!("Profile: {display_path}")
-            };
-            let extra_hint = if is_ru {
-                format!("Провайдер: {provider}\nМодель: {model}\n{catalog_status}")
-            } else {
-                format!("Provider: {provider}\nModel: {model}\n{catalog_status}")
-            };
-            let hint = format!("{extra_hint}\n\n{}", self.profile_setup_hint(path.as_path()));
-            let description = format!("{provider} • {model} • {catalog_status}");
-            let search_value = format!("{display_name} {provider} {model} {display_path}");
+            let description = format!("{provider} • {model} • {account_status}");
+            let selected_description = self.profile_setup_hint(path.as_path());
+            let search_value = format!(
+                "{display_name} {profile_key} {provider} {model} {catalog_status} {display_path}"
+            );
+            let is_current = active_profile.as_deref() == Some(profile_key.as_str());
             items.push(SelectionItem {
                 name: display_name,
                 description: Some(description),
                 search_value: Some(search_value),
+                selected_description: Some(selected_description),
+                is_current,
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(info_title.clone(), Some(hint.clone())),
-                    )))
+                    tx.send(AppEvent::ActivateStoredProfile {
+                        profile_key: profile_key.clone(),
+                    })
                 })],
-                dismiss_on_select: false,
+                dismiss_on_select: true,
                 ..Default::default()
             });
         }
@@ -10772,7 +10805,7 @@ impl ChatWidget {
             Line::from(vec![
                 "Нажмите ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " чтобы открыть подсказку по профилю, ".into(),
+                " чтобы переключить аккаунт, ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
                 " для возврата".into(),
             ])
@@ -10780,7 +10813,7 @@ impl ChatWidget {
             Line::from(vec![
                 "Press ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " to inspect a profile, ".into(),
+                " to switch accounts, ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
                 " to go back".into(),
             ])
@@ -10827,15 +10860,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_add_account_provider_popup(&mut self) {
-        let providers = [
-            "openai",
-            "openrouter",
-            "gemini",
-            "anthropic",
-            "mistral",
-            "groq",
-            "ollama",
-        ];
         let is_ru = self.ui_language().is_ru();
         let replace_active =
             self.bottom_pane.active_view_id() == Some(ADD_ACCOUNT_PROVIDER_VIEW_ID);
@@ -10850,7 +10874,7 @@ impl ChatWidget {
                 "← Back to profiles".to_string()
             },
             description: Some(if is_ru {
-                "Вернуться к списку профилей и шаблонов аккаунтов.".to_string()
+                "Вернуться к списку сохранённых аккаунтов.".to_string()
             } else {
                 "Return to the profiles manager.".to_string()
             }),
@@ -10863,30 +10887,37 @@ impl ChatWidget {
             dismiss_on_select: true,
             ..Default::default()
         }];
-        items.extend(providers.into_iter().map(|provider| SelectionItem {
-            name: provider.to_string(),
-            description: Some(if is_ru {
-                format!(
-                    "Создать профиль и стартовый каталог моделей. По умолчанию: {}",
-                    default_profile_model_for_provider(provider)
-                )
-            } else {
-                format!(
-                    "Create a profile and seed its model catalog. Default: {}",
-                    default_profile_model_for_provider(provider)
-                )
-            }),
-            search_value: Some(format!(
-                "{provider} {}",
-                default_profile_model_for_provider(provider)
-            )),
-            actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::CreateProfileTemplate {
-                    provider: provider.to_string(),
-                })
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
+        items.extend(supported_account_providers().iter().copied().map(|provider| {
+            let provider_id = provider.id.to_string();
+            let display_name = provider_display_name(provider.id, is_ru);
+            SelectionItem {
+                name: display_name,
+                description: Some(if is_ru {
+                    format!(
+                        "Откроется форма имени, API-ключа и base URL. Модель по умолчанию: {}",
+                        default_profile_model_for_provider(provider.id)
+                    )
+                } else {
+                    format!(
+                        "Opens a form for the profile name, API key, and base URL. Default model: {}",
+                        default_profile_model_for_provider(provider.id)
+                    )
+                }),
+                search_value: Some(format!(
+                    "{} {} {}",
+                    provider.id,
+                    provider_display_name(provider.id, false),
+                    default_profile_model_for_provider(provider.id)
+                )),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenAddAccountDetailsPrompt {
+                        provider: provider_id.clone(),
+                        suggested_profile_name: None,
+                    })
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            }
         }));
 
         let params = SelectionViewParams {
@@ -10897,10 +10928,10 @@ impl ChatWidget {
                 "Add account".to_string()
             }),
             subtitle: Some(if is_ru {
-                "Выберите провайдера: будут созданы и профиль, и каталог моделей"
+                "Выберите провайдера, затем введите имя профиля, API-ключ и base URL"
                     .to_string()
             } else {
-                "Choose a provider to create both the profile and its model catalog"
+                "Choose a provider, then enter the profile name, API key, and base URL"
                     .to_string()
             }),
             footer_hint: Some(standard_popup_hint_line()),
@@ -10925,92 +10956,59 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn create_profile_template_for_provider(&mut self, provider: &str) {
-        match self.create_profile_template(provider, "") {
-            Ok(path) => {
-                if self.ui_language().is_ru() {
-                    self.add_info_message(
-                        format!("Создан профиль: {}", path.display()),
-                        Some(self.profile_setup_hint(path.as_path())),
-                    );
-                } else {
-                    self.add_info_message(
-                        format!("Created profile: {}", path.display()),
-                        Some(self.profile_setup_hint(path.as_path())),
-                    );
-                }
-                self.open_profiles_manager_popup();
-            }
-            Err(err) => {
-                if self.ui_language().is_ru() {
-                    self.add_error_message(format!("Не удалось создать профиль: {err}"));
-                } else {
-                    self.add_error_message(format!("Failed to create profile: {err}"));
-                }
-            }
-        }
+    pub(crate) fn open_add_account_details_prompt(
+        &mut self,
+        request_id: &str,
+        provider: &str,
+        suggested_profile_name: Option<&str>,
+    ) {
+        let request = build_create_profile_request(
+            request_id.to_string(),
+            provider,
+            suggested_profile_name,
+            self.ui_language().is_ru(),
+        );
+        self.bottom_pane.push_user_input_request(request);
+        self.request_redraw();
     }
 
-    fn create_profile_template(
-        &self,
-        provider: &str,
-        profile_name: &str,
-    ) -> std::io::Result<PathBuf> {
-        let profiles_dir = self.profiles_dir();
-        std::fs::create_dir_all(&profiles_dir)?;
-
-        let sanitized = if profile_name.trim().is_empty() {
-            format!("{}-profile", provider)
-        } else {
-            profile_name
-                .chars()
-                .map(|ch| {
-                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                        ch
-                    } else {
-                        '-'
-                    }
-                })
-                .collect::<String>()
+    pub(crate) fn sync_runtime_profile_config(
+        &mut self,
+        config: &Config,
+        model_catalog: Arc<ModelCatalog>,
+    ) {
+        let developer_instructions = self
+            .current_collaboration_mode
+            .settings
+            .developer_instructions
+            .clone();
+        let next_model = config
+            .model
+            .clone()
+            .unwrap_or_else(|| self.current_collaboration_mode.model().to_string());
+        self.config = config.clone();
+        self.model_catalog = model_catalog;
+        self.current_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: next_model,
+                reasoning_effort: config.model_reasoning_effort,
+                developer_instructions,
+            },
         };
-        let profile_key = sanitized.to_ascii_lowercase();
-        let file_name = format!("{profile_key}.json");
-        let path = profiles_dir.join(file_name);
-        let model_catalog_path = ensure_profile_model_catalog_for_profile(
-            self.config.codex_home.as_path(),
-            &profile_key,
-            provider,
-        )?;
-
-        if path.exists() {
-            return Ok(path);
-        }
-
-        let base_url = match provider {
-            "openai" => "https://api.openai.com/v1",
-            "openrouter" => "https://openrouter.ai/api/v1",
-            "gemini" => "https://generativelanguage.googleapis.com/v1beta/openai",
-            "anthropic" => "https://api.anthropic.com/v1",
-            "mistral" => "https://api.mistral.ai/v1",
-            "groq" => "https://api.groq.com/openai/v1",
-            "ollama" => "http://127.0.0.1:11434/v1",
-            _ => "",
-        };
-
-        let env_key = provider.to_ascii_uppercase() + "_API_KEY";
-        let payload = serde_json::json!({
-            "provider": provider,
-            "name": sanitized,
-            "base_url": base_url,
-            "env_key": env_key,
-            "model": default_profile_model_for_provider(provider),
-            "model_catalog_json": model_catalog_path.display().to_string(),
-        });
-        let body = serde_json::to_string_pretty(&payload)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?
-            + "\n";
-        std::fs::write(&path, body)?;
-        Ok(path)
+        self.active_collaboration_mask = Self::initial_collaboration_mask(
+            &self.config,
+            self.model_catalog.as_ref(),
+            self.config.model.as_deref(),
+        );
+        self.update_collaboration_mode_indicator();
+        self.sync_fast_command_enabled();
+        self.sync_personality_command_enabled();
+        self.sync_plugins_command_enabled();
+        self.refresh_plugin_mentions();
+        self.refresh_status_surfaces();
+        self.refresh_model_dependent_surfaces();
+        self.request_redraw();
     }
 
     /// Open the permissions popup (alias for /permissions).

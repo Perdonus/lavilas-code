@@ -7,6 +7,16 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
+use crate::account_profiles::API_KEY_QUESTION_ID;
+use crate::account_profiles::BASE_URL_QUESTION_ID;
+use crate::account_profiles::PROFILE_NAME_QUESTION_ID;
+use crate::account_profiles::StoredAccountProfile;
+use crate::account_profiles::account_provider_spec;
+use crate::account_profiles::create_or_update_stored_profile;
+use crate::account_profiles::load_stored_profile;
+use crate::account_profiles::provider_display_name;
+use crate::account_profiles::stored_profile_has_saved_key;
+use crate::account_profiles::stored_profile_path;
 use crate::app_event_sender::AppEventSender;
 use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::AppServerSession;
@@ -50,6 +60,7 @@ use crate::resume_picker::SessionSelection;
 use crate::test_support::PathBufExt;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::ui_preferences::load_ui_preferences;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
@@ -118,6 +129,7 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::protocol::TokenUsage;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -150,6 +162,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
+use toml_edit::value;
 use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
@@ -169,6 +182,12 @@ const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
+}
+
+#[derive(Clone, Debug)]
+struct PendingLocalProfileCreate {
+    provider: String,
+    suggested_profile_name: Option<String>,
 }
 
 fn app_server_request_id_to_mcp_request_id(
@@ -944,6 +963,7 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
+    pending_local_profile_creates: HashMap<String, PendingLocalProfileCreate>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
@@ -1117,6 +1137,8 @@ impl App {
             .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
+        self.active_profile = config.active_profile.clone();
+        self.model_catalog = self.model_catalog_for_config(&config);
         self.config = config;
         self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
@@ -1130,6 +1152,387 @@ impl App {
                 "failed to refresh config before thread transition; continuing with current in-memory config"
             );
         }
+    }
+
+    fn extract_local_user_input_text(
+        response: &RequestUserInputResponse,
+        question_id: &str,
+    ) -> Option<String> {
+        response.answers.get(question_id).and_then(|answer| {
+            answer
+                .answers
+                .iter()
+                .find_map(|entry| entry.strip_prefix("user_note: "))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    answer
+                        .answers
+                        .first()
+                        .map(String::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+        })
+    }
+
+    fn model_catalog_for_config(&self, config: &Config) -> Arc<ModelCatalog> {
+        let mut models = config
+            .model_catalog
+            .as_ref()
+            .map(|catalog| catalog.models.clone().into_iter().map(ModelPreset::from).collect())
+            .filter(|models: &Vec<ModelPreset>| !models.is_empty())
+            .unwrap_or_else(|| self.model_catalog.try_list_models().unwrap_or_default());
+        ModelPreset::mark_default_by_picker_visibility(&mut models);
+        Arc::new(ModelCatalog::new(
+            models,
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(Feature::DefaultModeRequestUserInput),
+            },
+        ))
+    }
+
+    fn ui_language_is_ru(&self) -> bool {
+        load_ui_preferences(self.config.codex_home.as_path())
+            .language
+            .is_ru()
+    }
+
+    async fn reload_active_profile_runtime(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> Result<()> {
+        app_server.reload_user_config().await?;
+        self.refresh_in_memory_config_from_disk().await?;
+        let model_catalog = self.model_catalog.clone();
+        self.chat_widget
+            .sync_runtime_profile_config(&self.config, model_catalog);
+        Ok(())
+    }
+
+    async fn persist_and_activate_profile(
+        &mut self,
+        app_server: &mut AppServerSession,
+        profile_key: &str,
+        stored: &StoredAccountProfile,
+    ) -> Result<()> {
+        let config_profile = stored
+            .config_profile
+            .clone()
+            .unwrap_or_else(|| profile_key.to_string());
+        let provider_spec = account_provider_spec(stored.provider.as_str()).ok_or_else(|| {
+            color_eyre::eyre::eyre!("unsupported provider `{}`", stored.provider)
+        })?;
+        let provider_key = provider_spec
+            .builtin_model_provider_id
+            .map(str::to_string)
+            .or_else(|| stored.model_provider_id.clone())
+            .unwrap_or_else(|| format!("{profile_key}-provider"));
+        if !provider_spec.api_key_optional && !stored_profile_has_saved_key(stored) {
+            let recreate_hint = if self.ui_language_is_ru() {
+                "Сохранённый API-ключ не найден. Пересоздайте аккаунт через /profiles -> Add account."
+            } else {
+                "Saved API key not found. Re-create the account through /profiles -> Add account."
+            };
+            self.chat_widget.add_error_message(recreate_hint.to_string());
+            return Ok(());
+        }
+
+        let mut edits = vec![
+            ConfigEdit::SetPath {
+                segments: vec!["profile".to_string()],
+                value: value(config_profile.clone()),
+            },
+            ConfigEdit::SetPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    config_profile.clone(),
+                    "model_provider".to_string(),
+                ],
+                value: value(provider_key.clone()),
+            },
+            ConfigEdit::SetPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    config_profile.clone(),
+                    "model".to_string(),
+                ],
+                value: value(stored.model.clone()),
+            },
+        ];
+
+        if provider_spec.builtin_model_provider_id.is_none() {
+            edits.extend(vec![
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "name".to_string(),
+                    ],
+                    value: value(provider_display_name(stored.provider.as_str(), false)),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "base_url".to_string(),
+                    ],
+                    value: value(
+                        stored
+                            .base_url
+                            .clone()
+                            .unwrap_or_else(|| provider_spec.base_url.to_string()),
+                    ),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "wire_api".to_string(),
+                    ],
+                    value: value("responses"),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "requires_openai_auth".to_string(),
+                    ],
+                    value: value(false),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "supports_websockets".to_string(),
+                    ],
+                    value: value(false),
+                },
+                ConfigEdit::ClearPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "env_key".to_string(),
+                    ],
+                },
+                ConfigEdit::ClearPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "env_key_instructions".to_string(),
+                    ],
+                },
+                ConfigEdit::ClearPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "auth".to_string(),
+                    ],
+                },
+            ]);
+        }
+
+        if let Some(model_catalog_path) = stored.model_catalog_json.as_ref() {
+            edits.push(ConfigEdit::SetPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    config_profile.clone(),
+                    "model_catalog_json".to_string(),
+                ],
+                value: value(model_catalog_path.display().to_string()),
+            });
+        } else {
+            edits.push(ConfigEdit::ClearPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    config_profile.clone(),
+                    "model_catalog_json".to_string(),
+                ],
+            });
+        }
+
+        if provider_spec.builtin_model_provider_id.is_none() {
+            match stored.experimental_bearer_token.as_ref() {
+                Some(token) => edits.push(ConfigEdit::SetPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "experimental_bearer_token".to_string(),
+                    ],
+                    value: value(token.clone()),
+                }),
+                None => edits.push(ConfigEdit::ClearPath {
+                    segments: vec![
+                        "model_providers".to_string(),
+                        provider_key.clone(),
+                        "experimental_bearer_token".to_string(),
+                    ],
+                }),
+            }
+        }
+
+        ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await?;
+        self.reload_active_profile_runtime(app_server).await?;
+
+        let is_ru = self.ui_language_is_ru();
+        let provider_name = provider_display_name(stored.provider.as_str(), is_ru);
+        let hint = stored.model_catalog_json.as_ref().map(|path| {
+            if is_ru {
+                format!(
+                    "Активный профиль: {config_profile}. Каталог моделей: {}.",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "Active profile: {config_profile}. Model catalog: {}.",
+                    path.display()
+                )
+            }
+        });
+        if is_ru {
+            self.chat_widget.add_info_message(
+                format!("Аккаунт переключен: {provider_name} ({config_profile})"),
+                hint,
+            );
+        } else {
+            self.chat_widget.add_info_message(
+                format!("Account switched: {provider_name} ({config_profile})"),
+                hint,
+            );
+        }
+        self.chat_widget.open_profiles_manager_popup();
+        Ok(())
+    }
+
+    fn open_local_profile_create_prompt(
+        &mut self,
+        provider: String,
+        suggested_profile_name: Option<String>,
+    ) {
+        if account_provider_spec(provider.as_str()).is_none() {
+            let message = if self.ui_language_is_ru() {
+                format!("Неподдерживаемый провайдер: {provider}")
+            } else {
+                format!("Unsupported provider: {provider}")
+            };
+            self.chat_widget.add_error_message(message);
+            return;
+        }
+        let request_id = format!("local-profile-create::{}", Uuid::now_v7());
+        self.pending_local_profile_creates.insert(
+            request_id.clone(),
+            PendingLocalProfileCreate {
+                provider: provider.clone(),
+                suggested_profile_name: suggested_profile_name.clone(),
+            },
+        );
+        self.chat_widget.open_add_account_details_prompt(
+            &request_id,
+            provider.as_str(),
+            suggested_profile_name.as_deref(),
+        );
+    }
+
+    async fn activate_stored_profile(
+        &mut self,
+        app_server: &mut AppServerSession,
+        profile_key: &str,
+    ) -> Result<()> {
+        let is_ru = self.ui_language_is_ru();
+        let path = stored_profile_path(self.config.codex_home.as_path(), profile_key);
+        let stored = match load_stored_profile(path.as_path()) {
+            Ok(profile) => profile,
+            Err(err) => {
+                let message = if is_ru {
+                    format!("Не удалось прочитать профиль `{profile_key}`: {err}")
+                } else {
+                    format!("Failed to read profile `{profile_key}`: {err}")
+                };
+                self.chat_widget.add_error_message(message);
+                return Ok(());
+            }
+        };
+        if !stored_profile_has_saved_key(&stored) {
+            let message = if is_ru {
+                format!(
+                    "Профиль `{profile_key}` не содержит сохранённый API-ключ. Пересоздайте его через /profiles -> Add account."
+                )
+            } else {
+                format!(
+                    "Profile `{profile_key}` has no saved API key. Re-create it through /profiles -> Add account."
+                )
+            };
+            self.chat_widget.add_error_message(message);
+            return Ok(());
+        }
+        self.persist_and_activate_profile(app_server, profile_key, &stored)
+            .await
+    }
+
+    async fn handle_local_profile_create_answer(
+        &mut self,
+        app_server: &mut AppServerSession,
+        request_id: &str,
+        response: &RequestUserInputResponse,
+    ) -> Result<bool> {
+        let Some(pending) = self.pending_local_profile_creates.remove(request_id) else {
+            return Ok(false);
+        };
+        let is_ru = self.ui_language_is_ru();
+        let provider = pending.provider;
+        let profile_name = Self::extract_local_user_input_text(response, PROFILE_NAME_QUESTION_ID)
+            .or(pending.suggested_profile_name)
+            .unwrap_or_default();
+        let base_url = Self::extract_local_user_input_text(response, BASE_URL_QUESTION_ID);
+        let api_key = Self::extract_local_user_input_text(response, API_KEY_QUESTION_ID);
+        let Some(provider_spec) = account_provider_spec(provider.as_str()) else {
+            let message = if is_ru {
+                format!("Неподдерживаемый провайдер: {provider}")
+            } else {
+                format!("Unsupported provider: {provider}")
+            };
+            self.chat_widget.add_error_message(message);
+            return Ok(true);
+        };
+        if provider_spec.requires_base_url
+            && base_url.as_deref().is_none_or(|value| value.trim().is_empty())
+        {
+            let message = if is_ru {
+                format!("Для кастомного провайдера `{provider}` нужен OpenAI-compatible base URL.")
+            } else {
+                format!("Custom provider `{provider}` requires an OpenAI-compatible base URL.")
+            };
+            self.chat_widget.add_error_message(message);
+            return Ok(true);
+        }
+        if !provider_spec.api_key_optional
+            && api_key.as_deref().is_none_or(|value| value.trim().is_empty())
+        {
+            let message = if is_ru {
+                format!("Для провайдера `{provider}` нужен API-ключ.")
+            } else {
+                format!("Provider `{provider}` requires an API key.")
+            };
+            self.chat_widget.add_error_message(message);
+            return Ok(true);
+        }
+        let (profile_key, stored, _) = create_or_update_stored_profile(
+            self.config.codex_home.as_path(),
+            provider.as_str(),
+            profile_name.as_str(),
+            base_url,
+            api_key,
+        )?;
+        self.persist_and_activate_profile(app_server, &profile_key, &stored)
+            .await?;
+        Ok(true)
     }
 
     async fn rebuild_config_for_resume_or_fallback(
@@ -3760,6 +4163,7 @@ impl App {
             chat_widget,
             config,
             active_profile,
+            pending_local_profile_creates: HashMap::new(),
             cli_kv_overrides,
             harness_overrides,
             runtime_approval_policy_override: None,
@@ -3831,6 +4235,9 @@ impl App {
 
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
+
+        // Keep default terminal selection working until an interactive popup/menu appears.
+        app.sync_mouse_capture_mode(tui);
 
         tui.frame_requester().schedule_frame();
 
@@ -3906,6 +4313,7 @@ impl App {
                         AppRunControl::Continue
                     }
                 };
+                app.sync_mouse_capture_mode(tui);
                 if App::should_stop_waiting_for_initial_session(
                     waiting_for_initial_session_configured,
                     app.primary_thread_id,
@@ -4269,7 +4677,23 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.submit_active_thread_op(app_server, op.into()).await?;
+                match op {
+                    Op::UserInputAnswer { id, response } => {
+                        if !self
+                            .handle_local_profile_create_answer(app_server, &id, &response)
+                            .await?
+                        {
+                            self.submit_active_thread_op(
+                                app_server,
+                                AppCommand::user_input_answer(id, response),
+                            )
+                            .await?;
+                        }
+                    }
+                    other => {
+                        self.submit_active_thread_op(app_server, other.into()).await?;
+                    }
+                }
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op.into())
@@ -4483,9 +4907,14 @@ impl App {
             AppEvent::OpenAddAccountProviderPicker => {
                 self.chat_widget.open_add_account_provider_popup();
             }
-            AppEvent::CreateProfileTemplate { provider } => {
-                self.chat_widget
-                    .create_profile_template_for_provider(&provider);
+            AppEvent::OpenAddAccountDetailsPrompt {
+                provider,
+                suggested_profile_name,
+            } => {
+                self.open_local_profile_create_prompt(provider, suggested_profile_name);
+            }
+            AppEvent::ActivateStoredProfile { profile_key } => {
+                self.activate_stored_profile(app_server, &profile_key).await?;
             }
             AppEvent::OpenLanguagePicker => {
                 self.chat_widget.open_language_picker_popup();
@@ -6012,6 +6441,14 @@ impl App {
 
     fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
+    }
+
+    fn wants_mouse_capture(&self) -> bool {
+        self.overlay.is_none() && self.chat_widget.wants_mouse_capture()
+    }
+
+    fn sync_mouse_capture_mode(&self, tui: &mut tui::Tui) {
+        tui.set_mouse_capture_enabled(self.wants_mouse_capture());
     }
 
     fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {

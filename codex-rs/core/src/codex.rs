@@ -2604,12 +2604,15 @@ impl Session {
     }
 
     pub(crate) async fn reload_user_config_layer(&self) {
-        let config_toml_path = {
+        let (config_toml_path, previous_configuration) = {
             let state = self.state.lock().await;
-            state
-                .session_configuration
-                .codex_home
-                .join(CONFIG_TOML_FILE)
+            (
+                state
+                    .session_configuration
+                    .codex_home
+                    .join(CONFIG_TOML_FILE),
+                state.session_configuration.clone(),
+            )
         };
 
         let user_config = match std::fs::read_to_string(&config_toml_path) {
@@ -2637,12 +2640,107 @@ impl Session {
             }
         };
 
-        let mut state = self.state.lock().await;
-        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.config_layer_stack = config
+        let updated_layer_stack = previous_configuration
+            .original_config_do_not_use
             .config_layer_stack
             .with_user_config(&config_toml_path, user_config);
-        state.session_configuration.original_config_do_not_use = Arc::new(config);
+
+        let new_config_toml = match crate::config::deserialize_config_toml_with_base(
+            updated_layer_stack.effective_config(),
+            &previous_configuration.codex_home,
+        ) {
+            Ok(config) => config,
+            Err(err) => {
+                warn!("failed to deserialize user config while reloading layer: {err}");
+                return;
+            }
+        };
+
+        let previous_config = previous_configuration.original_config_do_not_use.as_ref();
+        let new_config = match Config::load_config_with_layer_stack(
+            new_config_toml,
+            crate::config::ConfigOverrides {
+                cwd: Some(previous_configuration.cwd.to_path_buf()),
+                codex_self_exe: previous_config.codex_self_exe.clone(),
+                codex_linux_sandbox_exe: previous_config.codex_linux_sandbox_exe.clone(),
+                main_execve_wrapper_exe: previous_config.main_execve_wrapper_exe.clone(),
+                js_repl_node_path: previous_config.js_repl_node_path.clone(),
+                js_repl_node_module_dirs: Some(previous_config.js_repl_node_module_dirs.clone()),
+                zsh_path: previous_config.zsh_path.clone(),
+                ..Default::default()
+            },
+            previous_configuration.codex_home.clone(),
+            updated_layer_stack,
+        ) {
+            Ok(config) => config,
+            Err(err) => {
+                warn!("failed to rebuild effective config while reloading layer: {err}");
+                return;
+            }
+        };
+
+        let refresh_strategy = match &previous_configuration.session_source {
+            SessionSource::SubAgent(_) => codex_models_manager::manager::RefreshStrategy::Offline,
+            _ => codex_models_manager::manager::RefreshStrategy::OnlineIfUncached,
+        };
+        if new_config.model.is_none()
+            || !matches!(
+                refresh_strategy,
+                codex_models_manager::manager::RefreshStrategy::Offline
+            )
+        {
+            let _ = self.services.models_manager.list_models(refresh_strategy).await;
+        }
+        let model = self
+            .services
+            .models_manager
+            .get_default_model(&new_config.model, refresh_strategy)
+            .await;
+        let model_info = self
+            .services
+            .models_manager
+            .get_model_info(model.as_str(), &new_config.to_models_manager_config())
+            .await;
+        let provider_changed = previous_configuration.provider != new_config.model_provider
+            || previous_configuration.collaboration_mode.model() != model;
+        let base_instructions = new_config
+            .base_instructions
+            .clone()
+            .unwrap_or_else(|| {
+                if provider_changed {
+                    model_info.get_model_instructions(new_config.personality)
+                } else {
+                    previous_configuration.base_instructions.clone()
+                }
+            });
+
+        let mut state = self.state.lock().await;
+        state.session_configuration.provider = new_config.model_provider.clone();
+        state.session_configuration.collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort: new_config.model_reasoning_effort,
+                developer_instructions: None,
+            },
+        };
+        state.session_configuration.model_reasoning_summary = new_config.model_reasoning_summary;
+        state.session_configuration.service_tier = new_config.service_tier;
+        state.session_configuration.developer_instructions = new_config.developer_instructions.clone();
+        state.session_configuration.user_instructions = new_config.user_instructions.clone();
+        state.session_configuration.personality = new_config.personality;
+        state.session_configuration.base_instructions = base_instructions;
+        state.session_configuration.compact_prompt = new_config.compact_prompt.clone();
+        state.session_configuration.approval_policy = new_config.permissions.approval_policy.clone();
+        state.session_configuration.approvals_reviewer = new_config.approvals_reviewer;
+        state.session_configuration.sandbox_policy = new_config.permissions.sandbox_policy.clone();
+        state.session_configuration.file_system_sandbox_policy =
+            new_config.permissions.file_system_sandbox_policy.clone();
+        state.session_configuration.network_sandbox_policy =
+            new_config.permissions.network_sandbox_policy;
+        state.session_configuration.windows_sandbox_level =
+            WindowsSandboxLevel::from_config(&new_config);
+        state.session_configuration.original_config_do_not_use = Arc::new(new_config);
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
     }
