@@ -1410,7 +1410,10 @@ impl App {
         ConfigEditsBuilder::new(&self.config.codex_home)
             .with_edits(edits)
             .apply()
-            .await?;
+            .await
+            .map_err(|err| {
+                color_eyre::eyre::eyre!("Не удалось сохранить конфигурацию профиля: {err}")
+            })?;
         self.reload_active_profile_runtime(app_server).await?;
 
         let is_ru = self.ui_language_is_ru();
