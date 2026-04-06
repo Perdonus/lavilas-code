@@ -302,7 +302,7 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Active;
         self.realtime_conversation.session_id = ev.session_id;
         self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        self.set_footer_hint_override(Some(self.realtime_footer_hint_items()));
         self.start_realtime_local_audio();
         self.request_redraw();
     }

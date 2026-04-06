@@ -120,7 +120,7 @@ impl RequestUserInputOverlay {
         let subtitle = if unanswered == 0 {
             "Нет вопросов без ответа".to_string()
         } else {
-            format("{} без ответа", russian_question_phrase(unanswered, None))
+            format!("{} без ответа", russian_question_phrase(unanswered, None))
         };
         UnansweredConfirmationData {
             title_line: Line::from(super::UNANSWERED_CONFIRM_TITLE.bold()),
