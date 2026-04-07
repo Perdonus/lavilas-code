@@ -20,14 +20,6 @@ jobs:
             target: aarch64-unknown-linux-musl
             artifact_name: lavilas-codex-linux-arm64
             bin_path: codex-rs/target/aarch64-unknown-linux-musl/release/codex
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            artifact_name: lavilas-codex-macos-x64
-            bin_path: codex-rs/target/x86_64-apple-darwin/release/codex
-          - os: macos-14
-            target: aarch64-apple-darwin
-            artifact_name: lavilas-codex-macos-arm64
-            bin_path: codex-rs/target/aarch64-apple-darwin/release/codex
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: lavilas-codex-windows-x64.exe
@@ -192,7 +184,5 @@ jobs:
           files: |
             artifacts/**/lavilas-codex-linux-x64
             artifacts/**/lavilas-codex-linux-arm64
-            artifacts/**/lavilas-codex-macos-x64
-            artifacts/**/lavilas-codex-macos-arm64
             artifacts/**/lavilas-codex-windows-x64.exe
             artifacts/**/lavilas-codex-windows-arm64.exe
