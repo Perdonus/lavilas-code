@@ -404,6 +404,7 @@ ignored = [
     "openssl-sys",
     "codex-utils-readiness",
     "codex-utils-template",
+    "codex-debug-client",
     "codex-v8-poc",
 ]
 

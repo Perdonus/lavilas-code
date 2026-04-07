@@ -764,7 +764,7 @@ describe("Codex", () => {
 
     try {
       const thread = client.startThread();
-      await expect(thread.run("fail")).rejects.toThrow("stream disconnected before completion:");
+      await expect(thread.run("fail")).rejects.toThrow("поток отключился до завершения:");
     } finally {
       cleanup();
       await close();
