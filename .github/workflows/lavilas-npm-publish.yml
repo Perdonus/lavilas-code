@@ -17,14 +17,12 @@ jobs:
             target_triple: x86_64-unknown-linux-musl
             artifact_name: npm-codex-linux-x64
             bin_path: codex-rs/target/x86_64-unknown-linux-musl/release/codex
-            install_build_deps: sudo apt-get update && sudo apt-get install -y pkg-config libcap-dev ripgrep musl-tools
             rust_target: x86_64-unknown-linux-musl
           - os: ubuntu-24.04-arm
             package: codex-linux-arm64
             target_triple: aarch64-unknown-linux-musl
             artifact_name: npm-codex-linux-arm64
             bin_path: codex-rs/target/aarch64-unknown-linux-musl/release/codex
-            install_build_deps: sudo apt-get update && sudo apt-get install -y pkg-config libcap-dev ripgrep musl-tools
             rust_target: aarch64-unknown-linux-musl
           - os: macos-15-intel
             package: codex-darwin-x64
@@ -82,12 +80,71 @@ jobs:
         shell: pwsh
         run: rustup target add '${{ matrix.rust_target }}'
 
-      - name: Install platform build dependencies (Linux)
-        if: runner.os == 'Linux'
+      - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
+        name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.14.0
+
+      - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
+        name: Install musl build tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          TARGET: ${{ matrix.target_triple }}
+          APT_UPDATE_ARGS: -o Acquire::Retries=3
+          APT_INSTALL_ARGS: --no-install-recommends
+        shell: bash
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
+        name: Configure rustc UBSan wrapper (musl host)
         shell: bash
         run: |
           set -euo pipefail
-          ${{ matrix.install_build_deps }}
+          ubsan=""
+          if command -v ldconfig >/dev/null 2>&1; then
+            ubsan="$(ldconfig -p | grep -m1 'libubsan\.so\.1' | sed -E 's/.*=> (.*)$/\1/')"
+          fi
+          wrapper_root="${RUNNER_TEMP:-/tmp}"
+          wrapper="${wrapper_root}/rustc-ubsan-wrapper"
+          cat > "${wrapper}" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${ubsan}" ]]; then
+            export LD_PRELOAD="${ubsan}\${LD_PRELOAD:+:\${LD_PRELOAD}}"
+          fi
+          exec "\$1" "\${@:2}"
+          EOF
+          chmod +x "${wrapper}"
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
+        name: Clear sanitizer flags (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "RUSTDOCFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+          sanitize_flags() {
+            local input="$1"
+            input="${input//-fsanitize=undefined/}"
+            input="${input//-fno-sanitize-recover=undefined/}"
+            input="${input//-fno-sanitize-trap=undefined/}"
+            echo "$input"
+          }
+
+          cflags="$(sanitize_flags "${CFLAGS-}")"
+          cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
+          echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
       - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl' }}
         name: Configure musl rusty_v8 artifact overrides
