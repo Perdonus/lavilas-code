@@ -8802,8 +8802,8 @@ impl ChatWidget {
                     let item_label = Self::model_picker_label(&preset);
                     let model = preset.model.clone();
                     let search_value = description.as_ref().map_or_else(
-                        || format!("{} {}", item_label, model),
-                        |desc| format!("{} {} {}", item_label, model, desc),
+                        || format!("{item_label} {model}"),
+                        |desc| format!("{item_label} {model} {desc}"),
                     );
                     let should_prompt_plan_mode_scope = self
                         .should_prompt_plan_mode_reasoning_scope(
@@ -9030,10 +9030,8 @@ impl ChatWidget {
             quick_presets.push(("tools", preset));
         }
 
-        if quick_presets.is_empty() {
-            if let Some(preset) = presets.first().cloned() {
-                quick_presets.push(("latest", preset));
-            }
+        if quick_presets.is_empty() && let Some(preset) = presets.first().cloned() {
+            quick_presets.push(("latest", preset));
         }
 
         quick_presets
@@ -9777,7 +9775,7 @@ impl ChatWidget {
         let default_initial_selected_idx = choice_idx
             .map(|idx| idx + usize::from(back_models.is_some()))
             .or(Some(usize::from(back_models.is_some())));
-        let on_cancel = back_models.clone().map(|models| {
+        let on_cancel = back_models.map(|models| {
             Box::new(move |tx: &AppEventSender| {
                 tx.send(AppEvent::OpenAllModelsPopup {
                     models: models.clone(),
