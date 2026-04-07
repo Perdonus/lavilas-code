@@ -70,6 +70,17 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
+      - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
+        name: Use hermetic Cargo home (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
       - name: Install Rust target standard library (unix)
         if: runner.os != 'Windows'
         shell: bash
