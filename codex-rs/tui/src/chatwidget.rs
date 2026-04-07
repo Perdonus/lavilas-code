@@ -274,14 +274,12 @@ const ALL_MODELS_VIEW_ID: &str = "all-models-picker";
 const REASONING_PICKER_VIEW_ID: &str = "reasoning-picker";
 const PLAN_REASONING_SCOPE_VIEW_ID: &str = "plan-reasoning-scope";
 const REALTIME_AUDIO_VIEW_ID: &str = "realtime-audio-settings";
-const REALTIME_AUDIO_MICROPHONE_VIEW_ID: &str = "realtime-audio-microphone";
-const REALTIME_AUDIO_SPEAKER_VIEW_ID: &str = "realtime-audio-speaker";
 const TUI_STUB_MESSAGE: &str = "Пока недоступно в TUI.";
 
 fn realtime_audio_device_view_id(kind: RealtimeAudioDeviceKind) -> &'static str {
     match kind {
-        RealtimeAudioDeviceKind::Microphone => REALTIME_AUDIO_MICROPHONE_VIEW_ID,
-        RealtimeAudioDeviceKind::Speaker => REALTIME_AUDIO_SPEAKER_VIEW_ID,
+        RealtimeAudioDeviceKind::Microphone => "realtime-audio-microphone",
+        RealtimeAudioDeviceKind::Speaker => "realtime-audio-speaker",
     }
 }
 
@@ -9030,7 +9028,9 @@ impl ChatWidget {
             quick_presets.push(("tools", preset));
         }
 
-        if quick_presets.is_empty() && let Some(preset) = presets.first().cloned() {
+        if quick_presets.is_empty()
+            && let Some(preset) = presets.first().cloned()
+        {
             quick_presets.push(("latest", preset));
         }
 
@@ -9846,21 +9846,6 @@ impl ChatWidget {
 
     fn profiles_settings_path(&self) -> PathBuf {
         ui_settings_path(self.config.codex_home.as_path())
-    }
-
-    fn profile_model_catalog_path_for_profile(
-        &self,
-        profile_path: &std::path::Path,
-    ) -> Option<PathBuf> {
-        self.stored_profile(profile_path)
-            .and_then(|profile| profile.model_catalog_json)
-            .or_else(|| {
-                let stem = profile_path.file_stem()?.to_str()?;
-                Some(ui_profile_model_catalog_path(
-                    self.config.codex_home.as_path(),
-                    stem,
-                ))
-            })
     }
 
     fn stored_profile(&self, profile_path: &std::path::Path) -> Option<StoredAccountProfile> {
@@ -12585,22 +12570,6 @@ impl ChatWidget {
     fn update_collaboration_mode_indicator(&mut self) {
         let indicator = self.collaboration_mode_indicator();
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
-    }
-
-    fn personality_label(personality: Personality) -> &'static str {
-        match personality {
-            Personality::None => "None",
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
-        }
-    }
-
-    fn personality_description(personality: Personality) -> &'static str {
-        match personality {
-            Personality::None => "No personality instructions.",
-            Personality::Friendly => "Warm, collaborative, and helpful.",
-            Personality::Pragmatic => "Concise, task-focused, and direct.",
-        }
     }
 
     /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).
