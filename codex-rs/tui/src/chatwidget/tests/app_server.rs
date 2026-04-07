@@ -608,7 +608,7 @@ async fn replayed_declined_file_change_renders_patch_failure_with_diagnostics() 
                 stderr: Some("patch rejected by user".to_string()),
             },
         }),
-        /*replay_kind*/ Some(TurnReplayKind::Resume),
+        /*replay_kind*/ Some(ReplayKind::Resume),
     );
 
     let cells = drain_insert_history(&mut rx);
@@ -618,7 +618,7 @@ async fn replayed_declined_file_change_renders_patch_failure_with_diagnostics() 
     );
     let transcript = cells
         .iter()
-        .map(lines_to_single_string)
+        .map(|lines| lines_to_single_string(lines))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
