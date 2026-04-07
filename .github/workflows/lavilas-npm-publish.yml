@@ -7,8 +7,51 @@ on:
       - 'v*'
 
 jobs:
-  publish-npm:
-    runs-on: ubuntu-latest
+  build-platform-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            package: codex-linux-x64
+            target_triple: x86_64-unknown-linux-musl
+            artifact_name: npm-codex-linux-x64
+            bin_path: codex-rs/target/x86_64-unknown-linux-musl/release/codex
+            install_build_deps: sudo apt-get update && sudo apt-get install -y pkg-config libcap-dev ripgrep musl-tools
+            rust_target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            package: codex-linux-arm64
+            target_triple: aarch64-unknown-linux-musl
+            artifact_name: npm-codex-linux-arm64
+            bin_path: codex-rs/target/aarch64-unknown-linux-musl/release/codex
+            install_build_deps: sudo apt-get update && sudo apt-get install -y pkg-config libcap-dev ripgrep musl-tools
+            rust_target: aarch64-unknown-linux-musl
+          - os: macos-13
+            package: codex-darwin-x64
+            target_triple: x86_64-apple-darwin
+            artifact_name: npm-codex-darwin-x64
+            bin_path: codex-rs/target/x86_64-apple-darwin/release/codex
+            rust_target: x86_64-apple-darwin
+          - os: macos-14
+            package: codex-darwin-arm64
+            target_triple: aarch64-apple-darwin
+            artifact_name: npm-codex-darwin-arm64
+            bin_path: codex-rs/target/aarch64-apple-darwin/release/codex
+            rust_target: aarch64-apple-darwin
+          - os: windows-latest
+            package: codex-win32-x64
+            target_triple: x86_64-pc-windows-msvc
+            artifact_name: npm-codex-win32-x64
+            bin_path: codex-rs/target/x86_64-pc-windows-msvc/release/codex.exe
+            rust_target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            package: codex-win32-arm64
+            target_triple: aarch64-pc-windows-msvc
+            artifact_name: npm-codex-win32-arm64
+            bin_path: codex-rs/target/aarch64-pc-windows-msvc/release/codex.exe
+            rust_target: aarch64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,15 +62,22 @@ jobs:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
 
-      - name: Install Linux build dependencies
+      - name: Install platform build dependencies (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libcap-dev ripgrep
+          ${{ matrix.install_build_deps }}
 
       - name: Resolve release version
         id: version
@@ -42,66 +92,129 @@ jobs:
           echo "release_version=$v" >> "$GITHUB_OUTPUT"
           echo "Release version: $v"
 
-      - name: Build Linux Codex binary
-        id: build_linux
+      - name: Build Codex binary (unix)
+        if: runner.os != 'Windows'
         working-directory: codex-rs
         shell: bash
         run: |
           set -euo pipefail
-          if ! cargo build -p codex-cli --release > /tmp/lavilas-cargo-build.log 2>&1; then
-            echo "::error::cargo build failed; first lines from log below"
-            sed -n '1,120p' /tmp/lavilas-cargo-build.log | while IFS= read -r line; do
-              echo "::error::$line"
-            done
-            exit 1
-          fi
+          cargo build -p codex-cli --release --target "${{ matrix.rust_target }}"
 
-      - name: Upload cargo build log artifact
-        if: failure() && steps.build_linux.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-build-log-${{ github.run_id }}
-          path: /tmp/lavilas-cargo-build.log
-          if-no-files-found: warn
+      - name: Build Codex binary (windows)
+        if: runner.os == 'Windows'
+        working-directory: codex-rs
+        shell: pwsh
+        run: |
+          cargo build -p codex-cli --release --target "${{ matrix.rust_target }}"
 
-      - name: Stage npm packages
+      - name: Stage npm package (unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
           RELEASE_VERSION='${{ steps.version.outputs.release_version }}'
           VENDOR_ROOT="$RUNNER_TEMP/lavilas-vendor"
           rm -rf "$VENDOR_ROOT"
-          mkdir -p "$VENDOR_ROOT/vendor/x86_64-unknown-linux-musl/codex"
-          mkdir -p "$VENDOR_ROOT/vendor/x86_64-unknown-linux-musl/path"
+          mkdir -p "$VENDOR_ROOT/vendor/${{ matrix.target_triple }}/codex"
+          mkdir -p "$VENDOR_ROOT/vendor/${{ matrix.target_triple }}/path"
 
-          cp codex-rs/target/release/codex "$VENDOR_ROOT/vendor/x86_64-unknown-linux-musl/codex/codex"
-          cp "$(command -v rg)" "$VENDOR_ROOT/vendor/x86_64-unknown-linux-musl/path/rg"
+          cp "${{ matrix.bin_path }}" "$VENDOR_ROOT/vendor/${{ matrix.target_triple }}/codex/codex"
+          cp "$(command -v rg)" "$VENDOR_ROOT/vendor/${{ matrix.target_triple }}/path/rg"
 
           python3 codex-cli/scripts/build_npm_package.py \
-            --package codex-linux-x64 \
+            --package "${{ matrix.package }}" \
             --release-version "$RELEASE_VERSION" \
-            --staging-dir "$RUNNER_TEMP/pkg-codex-linux-x64" \
+            --staging-dir "$RUNNER_TEMP/pkg-${{ matrix.package }}" \
             --vendor-src "$VENDOR_ROOT/vendor"
 
+      - name: Stage npm package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $releaseVersion = '${{ steps.version.outputs.release_version }}'
+          $vendorRoot = Join-Path $env:RUNNER_TEMP 'lavilas-vendor'
+          Remove-Item -Recurse -Force $vendorRoot -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path (Join-Path $vendorRoot 'vendor/${{ matrix.target_triple }}/codex') | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $vendorRoot 'vendor/${{ matrix.target_triple }}/path') | Out-Null
+
+          Copy-Item '${{ matrix.bin_path }}' (Join-Path $vendorRoot 'vendor/${{ matrix.target_triple }}/codex/codex.exe')
+          Copy-Item (Get-Command rg.exe).Source (Join-Path $vendorRoot 'vendor/${{ matrix.target_triple }}/path/rg.exe')
+
+          python codex-cli/scripts/build_npm_package.py `
+            --package '${{ matrix.package }}' `
+            --release-version $releaseVersion `
+            --staging-dir (Join-Path $env:RUNNER_TEMP 'pkg-${{ matrix.package }}') `
+            --vendor-src (Join-Path $vendorRoot 'vendor')
+
+      - name: Upload staged npm package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ runner.temp }}/pkg-${{ matrix.package }}
+
+  publish-npm:
+    needs: build-platform-package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v=$(node -p "require('./codex-cli/package.json').version")
+          fi
+          echo "release_version=$v" >> "$GITHUB_OUTPUT"
+          echo "Release version: $v"
+
+      - name: Download staged platform packages
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/npm-artifacts
+
+      - name: Stage base npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION='${{ steps.version.outputs.release_version }}'
           python3 codex-cli/scripts/build_npm_package.py \
             --package codex \
             --release-version "$RELEASE_VERSION" \
             --staging-dir "$RUNNER_TEMP/pkg-codex"
 
-      - name: Publish platform package (@lavilas/codex@<version>-linux-x64)
+      - name: Publish platform packages
         shell: bash
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/pkg-codex-linux-x64"
-          npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for dir in "$RUNNER_TEMP"/npm-artifacts/*; do
+            if [[ -d "$dir" ]]; then
+              (cd "$dir" && npm publish --access public)
+            fi
+          done
 
-      - name: Publish base package (@lavilas/codex@<version>)
+      - name: Publish base package
         shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/pkg-codex"
           npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

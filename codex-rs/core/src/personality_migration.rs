@@ -66,8 +66,8 @@ pub async fn maybe_migrate_personality(
 async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io::Result<bool> {
     let allowed_sources: &[SessionSource] = &[];
 
-    if let Some(state_db_ctx) = state_db::open_if_present(codex_home, default_provider).await
-        && let Some(ids) = state_db::list_thread_ids_db(
+    if let Some(state_db_ctx) = state_db::open_if_present(codex_home, default_provider).await {
+        let has_unarchived = state_db::list_thread_ids_db(
             Some(state_db_ctx.as_ref()),
             codex_home,
             /*page_size*/ 1,
@@ -76,12 +76,30 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
             allowed_sources,
             /*model_providers*/ None,
             /*archived_only*/ false,
-            "personality_migration",
+            "personality_migration_unarchived",
         )
         .await
-        && !ids.is_empty()
-    {
-        return Ok(true);
+        .is_some_and(|ids| !ids.is_empty());
+        if has_unarchived {
+            return Ok(true);
+        }
+
+        let has_archived = state_db::list_thread_ids_db(
+            Some(state_db_ctx.as_ref()),
+            codex_home,
+            /*page_size*/ 1,
+            /*cursor*/ None,
+            ThreadSortKey::CreatedAt,
+            allowed_sources,
+            /*model_providers*/ None,
+            /*archived_only*/ true,
+            "personality_migration_archived",
+        )
+        .await
+        .is_some_and(|ids| !ids.is_empty());
+        if has_archived {
+            return Ok(true);
+        }
     }
 
     let sessions = get_threads_in_root(

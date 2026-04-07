@@ -19,6 +19,43 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 
+async fn init_state_db(codex_home: &Path) -> io::Result<std::sync::Arc<codex_state::StateRuntime>> {
+    codex_state::StateRuntime::init(codex_home.to_path_buf(), "openai".to_string())
+        .await
+        .map_err(io::Error::other)
+}
+
+async fn mark_backfill_complete(db: &codex_state::StateRuntime) -> io::Result<()> {
+    db.update_backfill_state(codex_state::BackfillStatus::Complete, None, None)
+        .await
+        .map_err(io::Error::other)
+}
+
+async fn upsert_thread_metadata(
+    db: &codex_state::StateRuntime,
+    thread_id: ThreadId,
+    archived: bool,
+) -> io::Result<()> {
+    let now = chrono::Utc::now();
+    db.upsert_thread(
+        codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            std::path::PathBuf::from(format!("rollout-{thread_id}.jsonl")),
+            now,
+            SessionSource::Cli,
+            "openai".to_string(),
+            std::path::PathBuf::from("."),
+        )
+        .title("test")
+        .first_user_message("hello")
+        .has_user_event(true)
+        .archived(archived)
+        .build(),
+    )
+    .await
+    .map_err(io::Error::other)
+}
+
 const TEST_TIMESTAMP: &str = "2025-01-01T00-00-00";
 
 async fn read_config_toml(codex_home: &Path) -> io::Result<ConfigToml> {
@@ -332,6 +369,22 @@ async fn no_marker_archived_sessions_sets_personality() -> io::Result<()> {
         true
     );
 
+    let persisted = read_config_toml(temp.path()).await?;
+    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
+    Ok(())
+}
+
+#[tokio::test]
+async fn no_marker_archived_sessions_in_state_db_sets_personality() -> io::Result<()> {
+    let temp = TempDir::new()?;
+    let db = init_state_db(temp.path()).await?;
+    mark_backfill_complete(db.as_ref()).await?;
+    let thread_id = ThreadId::new();
+    upsert_thread_metadata(db.as_ref(), thread_id, true).await?;
+
+    let status = maybe_migrate_personality(temp.path(), &ConfigToml::default()).await?;
+
+    assert_eq!(status, PersonalityMigrationStatus::Applied);
     let persisted = read_config_toml(temp.path()).await?;
     assert_eq!(persisted.personality, Some(Personality::Pragmatic));
     Ok(())
