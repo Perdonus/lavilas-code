@@ -67,6 +67,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.0
 
       - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
         name: Use hermetic Cargo home (musl)
@@ -161,19 +163,6 @@ jobs:
           cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
-
-      - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl' }}
-        name: Debug musl rustup sysroot
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}"
-          rustc -vV
-          rustup show
-          rustup target list --installed
-          sysroot="$(rustc --print sysroot)"
-          echo "sysroot=${sysroot}"
-          find "${sysroot}/lib/rustlib" -maxdepth 2 -mindepth 1 -type d | sort
 
       - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl' }}
         name: Configure musl rusty_v8 artifact overrides
