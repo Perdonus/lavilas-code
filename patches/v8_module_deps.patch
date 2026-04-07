@@ -44,7 +44,7 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +
 +git_repository(
 +    name = "simdutf",
-+    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = [\n        "src/simdutf.cpp",\n        "src/arm64/implementation.cpp",\n        "src/fallback/implementation.cpp",\n        "src/haswell/implementation.cpp",\n        "src/icelake/implementation.cpp",\n        "src/lasx/implementation.cpp",\n        "src/lsx/implementation.cpp",\n        "src/ppc64/implementation.cpp",\n        "src/rvv/implementation.cpp",\n        "src/westmere/implementation.cpp",\n    ],\n    hdrs = glob(["include/**/*.h", "src/**/*.h", "src/**/*.cpp"], allow_empty = True),\n    copts = ["-std=c++20"],\n    includes = [".", "include", "src"],\n    visibility = ["//visibility:public"],\n)\n',
++    build_file = "//:bazel/BUILD.simdutf",
 +    commit = "06258b2c046d233fa53957cced61bc279fadfb41",
 +    remote = "https://github.com/simdutf/simdutf.git",
 +)
@@ -237,6 +237,41 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 -libcxx_repository(
 -    name = "libcxx",
 -)
+diff --git a/orig/v8-14.6.202.11/bazel/BUILD.simdutf b/mod/v8-14.6.202.11/bazel/BUILD.simdutf
+new file mode 100644
+--- /dev/null
++++ b/mod/v8-14.6.202.11/bazel/BUILD.simdutf
+@@ -0,0 +1,28 @@
++load("@rules_cc//cc:defs.bzl", "cc_library")
++
++package(default_visibility = ["//visibility:public"])
++
++cc_library(
++    name = "simdutf",
++    srcs = glob([
++        "src/*.cpp",
++        "src/*/*.cpp",
++    ]),
++    hdrs = glob([
++        "include/**/*.h",
++        "src/**/*.h",
++    ], allow_empty = True),
++    copts = [
++        "-std=c++20",
++        "-Isrc",
++        "-Iinclude",
++    ],
++    includes = [
++        ".",
++        "include",
++        "src",
++    ],
++    defines = [
++        "SIMDUTF_IMPLEMENTATION_FALLBACK=1",
++        "SIMDUTF_IMPLEMENTATION_WESTMERE=1",
++    ],
++)
++
 diff --git a/orig/v8-14.6.202.11/bazel/highway.patch b/mod/v8-14.6.202.11/bazel/highway.patch
 new file mode 100644
 --- /dev/null
