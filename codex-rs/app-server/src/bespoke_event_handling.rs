@@ -1596,13 +1596,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             let stderr =
                 (!patch_end_event.stderr.trim().is_empty()).then(|| patch_end_event.stderr.clone());
             complete_file_change_item(
-                conversation_id,
-                item_id,
-                changes,
-                status,
-                stdout,
-                stderr,
-                event_turn_id.clone(),
+                CompleteFileChangeItemArgs {
+                    conversation_id,
+                    item_id,
+                    changes,
+                    status,
+                    stdout,
+                    stderr,
+                    turn_id: event_turn_id.clone(),
+                },
                 &outgoing,
                 &thread_state,
             )
@@ -1973,7 +1975,7 @@ async fn emit_turn_completed_with_status(
         .await;
 }
 
-async fn complete_file_change_item(
+struct CompleteFileChangeItemArgs {
     conversation_id: ThreadId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
@@ -1981,9 +1983,22 @@ async fn complete_file_change_item(
     stdout: Option<String>,
     stderr: Option<String>,
     turn_id: String,
+}
+
+async fn complete_file_change_item(
+    args: CompleteFileChangeItemArgs,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
+    let CompleteFileChangeItemArgs {
+        conversation_id,
+        item_id,
+        changes,
+        status,
+        stdout,
+        stderr,
+        turn_id,
+    } = args;
     let mut state = thread_state.lock().await;
     state.turn_summary.file_change_started.remove(&item_id);
     drop(state);
@@ -2604,13 +2619,15 @@ async fn on_file_change_request_approval_response(
 
     if let Some(status) = completion_status {
         complete_file_change_item(
-            conversation_id,
-            item_id.clone(),
-            changes,
-            status,
-            None,
-            None,
-            event_turn_id.clone(),
+            CompleteFileChangeItemArgs {
+                conversation_id,
+                item_id: item_id.clone(),
+                changes,
+                status,
+                stdout: None,
+                stderr: None,
+                turn_id: event_turn_id.clone(),
+            },
             &outgoing,
             &thread_state,
         )

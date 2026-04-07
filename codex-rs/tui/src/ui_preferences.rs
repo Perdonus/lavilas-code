@@ -498,7 +498,6 @@ mod tests {
     #[test]
     fn profile_catalog_helper_creates_sidecar_file() {
         use super::MISTRAL_DEFAULT_PROFILE_MODEL;
-        use super::MISTRAL_LEGACY_TOOL_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path =
             ensure_profile_model_catalog(codex_home.path(), "mistral-profile", "mistral")
