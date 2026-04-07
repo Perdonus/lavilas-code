@@ -39,7 +39,6 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) fast_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
-    pub(crate) audio_device_selection_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
 }
 
