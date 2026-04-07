@@ -280,11 +280,11 @@ pub(crate) fn create_or_update_stored_profile(
     };
     let stored = StoredAccountProfile {
         provider: spec.id.to_string(),
-        name: requested_name
-            .trim()
-            .is_empty()
-            .then(|| profile_key.clone())
-            .unwrap_or_else(|| requested_name.trim().to_string()),
+        name: if requested_name.trim().is_empty() {
+            profile_key.clone()
+        } else {
+            requested_name.trim().to_string()
+        },
         base_url,
         model: default_profile_model(model_seed_provider),
         model_catalog_json: Some(model_catalog_path),

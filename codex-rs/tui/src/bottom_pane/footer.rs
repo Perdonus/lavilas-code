@@ -895,7 +895,6 @@ enum DisplayCondition {
     Always,
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
-    WhenUnderWSL,
     WhenCollaborationModesEnabled,
 }
 
@@ -905,7 +904,6 @@ impl DisplayCondition {
             DisplayCondition::Always => true,
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
-            DisplayCondition::WhenUnderWSL => state.is_wsl,
             DisplayCondition::WhenCollaborationModesEnabled => state.collaboration_modes_enabled,
         }
     }

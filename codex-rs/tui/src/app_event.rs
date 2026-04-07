@@ -47,13 +47,6 @@ pub(crate) enum RealtimeAudioDeviceKind {
 }
 
 impl RealtimeAudioDeviceKind {
-    pub(crate) fn title(self) -> &'static str {
-        match self {
-            Self::Microphone => "Microphone",
-            Self::Speaker => "Speaker",
-        }
-    }
-
     pub(crate) fn noun(self) -> &'static str {
         match self {
             Self::Microphone => "microphone",
