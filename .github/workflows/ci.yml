@@ -44,11 +44,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Use a rust-release version that includes all native binaries.
-          CODEX_VERSION=0.115.0
+          # Use the current package version so staging matches this fork's published artifacts.
+          CODEX_VERSION=$(node -p "require('./codex-cli/package.json').version")
           OUTPUT_DIR="${RUNNER_TEMP}"
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
+            --workflow-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --package codex \
             --output-dir "$OUTPUT_DIR"
           PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
