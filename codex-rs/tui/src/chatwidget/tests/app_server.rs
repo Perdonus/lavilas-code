@@ -608,7 +608,7 @@ async fn replayed_declined_file_change_renders_patch_failure_with_diagnostics() 
                 stderr: Some("patch rejected by user".to_string()),
             },
         }),
-        /*replay_kind*/ Some(ReplayKind::Resume),
+        /*replay_kind*/ Some(ReplayKind::ResumeInitialMessages),
     );
 
     let cells = drain_insert_history(&mut rx);
