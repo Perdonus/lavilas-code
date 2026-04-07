@@ -72,9 +72,15 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Install Rust target standard library
+      - name: Install Rust target standard library (unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: rustup target add "${{ matrix.rust_target }}"
+
+      - name: Install Rust target standard library (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: rustup target add '${{ matrix.rust_target }}'
 
       - name: Install platform build dependencies (Linux)
         if: runner.os == 'Linux'
