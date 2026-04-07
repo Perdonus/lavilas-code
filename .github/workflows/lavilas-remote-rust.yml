@@ -29,9 +29,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Cargo fmt check
-        run: |
-          git diff --quiet || (echo "Skipping fmt check because repository has unrelated dirty files" && exit 0)
-          cargo fmt --check
+        run: cargo fmt --check
 
       - name: Set targeted test filter
         shell: bash
