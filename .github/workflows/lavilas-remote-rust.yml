@@ -33,9 +33,12 @@ jobs:
 
       - name: Set targeted test filter
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_FILTER: ${{ github.event.inputs.cargo_test_filter || '' }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.cargo_test_filter }}" ]; then
-            echo "CARGO_TEST_FILTER=${{ github.event.inputs.cargo_test_filter }}" >> "$GITHUB_ENV"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$DISPATCH_FILTER" ]; then
+            echo "CARGO_TEST_FILTER=$DISPATCH_FILTER" >> "$GITHUB_ENV"
           else
             echo "CARGO_TEST_FILTER=thread_list_includes_original_codex_custom_sources_by_default" >> "$GITHUB_ENV"
           fi
