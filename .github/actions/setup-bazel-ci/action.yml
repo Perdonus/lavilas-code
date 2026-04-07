@@ -28,15 +28,6 @@ runs:
       if: inputs.install-test-prereqs == 'true'
       uses: facebook/install-dotslash@v2
 
-    - name: Make DotSlash available in PATH (Unix)
-      if: inputs.install-test-prereqs == 'true' && runner.os != 'Windows'
-      shell: bash
-      run: cp "$(which dotslash)" /usr/local/bin
-
-    - name: Make DotSlash available in PATH (Windows)
-      if: inputs.install-test-prereqs == 'true' && runner.os == 'Windows'
-      shell: pwsh
-      run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
 
     - name: Set up Bazel
       uses: bazelbuild/setup-bazelisk@v3
