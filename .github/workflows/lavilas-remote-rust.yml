@@ -31,14 +31,12 @@ jobs:
       - name: Cargo fmt check
         run: cargo fmt --check
 
-      - name: Set targeted test filter
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.cargo_test_filter }}" ]; then
-            echo "CARGO_TEST_FILTER=${{ github.event.inputs.cargo_test_filter }}" >> "$GITHUB_ENV"
-          else
-            echo "CARGO_TEST_FILTER=thread_list_includes_original_codex_custom_sources_by_default" >> "$GITHUB_ENV"
-          fi
-
       - name: Targeted app-server test
-        run: cargo test -p codex-app-server "$CARGO_TEST_FILTER"
+        env:
+          CARGO_TEST_FILTER: ${{ inputs.cargo_test_filter }}
+        run: |
+          if [ -n "$CARGO_TEST_FILTER" ]; then
+            cargo test -p codex-app-server "$CARGO_TEST_FILTER"
+          else
+            cargo test -p codex-app-server
+          fi
