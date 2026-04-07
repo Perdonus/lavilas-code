@@ -97,7 +97,6 @@ mod tests {
             fast_command_enabled: true,
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
-            audio_device_selection_enabled: true,
             allow_elevate_sandbox: true,
         }
     }
@@ -150,7 +149,6 @@ mod tests {
     fn settings_command_stays_available_when_realtime_is_disabled() {
         let mut flags = all_enabled_flags();
         flags.realtime_conversation_enabled = false;
-        flags.audio_device_selection_enabled = false;
         assert_eq!(
             find_builtin_command("settings", flags),
             Some(SlashCommand::Settings)
@@ -160,7 +158,6 @@ mod tests {
     #[test]
     fn settings_command_stays_available_when_audio_device_selection_is_disabled() {
         let mut flags = all_enabled_flags();
-        flags.audio_device_selection_enabled = false;
         assert_eq!(
             find_builtin_command("settings", flags),
             Some(SlashCommand::Settings)
