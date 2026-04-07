@@ -9740,7 +9740,7 @@ impl ChatWidget {
 
             let search_value = description.as_ref().map_or_else(
                 || effort_label.clone(),
-                |desc| format!("{} {}", effort_label, desc),
+                |desc| format!("{effort_label} {desc}"),
             );
             items.push(SelectionItem {
                 name: effort_label,
@@ -13576,13 +13576,9 @@ impl ChatWidget {
     pub(crate) async fn show_review_branch_picker(&mut self, cwd: &Path) {
         let is_ru = self.ui_language().is_ru();
         let branches = local_git_branches(cwd).await;
-        let current_branch = current_branch_name(cwd).await.unwrap_or_else(|| {
-            if is_ru {
-                "(detached HEAD)".to_string()
-            } else {
-                "(detached HEAD)".to_string()
-            }
-        });
+        let current_branch = current_branch_name(cwd)
+            .await
+            .unwrap_or_else(|| "(detached HEAD)".to_string());
         let mut items: Vec<SelectionItem> = Vec::with_capacity(branches.len());
 
         for option in branches {
