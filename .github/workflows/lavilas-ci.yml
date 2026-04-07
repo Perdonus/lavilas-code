@@ -28,6 +28,10 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux bwrap build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Cargo fmt check
