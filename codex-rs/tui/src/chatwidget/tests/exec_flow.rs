@@ -720,10 +720,7 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     });
 
     assert!(chat.active_cell.is_none());
-    assert_eq!(
-        chat.current_status.header,
-        "Ожидание фонового терминала"
-    );
+    assert_eq!(chat.current_status.header, "Ожидание фонового терминала");
     let status = chat
         .bottom_pane
         .status_widget()
@@ -740,10 +737,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
 
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
     terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
-    assert_eq!(
-        chat.current_status.header,
-        "Ожидание фонового терминала"
-    );
+    assert_eq!(chat.current_status.header, "Ожидание фонового терминала");
     let status = chat
         .bottom_pane
         .status_widget()
@@ -812,10 +806,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
 
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
     terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
-    assert_eq!(
-        chat.current_status.header,
-        "Ожидание фонового терминала"
-    );
+    assert_eq!(chat.current_status.header, "Ожидание фонового терминала");
     let status = chat
         .bottom_pane
         .status_widget()

@@ -523,7 +523,10 @@ mod tests {
                 /*migration_copy*/ None,
                 /*migration_markdown*/ None,
                 "gpt-5.1-codex-mini".to_string(),
-                Some("Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям.".to_string()),
+                Some(
+                    "Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям."
+                        .to_string(),
+                ),
                 /*can_opt_out*/ false,
             ),
         );

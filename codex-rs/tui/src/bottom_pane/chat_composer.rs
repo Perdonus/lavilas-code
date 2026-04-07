@@ -1251,9 +1251,10 @@ impl ChatComposer {
                 let dismiss_popup =
                     matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left))
                         && !inside_popup;
-                let ignore_scroll =
-                    matches!(mouse_event.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
-                        && !inside_popup;
+                let ignore_scroll = matches!(
+                    mouse_event.kind,
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                ) && !inside_popup;
                 let selected_item = if inside_popup {
                     popup.handle_mouse_event(popup_rect, mouse_event)
                 } else {

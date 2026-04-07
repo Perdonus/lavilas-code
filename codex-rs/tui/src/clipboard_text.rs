@@ -219,8 +219,9 @@ fn paste_via_wsl_clipboard() -> Result<String, String> {
         .map_err(|e| format!("clipboard unavailable: failed to spawn powershell.exe: {e}"))?;
 
     if output.status.success() {
-        String::from_utf8(output.stdout)
-            .map_err(|err| format!("clipboard unavailable: clipboard text was not valid UTF-8: {err}"))
+        String::from_utf8(output.stdout).map_err(|err| {
+            format!("clipboard unavailable: clipboard text was not valid UTF-8: {err}")
+        })
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if stderr.is_empty() {

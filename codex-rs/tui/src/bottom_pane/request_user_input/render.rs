@@ -9,7 +9,6 @@ use std::borrow::Cow;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::bottom_pane::selection_popup_common::menu_surface_inset;

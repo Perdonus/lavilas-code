@@ -9,14 +9,18 @@ const ANNOUNCEMENT_TIP_URL: &str =
 const IS_MACOS: bool = cfg!(target_os = "macos");
 const IS_WINDOWS: bool = cfg!(target_os = "windows");
 
-const PAID_TOOLTIP: &str = "Попробуйте настольное приложение Lavilas Codex для более плотной работы с проектом.";
+const PAID_TOOLTIP: &str =
+    "Попробуйте настольное приложение Lavilas Codex для более плотной работы с проектом.";
 const PAID_TOOLTIP_WINDOWS: &str = "Настольное приложение Lavilas Codex доступно и на Windows.";
-const PAID_TOOLTIP_NON_MAC: &str = "Платные тарифы открывают более быстрые режимы и расширенные лимиты.";
-const FAST_TOOLTIP: &str = "Используйте /fast, когда нужен максимальный отклик ценой более быстрого расхода лимита.";
-const OTHER_TOOLTIP: &str = "Lavilas Codex умеет работать с профилями, MCP и несколькими моделями прямо из терминала.";
-const OTHER_TOOLTIP_NON_MAC: &str = "Lavilas Codex помогает держать модели, инструменты и диалоги в одном рабочем потоке.";
-const FREE_GO_TOOLTIP: &str =
-    "Lavilas Codex уже доступен в вашем плане. Начните с /settings или /model, чтобы настроить среду под себя.";
+const PAID_TOOLTIP_NON_MAC: &str =
+    "Платные тарифы открывают более быстрые режимы и расширенные лимиты.";
+const FAST_TOOLTIP: &str =
+    "Используйте /fast, когда нужен максимальный отклик ценой более быстрого расхода лимита.";
+const OTHER_TOOLTIP: &str =
+    "Lavilas Codex умеет работать с профилями, MCP и несколькими моделями прямо из терминала.";
+const OTHER_TOOLTIP_NON_MAC: &str =
+    "Lavilas Codex помогает держать модели, инструменты и диалоги в одном рабочем потоке.";
+const FREE_GO_TOOLTIP: &str = "Lavilas Codex уже доступен в вашем плане. Начните с /settings или /model, чтобы настроить среду под себя.";
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 

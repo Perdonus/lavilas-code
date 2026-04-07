@@ -538,9 +538,7 @@ pub(crate) fn feedback_upload_consent_params(
             },
             super::SelectionItem {
                 name: "Нет".to_string(),
-                description: Some(
-                    "Отправить сообщение без логов.".to_string(),
-                ),
+                description: Some("Отправить сообщение без логов.".to_string()),
                 actions: vec![no_action],
                 dismiss_on_select: true,
                 ..Default::default()

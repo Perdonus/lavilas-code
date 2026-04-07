@@ -23,8 +23,8 @@
 //! WebSocket prewarm is treated as the first websocket connection attempt for a turn. If it
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
-use std::collections::HashMap;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -815,10 +815,8 @@ impl ModelClientSession {
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
         let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
-        let request_model = normalize_request_model_for_provider(
-            &self.client.state.provider,
-            &model_info.slug,
-        );
+        let request_model =
+            normalize_request_model_for_provider(&self.client.state.provider, &model_info.slug);
         let request = ResponsesApiRequest {
             model: request_model.into_owned(),
             instructions: instructions.clone(),

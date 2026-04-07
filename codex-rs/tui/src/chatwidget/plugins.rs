@@ -452,7 +452,9 @@ impl ChatWidget {
         } else {
             items.push(SelectionItem {
                 name: "Ссылка на приложение недоступна".to_string(),
-                description: Some("У приложения нет ссылки на установку или управление.".to_string()),
+                description: Some(
+                    "У приложения нет ссылки на установку или управление.".to_string(),
+                ),
                 is_disabled: true,
                 ..Default::default()
             });
@@ -474,7 +476,9 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: "Уже установил".to_string(),
                 description: Some("Подтвердить установку и перейти дальше.".to_string()),
-                selected_description: Some("Продолжить без ожидания обновления списка.".to_string()),
+                selected_description: Some(
+                    "Продолжить без ожидания обновления списка.".to_string(),
+                ),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::PluginInstallAuthAdvance {
                         refresh_connectors: true,
@@ -523,7 +527,10 @@ impl ChatWidget {
                     "Оставшаяся настройка плагина {} пропущена.",
                     flow.plugin_display_name
                 ),
-                Some("Плагин может не заработать, пока не будут установлены нужные приложения.".to_string()),
+                Some(
+                    "Плагин может не заработать, пока не будут установлены нужные приложения."
+                        .to_string(),
+                ),
             );
         } else {
             self.add_info_message(
@@ -621,9 +628,7 @@ impl ChatWidget {
     ) -> SelectionViewParams {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Плагины".bold()));
-        header.push(Line::from(
-            format!("Удаляю {plugin_display_name}...").dim(),
-        ));
+        header.push(Line::from(format!("Удаляю {plugin_display_name}...").dim()));
 
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
@@ -895,7 +900,9 @@ impl ChatWidget {
         } else if plugin.summary.install_policy == PluginInstallPolicy::NotAvailable {
             items.push(SelectionItem {
                 name: "Установить плагин".to_string(),
-                description: Some("Этот плагин нельзя установить из текущего маркетплейса.".to_string()),
+                description: Some(
+                    "Этот плагин нельзя установить из текущего маркетплейса.".to_string(),
+                ),
                 is_disabled: true,
                 ..Default::default()
             });

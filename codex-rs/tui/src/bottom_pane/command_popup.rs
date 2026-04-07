@@ -319,10 +319,7 @@ impl CommandPopup {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 let list_area = area.inset(Insets::tlbr(
-                    /*top*/ 0,
-                    /*left*/ 2,
-                    /*bottom*/ 0,
-                    /*right*/ 0,
+                    /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
                 ));
                 if !Self::point_in_rect(list_area, mouse_event.column, mouse_event.row) {
                     return None;

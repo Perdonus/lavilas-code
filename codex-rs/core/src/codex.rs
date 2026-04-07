@@ -2689,7 +2689,11 @@ impl Session {
                 codex_models_manager::manager::RefreshStrategy::Offline
             )
         {
-            let _ = self.services.models_manager.list_models(refresh_strategy).await;
+            let _ = self
+                .services
+                .models_manager
+                .list_models(refresh_strategy)
+                .await;
         }
         let model = self
             .services
@@ -2703,16 +2707,13 @@ impl Session {
             .await;
         let provider_changed = previous_configuration.provider != new_config.model_provider
             || previous_configuration.collaboration_mode.model() != model;
-        let base_instructions = new_config
-            .base_instructions
-            .clone()
-            .unwrap_or_else(|| {
-                if provider_changed {
-                    model_info.get_model_instructions(new_config.personality)
-                } else {
-                    previous_configuration.base_instructions.clone()
-                }
-            });
+        let base_instructions = new_config.base_instructions.clone().unwrap_or_else(|| {
+            if provider_changed {
+                model_info.get_model_instructions(new_config.personality)
+            } else {
+                previous_configuration.base_instructions.clone()
+            }
+        });
 
         let mut state = self.state.lock().await;
         state.session_configuration.provider = new_config.model_provider.clone();
@@ -2726,12 +2727,14 @@ impl Session {
         };
         state.session_configuration.model_reasoning_summary = new_config.model_reasoning_summary;
         state.session_configuration.service_tier = new_config.service_tier;
-        state.session_configuration.developer_instructions = new_config.developer_instructions.clone();
+        state.session_configuration.developer_instructions =
+            new_config.developer_instructions.clone();
         state.session_configuration.user_instructions = new_config.user_instructions.clone();
         state.session_configuration.personality = new_config.personality;
         state.session_configuration.base_instructions = base_instructions;
         state.session_configuration.compact_prompt = new_config.compact_prompt.clone();
-        state.session_configuration.approval_policy = new_config.permissions.approval_policy.clone();
+        state.session_configuration.approval_policy =
+            new_config.permissions.approval_policy.clone();
         state.session_configuration.approvals_reviewer = new_config.approvals_reviewer;
         state.session_configuration.sandbox_policy = new_config.permissions.sandbox_policy.clone();
         state.session_configuration.file_system_sandbox_policy =

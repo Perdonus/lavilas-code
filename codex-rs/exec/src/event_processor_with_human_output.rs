@@ -139,7 +139,8 @@ impl EventProcessorWithHumanOutput {
                         let exit_code = exit_code.unwrap_or(1);
                         eprintln!(
                             "{}",
-                            format!(" завершилась с кодом {exit_code}{duration_suffix}:").style(self.red)
+                            format!(" завершилась с кодом {exit_code}{duration_suffix}:")
+                                .style(self.red)
                         );
                     }
                     CommandExecutionStatus::Declined => {

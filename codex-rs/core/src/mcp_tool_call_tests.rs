@@ -344,11 +344,13 @@ fn trusted_codex_apps_tool_question_offers_always_allow() {
 
     assert!(options.iter().any(|option| {
         option.label == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION
-            && option.description == "Запустить инструмент и запомнить выбор до конца текущей сессии."
+            && option.description
+                == "Запустить инструмент и запомнить выбор до конца текущей сессии."
     }));
     assert!(options.iter().any(|option| {
         option.label == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER
-            && option.description == "Запустить инструмент и запомнить выбор для будущих вызовов инструмента."
+            && option.description
+                == "Запустить инструмент и запомнить выбор для будущих вызовов инструмента."
     }));
     assert_eq!(
         options

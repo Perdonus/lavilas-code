@@ -76,7 +76,6 @@ pub(super) fn russian_question_phrase(count: usize, adjective: Option<&str>) -> 
     parts.join(" ")
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Options,
@@ -1387,9 +1386,8 @@ mod tests {
             options: Some(vec![
                 RequestUserInputQuestionOption {
                     label: "Обсудить изменение кода".to_string(),
-                    description:
-                        "Пройдёмся по плану, затем реализуем и тщательно проверим."
-                            .to_string(),
+                    description: "Пройдёмся по плану, затем реализуем и тщательно проверим."
+                        .to_string(),
                 },
                 RequestUserInputQuestionOption {
                     label: "Запустить точечные тесты".to_string(),
@@ -1399,9 +1397,8 @@ mod tests {
                 },
                 RequestUserInputQuestionOption {
                     label: "Проверить дифф".to_string(),
-                    description:
-                        "Суммируем изменения и выделим самые важные риски и пробелы."
-                            .to_string(),
+                    description: "Суммируем изменения и выделим самые важные риски и пробелы."
+                        .to_string(),
                 },
             ]),
         }
@@ -2297,9 +2294,11 @@ mod tests {
             answer.options_state.selected_idx = Some(1);
         }
         overlay.select_current_option(/*committed*/ false);
-        overlay
-            .composer
-            .set_text_content("Заметка для варианта 2".to_string(), Vec::new(), Vec::new());
+        overlay.composer.set_text_content(
+            "Заметка для варианта 2".to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
         overlay.composer.move_cursor_to_end();
         let draft = overlay.capture_composer_draft();
         if let Some(answer) = overlay.current_answer_mut() {

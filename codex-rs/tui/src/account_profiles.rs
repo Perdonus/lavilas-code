@@ -10,8 +10,8 @@ use serde::Serialize;
 use crate::ui_preferences::default_profile_model;
 use crate::ui_preferences::ensure_profile_model_catalog;
 use crate::ui_preferences::normalize_profile_model;
-use crate::ui_preferences::repair_profile_model_catalog;
 use crate::ui_preferences::profiles_dir;
+use crate::ui_preferences::repair_profile_model_catalog;
 
 pub(crate) const PROFILE_NAME_QUESTION_ID: &str = "profile_name";
 pub(crate) const API_KEY_QUESTION_ID: &str = "api_key";
@@ -23,6 +23,7 @@ pub(crate) struct AccountProviderSpec {
     pub(crate) name_en: &'static str,
     pub(crate) name_ru: &'static str,
     pub(crate) base_url: &'static str,
+    pub(crate) wire_api: &'static str,
     pub(crate) api_key_optional: bool,
     pub(crate) builtin_model_provider_id: Option<&'static str>,
     pub(crate) requires_base_url: bool,
@@ -34,6 +35,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         name_en: "Codex OAuth",
         name_ru: "Codex OAuth",
         base_url: "",
+        wire_api: "responses",
         api_key_optional: true,
         builtin_model_provider_id: Some("openai"),
         requires_base_url: false,
@@ -43,6 +45,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         name_en: "OpenAI API",
         name_ru: "OpenAI API",
         base_url: "https://api.openai.com/v1",
+        wire_api: "responses",
         api_key_optional: false,
         builtin_model_provider_id: None,
         requires_base_url: false,
@@ -52,6 +55,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         name_en: "OpenRouter",
         name_ru: "OpenRouter",
         base_url: "https://openrouter.ai/api/v1",
+        wire_api: "chat_completions",
         api_key_optional: false,
         builtin_model_provider_id: None,
         requires_base_url: false,
@@ -61,6 +65,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         name_en: "Gemini",
         name_ru: "Gemini",
         base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        wire_api: "chat_completions",
         api_key_optional: false,
         builtin_model_provider_id: None,
         requires_base_url: false,
@@ -70,6 +75,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         name_en: "Mistral",
         name_ru: "Mistral",
         base_url: "https://api.mistral.ai/v1",
+        wire_api: "chat_completions",
         api_key_optional: false,
         builtin_model_provider_id: None,
         requires_base_url: false,
@@ -79,6 +85,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         name_en: "Groq",
         name_ru: "Groq",
         base_url: "https://api.groq.com/openai/v1",
+        wire_api: "chat_completions",
         api_key_optional: false,
         builtin_model_provider_id: None,
         requires_base_url: false,
@@ -88,6 +95,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         name_en: "Ollama",
         name_ru: "Ollama",
         base_url: "http://127.0.0.1:11434/v1",
+        wire_api: "chat_completions",
         api_key_optional: true,
         builtin_model_provider_id: None,
         requires_base_url: false,
@@ -97,6 +105,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         name_en: "Custom OpenAI-compatible API",
         name_ru: "Кастомный OpenAI-compatible API",
         base_url: "",
+        wire_api: "chat_completions",
         api_key_optional: false,
         builtin_model_provider_id: None,
         requires_base_url: true,
@@ -126,9 +135,7 @@ pub(crate) fn supported_account_providers() -> &'static [AccountProviderSpec] {
 
 pub(crate) fn account_provider_spec(provider: &str) -> Option<AccountProviderSpec> {
     let normalized = match provider.trim().to_ascii_lowercase().as_str() {
-        "codex" | "codex-oauth" | "oauth" | "chatgpt" | "openai-oauth" => {
-            "codex_oauth".to_string()
-        }
+        "codex" | "codex-oauth" | "oauth" | "chatgpt" | "openai-oauth" => "codex_oauth".to_string(),
         "custom-openai" | "custom-api" | "custom-openai-compatible" => "custom".to_string(),
         other => other.to_string(),
     };
@@ -190,10 +197,7 @@ fn write_stored_profile_file(
     std::fs::write(profile_path, body)
 }
 
-fn repair_profile_catalogs(
-    profile_path: &Path,
-    profile: &StoredAccountProfile,
-) -> io::Result<()> {
+fn repair_profile_catalogs(profile_path: &Path, profile: &StoredAccountProfile) -> io::Result<()> {
     let mut candidates = Vec::new();
     if let Some(path) = profile.model_catalog_json.clone() {
         candidates.push(path);
@@ -219,7 +223,8 @@ pub(crate) fn load_stored_profile(profile_path: &Path) -> io::Result<StoredAccou
     let contents = std::fs::read_to_string(profile_path)?;
     let mut profile = serde_json::from_str::<StoredAccountProfile>(&contents)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    let normalized_model = normalize_profile_model(profile.provider.as_str(), profile.model.as_str());
+    let normalized_model =
+        normalize_profile_model(profile.provider.as_str(), profile.model.as_str());
     let changed = normalized_model != profile.model;
     if changed {
         profile.model = normalized_model;

@@ -598,8 +598,10 @@ impl ListSelectionView {
     fn select_visible_index(&mut self, visible_idx: usize) {
         let before = self.selected_actual_idx();
         self.state.selected_idx = Some(visible_idx);
-        self.state
-            .ensure_visible(self.visible_len(), Self::max_visible_rows(self.visible_len()));
+        self.state.ensure_visible(
+            self.visible_len(),
+            Self::max_visible_rows(self.visible_len()),
+        );
         if self.selected_actual_idx() != before {
             self.fire_selection_changed();
         }
@@ -1506,7 +1508,8 @@ mod tests {
             SelectionItem {
                 name: "gpt-5.1-codex-mini".to_string(),
                 description: Some(
-                    "Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям.".to_string(),
+                    "Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям."
+                        .to_string(),
                 ),
                 dismiss_on_select: true,
                 ..Default::default()
@@ -1588,7 +1591,8 @@ mod tests {
             SelectionItem {
                 name: "gpt-5.1-codex-mini".to_string(),
                 description: Some(
-                    "Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям.".to_string(),
+                    "Оптимизирована под Codex: дешевле и быстрее, но слабее по возможностям."
+                        .to_string(),
                 ),
                 dismiss_on_select: true,
                 ..Default::default()

@@ -117,6 +117,18 @@ wire_api = "chat"
 }
 
 #[test]
+fn test_deserialize_chat_completions_wire_api() {
+    let provider_toml = r#"
+name = "Mistral"
+base_url = "https://api.mistral.ai/v1"
+wire_api = "chat_completions"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(provider.wire_api, WireApi::ChatCompletions);
+}
+
+#[test]
 fn test_deserialize_websocket_connect_timeout() {
     let provider_toml = r#"
 name = "OpenAI"

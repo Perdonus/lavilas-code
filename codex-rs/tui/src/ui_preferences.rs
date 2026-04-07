@@ -94,7 +94,10 @@ pub(crate) fn repair_profile_model_catalog(path: &Path, provider: &str) -> io::R
     let contents = std::fs::read_to_string(path)?;
     let mut payload: serde_json::Value = serde_json::from_str(&contents)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    let Some(models) = payload.get_mut("models").and_then(serde_json::Value::as_array_mut) else {
+    let Some(models) = payload
+        .get_mut("models")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
         return Ok(false);
     };
 
@@ -495,15 +498,19 @@ mod tests {
     #[test]
     fn profile_catalog_helper_creates_sidecar_file() {
         let codex_home = tempdir().expect("tempdir");
-        let catalog_path = ensure_profile_model_catalog(codex_home.path(), "mistral-profile", "mistral")
-            .expect("catalog path");
+        let catalog_path =
+            ensure_profile_model_catalog(codex_home.path(), "mistral-profile", "mistral")
+                .expect("catalog path");
         assert_eq!(
             catalog_path,
             profile_model_catalog_path(codex_home.path(), "mistral-profile")
         );
         let contents = std::fs::read_to_string(&catalog_path).expect("catalog contents");
         assert!(contents.contains(MISTRAL_DEFAULT_PROFILE_MODEL));
-        assert_eq!(default_profile_model("mistral"), MISTRAL_DEFAULT_PROFILE_MODEL);
+        assert_eq!(
+            default_profile_model("mistral"),
+            MISTRAL_DEFAULT_PROFILE_MODEL
+        );
     }
 
     #[test]

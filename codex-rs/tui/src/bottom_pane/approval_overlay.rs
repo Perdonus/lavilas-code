@@ -166,14 +166,12 @@ impl ApprovalOverlay {
                     },
                 ),
             ),
-            ApprovalRequest::Permissions { .. } => (
-                permissions_options(),
-                "Выдать эти разрешения?".to_string(),
-            ),
-            ApprovalRequest::ApplyPatch { .. } => (
-                patch_options(),
-                "Применить эти изменения?".to_string(),
-            ),
+            ApprovalRequest::Permissions { .. } => {
+                (permissions_options(), "Выдать эти разрешения?".to_string())
+            }
+            ApprovalRequest::ApplyPatch { .. } => {
+                (patch_options(), "Применить эти изменения?".to_string())
+            }
             ApprovalRequest::McpElicitation { server_name, .. } => (
                 elicitation_options(),
                 format!("Серверу {server_name} нужно подтверждение."),
@@ -493,10 +491,7 @@ fn approval_footer_hint(request: &ApprovalRequest) -> Line<'static> {
             " чтобы открыть тред".into(),
         ]);
     }
-    spans.extend([
-        " | ".into(),
-        "Клик по варианту — выбрать".dim(),
-    ]);
+    spans.extend([" | ".into(), "Клик по варианту — выбрать".dim()]);
     Line::from(spans)
 }
 
@@ -519,7 +514,10 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
                 header.push(Line::from(""));
             }
             if let Some(reason) = reason {
-                header.push(Line::from(vec!["Причина: ".into(), reason.clone().italic()]));
+                header.push(Line::from(vec![
+                    "Причина: ".into(),
+                    reason.clone().italic(),
+                ]));
                 header.push(Line::from(""));
             }
             if let Some(additional_permissions) = additional_permissions
@@ -556,7 +554,10 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
                 header.push(Line::from(""));
             }
             if let Some(reason) = reason {
-                header.push(Line::from(vec!["Причина: ".into(), reason.clone().italic()]));
+                header.push(Line::from(vec![
+                    "Причина: ".into(),
+                    reason.clone().italic(),
+                ]));
                 header.push(Line::from(""));
             }
             if let Some(rule_line) = format_requested_permissions_rule(permissions) {
@@ -1405,7 +1406,9 @@ mod tests {
             "network prompt should not show command line, got {rendered:?}"
         );
         assert!(
-            !rendered.iter().any(|line| line.contains("больше не спрашивать")),
+            !rendered
+                .iter()
+                .any(|line| line.contains("больше не спрашивать")),
             "network prompt should not show execpolicy option, got {rendered:?}"
         );
     }

@@ -65,7 +65,9 @@ pub enum SandboxErr {
 
 #[derive(Error, Debug)]
 pub enum CodexErr {
-    #[error("ход прерван. Что-то пошло не так? Нажмите `/feedback`, чтобы отправить отчёт об ошибке.")]
+    #[error(
+        "ход прерван. Что-то пошло не так? Нажмите `/feedback`, чтобы отправить отчёт об ошибке."
+    )]
     TurnAborted,
 
     /// Returned by ResponsesClient when the SSE stream disconnects or errors out **after** the HTTP
@@ -95,7 +97,9 @@ pub enum CodexErr {
     Spawn,
     /// Returned by run_command_stream when the user pressed Ctrl-C (SIGINT). Session uses this to
     /// surface a polite FunctionCallOutput back to the model instead of crashing the CLI.
-    #[error("прервано (Ctrl-C). Что-то пошло не так? Нажмите `/feedback`, чтобы отправить отчёт об ошибке.")]
+    #[error(
+        "прервано (Ctrl-C). Что-то пошло не так? Нажмите `/feedback`, чтобы отправить отчёт об ошибке."
+    )]
     Interrupted,
     /// Unexpected HTTP status code.
     #[error("{0}")]
@@ -304,8 +308,7 @@ pub struct UnexpectedResponseError {
     pub identity_error_code: Option<String>,
 }
 
-const CLOUDFLARE_BLOCKED_MESSAGE: &str =
-    "Доступ заблокирован Cloudflare. Обычно это происходит при подключении из ограниченного региона";
+const CLOUDFLARE_BLOCKED_MESSAGE: &str = "Доступ заблокирован Cloudflare. Обычно это происходит при подключении из ограниченного региона";
 const UNEXPECTED_RESPONSE_BODY_MAX_BYTES: usize = 1000;
 
 impl UnexpectedResponseError {

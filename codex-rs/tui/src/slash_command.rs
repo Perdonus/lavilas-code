@@ -146,9 +146,7 @@ impl SlashCommand {
             }
             SlashCommand::Personality => "выбрать стиль общения Lavilas Codex",
             SlashCommand::Realtime => "переключить голосовой realtime-режим (эксперимент)",
-            SlashCommand::Settings => {
-                "открыть единые настройки (профили, язык, префикс, команды)"
-            }
+            SlashCommand::Settings => "открыть единые настройки (профили, язык, префикс, команды)",
             SlashCommand::Plan => "переключиться в режим планирования",
             SlashCommand::Collab => "изменить режим совместной работы (эксперимент)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "переключить активный тред агента",

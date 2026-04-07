@@ -73,7 +73,6 @@ const TOOL_SUGGEST_SUGGEST_TYPE_KEY: &str = "suggest_type";
 const TOOL_SUGGEST_REASON_KEY: &str = "suggest_reason";
 const TOOL_SUGGEST_INSTALL_URL_KEY: &str = "install_url";
 
-
 fn russian_question_word(count: usize) -> &'static str {
     let mod100 = count % 100;
     if (11..=14).contains(&mod100) {
@@ -88,7 +87,11 @@ fn russian_question_word(count: usize) -> &'static str {
 
 fn russian_required_question_phrase(count: usize) -> String {
     let word = russian_question_word(count);
-    let adjective = if count == 1 { "обязательный" } else { "обязательных" };
+    let adjective = if count == 1 {
+        "обязательный"
+    } else {
+        "обязательных"
+    };
     format!("{count} {adjective} {word}")
 }
 
@@ -324,7 +327,8 @@ impl McpServerElicitationFormRequest {
                 options.push(McpServerElicitationOption {
                     label: "Разрешить до конца сессии".to_string(),
                     description: Some(
-                        "Запустить инструмент и запомнить выбор до конца текущей сессии.".to_string(),
+                        "Запустить инструмент и запомнить выбор до конца текущей сессии."
+                            .to_string(),
                     ),
                     value: Value::String(APPROVAL_ACCEPT_SESSION_VALUE.to_string()),
                 });
@@ -1165,7 +1169,8 @@ impl McpServerElicitationOverlay {
     fn submit_answers(&mut self) {
         self.save_current_draft();
         if let Some(idx) = self.first_required_unanswered_index() {
-            self.validation_error = Some("Заполните обязательные поля перед отправкой.".to_string());
+            self.validation_error =
+                Some("Заполните обязательные поля перед отправкой.".to_string());
             self.jump_to_field(idx);
             return;
         }
@@ -1914,9 +1919,7 @@ mod tests {
                             },
                             McpServerElicitationOption {
                                 label: "Отклонить".to_string(),
-                                description: Some(
-                                    "Отклонить этот вызов и продолжить.".to_string(),
-                                ),
+                                description: Some("Отклонить этот вызов и продолжить.".to_string(),),
                                 value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
                             },
                             McpServerElicitationOption {

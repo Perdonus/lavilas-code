@@ -644,11 +644,12 @@ impl PickerState {
                     }
                     self.inline_error = Some(match path {
                         Some(path) => {
-                            format!("Не удалось прочитать метаданные сессии из {}", path.display())
+                            format!(
+                                "Не удалось прочитать метаданные сессии из {}",
+                                path.display()
+                            )
                         }
-                        None => {
-                            String::from("Не удалось прочитать метаданные выбранной сессии")
-                        }
+                        None => String::from("Не удалось прочитать метаданные выбранной сессии"),
                     });
                     self.request_frame();
                 }
@@ -1379,7 +1380,8 @@ fn render_list(
     }
 
     if state.pagination.loading.is_pending() && y < area.y.saturating_add(area.height) {
-        let loading_line: Line = vec!["  ".into(), "Загрузка более ранних сессий…".italic().dim()].into();
+        let loading_line: Line =
+            vec!["  ".into(), "Загрузка более ранних сессий…".italic().dim()].into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(loading_line, rect);
     }

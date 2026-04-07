@@ -1078,13 +1078,15 @@ fn build_mcp_tool_approval_question(
     if prompt_options.allow_session_remember {
         options.push(RequestUserInputQuestionOption {
             label: MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
-            description: "Запустить инструмент и запомнить выбор до конца текущей сессии.".to_string(),
+            description: "Запустить инструмент и запомнить выбор до конца текущей сессии."
+                .to_string(),
         });
     }
     if prompt_options.allow_persistent_approval {
         options.push(RequestUserInputQuestionOption {
             label: MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string(),
-            description: "Запустить инструмент и запомнить выбор для будущих вызовов инструмента.".to_string(),
+            description: "Запустить инструмент и запомнить выбор для будущих вызовов инструмента."
+                .to_string(),
         });
     }
     options.push(RequestUserInputQuestionOption {
@@ -1382,10 +1384,9 @@ fn parse_mcp_tool_approval_response(
             || answer == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER_LEGACY
     }) {
         McpToolApprovalDecision::AcceptAndRemember
-    } else if answers
-        .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT || answer == MCP_TOOL_APPROVAL_ACCEPT_LEGACY)
-    {
+    } else if answers.iter().any(|answer| {
+        answer == MCP_TOOL_APPROVAL_ACCEPT || answer == MCP_TOOL_APPROVAL_ACCEPT_LEGACY
+    }) {
         McpToolApprovalDecision::Accept
     } else {
         McpToolApprovalDecision::Cancel
@@ -1510,7 +1511,9 @@ async fn persist_custom_mcp_tool_approval(
     } else {
         let servers = load_global_mcp_servers(&config.codex_home).await?;
         if !servers.contains_key(server) {
-            anyhow::bail!("MCP-сервер `{server}` не настроен в config.toml. Добавьте его в список MCP-серверов перед сохранением разрешений.");
+            anyhow::bail!(
+                "MCP-сервер `{server}` не настроен в config.toml. Добавьте его в список MCP-серверов перед сохранением разрешений."
+            );
         }
         config.codex_home.clone()
     };

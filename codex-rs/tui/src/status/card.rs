@@ -564,7 +564,8 @@ impl HistoryCell for StatusHistoryCell {
                 (None, None) => "ChatGPT".to_string(),
             },
             StatusAccountDisplay::ApiKey => {
-                "API-ключ настроен (выполните codex login, если хотите вход через ChatGPT)".to_string()
+                "API-ключ настроен (выполните codex login, если хотите вход через ChatGPT)"
+                    .to_string()
             }
         });
 
@@ -613,8 +614,9 @@ impl HistoryCell for StatusHistoryCell {
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
 
-        let note_first_line =
-            Line::from(vec![Span::from("Лимиты и кредиты отображаются по данным текущего аккаунта.").cyan()]);
+        let note_first_line = Line::from(vec![
+            Span::from("Лимиты и кредиты отображаются по данным текущего аккаунта.").cyan(),
+        ]);
         let note_second_line =
             Line::from(vec![Span::from("Если значения обновляются не сразу, откройте /status повторно через несколько секунд.").cyan()]);
         let note_lines = adaptive_wrap_lines(
