@@ -3140,7 +3140,6 @@ impl ChatComposer {
                     let fast_command_enabled = self.fast_command_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
-                    let audio_device_selection_enabled = self.audio_device_selection_enabled;
                     let mut command_popup = CommandPopup::new(CommandPopupFlags {
                         collaboration_modes_enabled,
                         connectors_enabled,
@@ -3148,7 +3147,6 @@ impl ChatComposer {
                         fast_command_enabled,
                         personality_command_enabled,
                         realtime_conversation_enabled,
-                        audio_device_selection_enabled,
                         windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                     });
                     command_popup.on_composer_text_change(first_line.to_string());
