@@ -67,8 +67,6 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
 
       - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
         name: Use hermetic Cargo home (musl)
@@ -84,7 +82,10 @@ jobs:
       - name: Install Rust target standard library (unix)
         if: runner.os != 'Windows'
         shell: bash
-        run: rustup target add "${{ matrix.rust_target }}"
+        run: |
+          set -euo pipefail
+          rustup target add "${{ matrix.rust_target }}"
+          rustup target list --installed
 
       - name: Install Rust target standard library (windows)
         if: runner.os == 'Windows'
