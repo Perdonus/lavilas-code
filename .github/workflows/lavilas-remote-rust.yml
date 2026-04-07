@@ -35,10 +35,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Cargo fmt check for touched files
-        run: |
-          cargo fmt --check -- rollout/src/lib.rs app-server/tests/suite/v2/thread_list.rs
-
       - name: Set targeted test filter
         shell: bash
         env:
