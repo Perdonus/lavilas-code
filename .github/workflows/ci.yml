@@ -40,20 +40,14 @@ jobs:
 
       - name: Stage npm package
         id: stage_npm_package
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Use the current package version so staging matches this fork's published artifacts.
+          # CI only needs to validate npm packaging for the current source tree.
+          # Native release artifacts are produced by the dedicated GitHub release workflows.
           CODEX_VERSION=$(node -p "require('./codex-cli/package.json').version")
           OUTPUT_DIR="${RUNNER_TEMP}"
-          python3 ./scripts/stage_npm_packages.py \
-            --release-version "$CODEX_VERSION" \
-            --workflow-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --package codex \
-            --output-dir "$OUTPUT_DIR"
-          PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
-          echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
+          python3 codex-cli/scripts/build_npm_package.py             --package codex             --release-version "$CODEX_VERSION"             --staging-dir "$RUNNER_TEMP/pkg-codex"             --pack-output "$OUTPUT_DIR/codex-npm-${CODEX_VERSION}.tgz"
+          echo "pack_output=$OUTPUT_DIR/codex-npm-${CODEX_VERSION}.tgz" >> "$GITHUB_OUTPUT"
 
       - name: Upload staged npm package artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
