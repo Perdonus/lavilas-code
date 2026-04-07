@@ -12,8 +12,8 @@ on:
     branches-ignore:
       - main
     paths:
-      - 'codex-rs/**'
-      - '.github/workflows/lavilas-remote-rust.yml'
+      - "codex-rs/**"
+      - ".github/workflows/lavilas-remote-rust.yml"
 
 jobs:
   remote-rust-check:
