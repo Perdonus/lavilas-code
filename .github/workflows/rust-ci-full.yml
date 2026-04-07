@@ -44,9 +44,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
-        with:
-          toolchain: nightly-2025-09-18
-          components: llvm-tools-preview, rustc-dev, rust-src
+      - name: Install nightly argument-comment-lint toolchain
+        shell: bash
+        run: |
+          rustup toolchain install nightly-2025-09-18 --profile minimal --component llvm-tools-preview --component rustc-dev --component rust-src --no-self-update
+          rustup default nightly-2025-09-18
       - name: Cache cargo-dylint tooling
         id: cargo_dylint_cache
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -227,8 +229,7 @@ jobs:
         if: ${{ env.USE_SCCACHE == 'true' }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
-          tool: sccache
-          version: 0.7.5
+          tool: sccache@0.7.5
 
       - name: Configure sccache backend
         if: ${{ env.USE_SCCACHE == 'true' }}
@@ -529,8 +530,7 @@ jobs:
         if: ${{ env.USE_SCCACHE == 'true' }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
-          tool: sccache
-          version: 0.7.5
+          tool: sccache@0.7.5
 
       - name: Configure sccache backend
         if: ${{ env.USE_SCCACHE == 'true' }}
@@ -564,8 +564,7 @@ jobs:
 
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
-          tool: nextest
-          version: 0.9.103
+          tool: nextest@0.9.103
 
       - name: Enable unprivileged user namespaces (Linux)
         if: runner.os == 'Linux'
