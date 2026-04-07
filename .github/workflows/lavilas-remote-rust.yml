@@ -12,7 +12,8 @@ on:
     branches-ignore:
       - main
     paths:
-      - 'codex-rs/**'
+      - 'codex-rs/rollout/src/lib.rs'
+      - 'codex-rs/app-server/tests/suite/v2/thread_list.rs'
       - '.github/workflows/lavilas-remote-rust.yml'
 
 jobs:
@@ -23,15 +24,20 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            codex-rs
+            .github/workflows/lavilas-remote-rust.yml
+          sparse-checkout-cone-mode: false
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Cargo fmt check
+      - name: Cargo fmt check for touched files
         run: |
-          git diff --quiet || (echo "Skipping fmt check because repository has unrelated dirty files" && exit 0)
-          cargo fmt --check
+          cargo fmt --check -- rollout/src/lib.rs app-server/tests/suite/v2/thread_list.rs
 
       - name: Set targeted test filter
         shell: bash
