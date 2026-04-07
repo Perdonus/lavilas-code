@@ -217,6 +217,15 @@ async fn thread_list_includes_original_codex_custom_sources_by_default() -> Resu
         /*git_info*/ None,
         CoreSessionSource::Custom("chatgpt".to_string()),
     )?;
+    let chatgpt_desktop_id = create_fake_rollout_with_source(
+        codex_home.path(),
+        "2026-01-27T12-36-56",
+        "2026-01-27T12:36:56Z",
+        "chatgpt desktop session",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Custom("chatgpt_desktop".to_string()),
+    )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
     let response = list_threads(
@@ -235,7 +244,7 @@ async fn thread_list_includes_original_codex_custom_sources_by_default() -> Resu
         .map(|thread| thread.id)
         .collect::<Vec<_>>();
 
-    assert_eq!(returned_ids, vec![chatgpt_id, atlas_id]);
+    assert_eq!(returned_ids, vec![chatgpt_desktop_id, chatgpt_id, atlas_id]);
 
     Ok(())
 }
