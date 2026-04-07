@@ -26,7 +26,7 @@ async fn init_state_db(codex_home: &Path) -> io::Result<std::sync::Arc<codex_sta
 }
 
 async fn mark_backfill_complete(db: &codex_state::StateRuntime) -> io::Result<()> {
-    db.update_backfill_state(codex_state::BackfillStatus::Complete, None, None)
+    db.mark_backfill_complete(/*last_watermark*/ None)
         .await
         .map_err(io::Error::other)
 }
@@ -37,23 +37,19 @@ async fn upsert_thread_metadata(
     archived: bool,
 ) -> io::Result<()> {
     let now = chrono::Utc::now();
-    db.upsert_thread(
-        codex_state::ThreadMetadataBuilder::new(
-            thread_id,
-            std::path::PathBuf::from(format!("rollout-{thread_id}.jsonl")),
-            now,
-            SessionSource::Cli,
-            "openai".to_string(),
-            std::path::PathBuf::from("."),
-        )
-        .title("test")
-        .first_user_message("hello")
-        .has_user_event(true)
-        .archived(archived)
-        .build(),
-    )
-    .await
-    .map_err(io::Error::other)
+    let mut metadata_builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        std::path::PathBuf::from(format!("rollout-{thread_id}.jsonl")),
+        now,
+        SessionSource::Cli,
+    );
+    metadata_builder.model_provider = Some("openai".to_string());
+    metadata_builder.cwd = std::path::PathBuf::from(".");
+    metadata_builder.archived_at = archived.then_some(now);
+    let mut metadata = metadata_builder.build("openai");
+    metadata.title = "test".to_string();
+    metadata.first_user_message = Some("hello".to_string());
+    db.upsert_thread(&metadata).await.map_err(io::Error::other)
 }
 
 const TEST_TIMESTAMP: &str = "2025-01-01T00-00-00";

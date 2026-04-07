@@ -497,7 +497,8 @@ mod tests {
 
     #[test]
     fn profile_catalog_helper_creates_sidecar_file() {
-        use super::{MISTRAL_DEFAULT_PROFILE_MODEL, MISTRAL_LEGACY_TOOL_MODEL};
+        use super::MISTRAL_DEFAULT_PROFILE_MODEL;
+        use super::MISTRAL_LEGACY_TOOL_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path =
             ensure_profile_model_catalog(codex_home.path(), "mistral-profile", "mistral")
@@ -516,7 +517,8 @@ mod tests {
 
     #[test]
     fn profile_catalog_helper_repairs_legacy_mistral_sidecar() {
-        use super::{MISTRAL_DEFAULT_PROFILE_MODEL, MISTRAL_LEGACY_TOOL_MODEL};
+        use super::MISTRAL_DEFAULT_PROFILE_MODEL;
+        use super::MISTRAL_LEGACY_TOOL_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path = profile_model_catalog_path(codex_home.path(), "mistral-profile");
         std::fs::create_dir_all(catalog_path.parent().expect("catalog dir")).expect("mkdirs");
