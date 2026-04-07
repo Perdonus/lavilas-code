@@ -66,9 +66,10 @@ jobs:
           python-version: "3.x"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.93.0
+          targets: ${{ matrix.rust_target }}
 
       - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
         name: Use hermetic Cargo home (musl)
@@ -81,18 +82,17 @@ jobs:
           echo "${cargo_home}/bin" >> "$GITHUB_PATH"
           : > "${cargo_home}/config.toml"
 
-      - name: Install Rust target standard library (unix)
+      - name: Verify installed Rust targets (unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
-          rustup target add "${{ matrix.rust_target }}"
           rustup target list --installed
 
-      - name: Install Rust target standard library (windows)
+      - name: Verify installed Rust targets (windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: rustup target add '${{ matrix.rust_target }}'
+        run: rustup target list --installed
 
       - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
