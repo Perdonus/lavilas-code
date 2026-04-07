@@ -46,7 +46,7 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +    name = "simdutf",
 +    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = ["simdutf.cpp"],\n    hdrs = ["simdutf.h"],\n    copts = ["-std=c++20"],\n    include_prefix = "third_party/simdutf",\n    visibility = ["//visibility:public"],\n)\n',
 +    commit = "93b35aec29256f705c97f675fe4623578bd7a395",
-+    remote = "https://chromium.googlesource.com/chromium/src/third_party/simdutf",
++    remote = "https://github.com/simdutf/simdutf.git",
 +)
 +
 +git_repository(
