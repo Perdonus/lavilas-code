@@ -44,7 +44,7 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +
 +git_repository(
 +    name = "simdutf",
-+    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = [\n        "src/simdutf.cpp",\n        "src/arm64/implementation.cpp",\n        "src/fallback/implementation.cpp",\n        "src/haswell/implementation.cpp",\n        "src/icelake/implementation.cpp",\n        "src/lasx/implementation.cpp",\n        "src/lsx/implementation.cpp",\n        "src/ppc64/implementation.cpp",\n        "src/rvv/implementation.cpp",\n        "src/westmere/implementation.cpp",\n    ],\n    hdrs = glob(["include/*.h", "include/simdutf/*.h", "src/*.h", "src/*/*.h", "src/*/*.cpp"]),\n    copts = ["-std=c++20"],\n    includes = ["include", "src"],\n    visibility = ["//visibility:public"],\n)\n',
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = [\n        "src/simdutf.cpp",\n        "src/arm64/implementation.cpp",\n        "src/fallback/implementation.cpp",\n        "src/haswell/implementation.cpp",\n        "src/icelake/implementation.cpp",\n        "src/lasx/implementation.cpp",\n        "src/lsx/implementation.cpp",\n        "src/ppc64/implementation.cpp",\n        "src/rvv/implementation.cpp",\n        "src/westmere/implementation.cpp",\n    ],\n    hdrs = glob(["include/*.h", "include/simdutf/*.h", "src/*/*.h", "src/*/*.cpp"], allow_empty = True),\n    copts = ["-std=c++20"],\n    includes = ["include", "src"],\n    visibility = ["//visibility:public"],\n)\n',
 +    commit = "06258b2c046d233fa53957cced61bc279fadfb41",
 +    remote = "https://github.com/simdutf/simdutf.git",
 +)
