@@ -44,7 +44,7 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +
 +git_repository(
 +    name = "simdutf",
-+    build_file = "//:bazel/BUILD.simdutf",
++    build_file = "@v8//:bazel/BUILD.simdutf",
 +    commit = "06258b2c046d233fa53957cced61bc279fadfb41",
 +    remote = "https://github.com/simdutf/simdutf.git",
 +)
