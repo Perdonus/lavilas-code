@@ -149,6 +149,22 @@ fn repair_legacy_compatibility_rewrites_stale_mistral_provider_state() {
 }
 
 #[test]
+fn canonicalize_provider_model_slug_repairs_mistral_tool_alias() {
+    assert_eq!(
+        canonicalize_provider_model_slug("mistral-vibe-cli-with-tools"),
+        Some("mistral-vibe-cli".to_string())
+    );
+}
+
+#[test]
+fn canonicalize_provider_model_slug_preserves_namespace() {
+    assert_eq!(
+        canonicalize_provider_model_slug("mistral/mistral-vibe-cli-fast"),
+        Some("mistral/mistral-vibe-cli".to_string())
+    );
+}
+
+#[test]
 fn test_deserialize_websocket_connect_timeout() {
     let provider_toml = r#"
 name = "OpenAI"

@@ -482,7 +482,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 cursor: cursor.clone(),
                 limit: Some(100),
                 sort_key: Some(AppServerThreadSortKey::UpdatedAt),
-                model_providers: None,
+                model_providers: Some(Vec::new()),
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
                 cwd: None,
@@ -1963,7 +1963,16 @@ mod tests {
     async fn lookup_session_target_by_name_ignores_backend_search_term_mismatch()
     -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
+        let mut config = build_config(&temp_dir).await?;
+        let mut mistral_provider = config.model_provider.clone();
+        mistral_provider.name = "Mistral".to_string();
+        mistral_provider.base_url = Some("https://api.mistral.ai/v1".to_string());
+        mistral_provider.repair_legacy_compatibility();
+        config.model_provider_id = "mistral1-provider".to_string();
+        config.model_provider = mistral_provider.clone();
+        config
+            .model_providers
+            .insert("mistral1-provider".to_string(), mistral_provider);
         let thread_id = ThreadId::new();
         let rollout_path = temp_dir
             .path()
@@ -1996,7 +2005,7 @@ mod tests {
             SessionSource::Cli,
         );
         builder.cwd = session_cwd;
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build("openai");
         metadata.title = "Different rollout title".to_string();
         metadata.first_user_message = Some("preview text".to_string());
         state_runtime

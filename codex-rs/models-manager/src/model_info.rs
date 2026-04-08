@@ -1,3 +1,4 @@
+use codex_model_provider_info::canonicalize_provider_model_slug as canonicalize_provider_catalog_model_slug;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -19,7 +20,6 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
-const COMPATIBILITY_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
 const MISTRAL_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
 const COMPATIBILITY_PROVIDER_HINTS: [&str; 11] = [
     "anthropic",
@@ -195,21 +195,7 @@ fn slug_supports_tool_use(slug: &str) -> bool {
 }
 
 fn canonicalize_mistral_variant_slug(slug: &str) -> Option<String> {
-    let (prefix, terminal_segment) = match slug.rsplit_once('/') {
-        Some((prefix, terminal_segment)) => (Some(prefix), terminal_segment),
-        None => (None, slug),
-    };
-
-    let canonical_terminal = COMPATIBILITY_VARIANT_SUFFIXES.iter().find_map(|suffix| {
-        let base = terminal_segment.strip_suffix(suffix)?;
-        base.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL)
-            .then_some(MISTRAL_VIBE_CLI_MODEL)
-    })?;
-
-    Some(match prefix {
-        Some(prefix) => format!("{prefix}/{canonical_terminal}"),
-        None => canonical_terminal.to_string(),
-    })
+    canonicalize_provider_catalog_model_slug(slug)
 }
 
 fn mistral_vibe_cli_terminal_segment(slug: &str) -> bool {

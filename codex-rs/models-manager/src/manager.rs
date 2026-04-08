@@ -29,6 +29,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -557,6 +558,14 @@ impl ModelsManager {
     /// Build picker-ready presets from the active catalog snapshot.
     fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
+
+        let mut seen_slugs = HashSet::new();
+        remote_models.retain_mut(|model| {
+            if let Some(canonical_slug) = Self::normalize_legacy_model_slug(&model.slug) {
+                model.slug = canonical_slug;
+            }
+            seen_slugs.insert(model.slug.clone())
+        });
 
         let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));

@@ -34,9 +34,32 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 const MISTRAL_API_HOST: &str = "api.mistral.ai";
+const MISTRAL_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
+const PROVIDER_MODEL_COMPATIBILITY_SUFFIXES: [&str; 4] =
+    ["-with-tools", "-tools", "-latest", "-fast"];
 const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
+
+pub fn canonicalize_provider_model_slug(slug: &str) -> Option<String> {
+    let (prefix, terminal_segment) = match slug.rsplit_once('/') {
+        Some((prefix, terminal_segment)) => (Some(prefix), terminal_segment),
+        None => (None, slug),
+    };
+
+    let canonical_terminal = PROVIDER_MODEL_COMPATIBILITY_SUFFIXES
+        .iter()
+        .find_map(|suffix| {
+            let base = terminal_segment.strip_suffix(suffix)?;
+            base.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL)
+                .then_some(MISTRAL_VIBE_CLI_MODEL)
+        })?;
+
+    Some(match prefix {
+        Some(prefix) => format!("{prefix}/{canonical_terminal}"),
+        None => canonical_terminal.to_string(),
+    })
+}
 
 /// Wire protocol that the provider speaks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]

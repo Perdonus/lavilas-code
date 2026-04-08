@@ -105,6 +105,7 @@ use codex_core::message_history;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
+use codex_model_provider_info::canonicalize_provider_model_slug;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -4927,6 +4928,7 @@ impl App {
                 self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
+                let model = canonicalize_provider_model_slug(&model).unwrap_or(model);
                 self.chat_widget.set_model(&model);
             }
             AppEvent::UpdateCollaborationMode(mask) => {
@@ -5363,6 +5365,7 @@ impl App {
                 }
             }
             AppEvent::PersistModelSelection { model, effort } => {
+                let model = canonicalize_provider_model_slug(&model).unwrap_or(model);
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)

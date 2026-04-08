@@ -4,6 +4,7 @@ use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
 use codex_features::FEATURES;
+use codex_model_provider_info::canonicalize_provider_model_slug;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
@@ -367,10 +368,16 @@ impl ConfigDocument {
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
             ConfigEdit::SetModel { model, effort } => Ok({
+                let normalized_model = model.as_ref().map(|model_value| {
+                    canonicalize_provider_model_slug(model_value)
+                        .unwrap_or_else(|| model_value.clone())
+                });
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
                     &["model"],
-                    model.as_ref().map(|model_value| value(model_value.clone())),
+                    normalized_model
+                        .as_ref()
+                        .map(|model_value| value(model_value.clone())),
                 );
                 mutated |= self.write_profile_value(
                     &["model_reasoning_effort"],

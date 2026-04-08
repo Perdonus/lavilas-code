@@ -1,4 +1,6 @@
 use super::*;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use pretty_assertions::assert_eq;
 
 async fn process_compacted_history_with_test_session(
@@ -18,6 +20,16 @@ async fn process_compacted_history_with_test_session(
     )
     .await;
     (refreshed, initial_context)
+}
+
+#[test]
+fn remote_compact_is_disabled_for_mistral_shaped_openai_provider() {
+    let mut provider =
+        ModelProviderInfo::create_openai_provider(Some("https://api.mistral.ai/v1".to_string()));
+    provider.wire_api = WireApi::Responses;
+    provider.repair_legacy_compatibility();
+
+    assert!(!should_use_remote_compact_task(&provider));
 }
 
 #[test]

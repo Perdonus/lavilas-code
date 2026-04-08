@@ -32,6 +32,25 @@ model_reasoning_effort = "high"
 }
 
 #[test]
+fn blocking_set_model_canonicalizes_legacy_mistral_variant() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[ConfigEdit::SetModel {
+            model: Some("mistral-vibe-cli-with-tools".to_string()),
+            effort: None,
+        }],
+    )
+    .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    assert_eq!(contents, "model = \"mistral-vibe-cli\"\n");
+}
+
+#[test]
 fn builder_with_edits_applies_custom_paths() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();

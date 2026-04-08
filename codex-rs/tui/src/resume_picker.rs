@@ -741,7 +741,7 @@ impl PickerState {
             cursor: None,
             request_token,
             search_token,
-            search_term: self.current_search_term(),
+            search_term: None,
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
@@ -1044,19 +1044,10 @@ impl PickerState {
             cursor: Some(cursor),
             request_token,
             search_token,
-            search_term: self.current_search_term(),
+            search_term: None,
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
-    }
-
-    fn current_search_term(&self) -> Option<String> {
-        let trimmed = self.query.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
     }
 
     fn allocate_request_token(&mut self) -> usize {
@@ -2811,7 +2802,7 @@ mod tests {
         let first_request = {
             let guard = recorded_requests.lock().unwrap();
             assert_eq!(guard.len(), 1);
-            assert_eq!(guard[0].search_term.as_deref(), Some("target"));
+            assert_eq!(guard[0].search_term, None);
             guard[0].clone()
         };
 
@@ -2867,7 +2858,7 @@ mod tests {
         let active_request = {
             let guard = recorded_requests.lock().unwrap();
             assert_eq!(guard.len(), 1);
-            assert_eq!(guard[0].search_term.as_deref(), Some("missing"));
+            assert_eq!(guard[0].search_term, None);
             guard[0].clone()
         };
 
