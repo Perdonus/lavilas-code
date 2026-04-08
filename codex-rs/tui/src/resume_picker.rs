@@ -151,8 +151,7 @@ struct PickerPage {
 /// new sessions appear during pagination.
 ///
 /// Filtering happens in two layers:
-/// 1. Provider and source filtering at the backend (only interactive CLI sessions
-///    for the current model provider).
+/// 1. Source filtering at the backend (interactive CLI/VS Code sessions only).
 /// 2. Working-directory filtering at the picker (unless `--all` is passed).
 #[allow(dead_code)]
 pub async fn run_resume_picker(
@@ -246,11 +245,7 @@ async fn run_session_picker_with_loader(
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
-    let provider_filter = if is_remote {
-        ProviderFilter::Any
-    } else {
-        ProviderFilter::MatchDefault(config.model_provider_id.to_string())
-    };
+    let provider_filter = ProviderFilter::Any;
     let codex_home = config.codex_home.as_path();
     let filter_cwd = if show_all || is_remote {
         // Remote sessions live in the server's filesystem namespace, so the client
@@ -435,6 +430,7 @@ struct PickerState {
     view_rows: Option<usize>,
     provider_filter: ProviderFilter,
     provider_fallback_applied: bool,
+    cwd_fallback_applied: bool,
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
@@ -599,6 +595,7 @@ impl PickerState {
             view_rows: None,
             provider_filter,
             provider_fallback_applied: false,
+            cwd_fallback_applied: false,
             show_all,
             filter_cwd,
             action,
@@ -763,6 +760,7 @@ impl PickerState {
                 let page = page.map_err(color_eyre::Report::from)?;
                 self.ingest_page(page);
                 self.update_thread_names().await;
+                self.maybe_fallback_to_all_directories_after_empty_results();
                 if self.maybe_fallback_to_any_provider_after_empty_page() {
                     return Ok(());
                 }
@@ -824,6 +822,23 @@ impl PickerState {
         self.provider_filter = ProviderFilter::Any;
         self.provider_fallback_applied = true;
         self.start_initial_load();
+        true
+    }
+
+    fn maybe_fallback_to_all_directories_after_empty_results(&mut self) -> bool {
+        if self.cwd_fallback_applied || self.show_all || self.filter_cwd.is_none() {
+            return false;
+        }
+        if !self.filtered_rows.is_empty() || self.pagination.next_cursor.is_some() {
+            return false;
+        }
+        if self.all_rows.is_empty() {
+            return false;
+        }
+
+        self.filter_cwd = None;
+        self.cwd_fallback_applied = true;
+        self.apply_filter();
         true
     }
 
@@ -1156,7 +1171,9 @@ fn thread_list_params(
             ThreadSortKey::UpdatedAt => AppServerThreadSortKey::UpdatedAt,
         }),
         model_providers: match provider_filter {
-            ProviderFilter::Any => None,
+            // App-server interprets an omitted field as "current provider only".
+            // Send an explicit empty list when we truly want "all providers".
+            ProviderFilter::Any => Some(Vec::new()),
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
         },
         source_kinds: (!include_non_interactive)
@@ -1886,7 +1903,7 @@ mod tests {
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(Vec::new()));
         assert_eq!(
             params.source_kinds,
             Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
@@ -1905,7 +1922,7 @@ mod tests {
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(Vec::new()));
         assert_eq!(params.source_kinds, None);
     }
 
@@ -2929,5 +2946,36 @@ mod tests {
         assert_eq!(guard[1].provider_filter, ProviderFilter::Any);
         assert!(state.provider_fallback_applied);
         assert_eq!(state.provider_filter, ProviderFilter::Any);
+    }
+
+    #[test]
+    fn empty_cwd_filtered_rows_fall_back_to_all_directories() {
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            Arc::new(|_: PageLoadRequest| {}),
+            ProviderFilter::Any,
+            /*show_all*/ false,
+            /*filter_cwd*/ Some(PathBuf::from("/root/current")),
+            SessionPickerAction::Resume,
+        );
+        state.all_rows = vec![Row {
+            path: Some(PathBuf::from("/tmp/session.jsonl")),
+            preview: "other project".to_string(),
+            thread_id: None,
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: Some(PathBuf::from("/root/other")),
+            git_branch: None,
+        }];
+
+        state.apply_filter();
+        assert!(state.filtered_rows.is_empty());
+
+        assert!(state.maybe_fallback_to_all_directories_after_empty_results());
+        assert_eq!(state.filter_cwd, None);
+        assert!(state.cwd_fallback_applied);
+        assert_eq!(state.filtered_rows.len(), 1);
     }
 }

@@ -1326,7 +1326,7 @@ impl App {
                         provider_key.clone(),
                         "wire_api".to_string(),
                     ],
-                    value: value("responses"),
+                    value: value(provider_spec.wire_api),
                 },
                 ConfigEdit::SetPath {
                     segments: vec![

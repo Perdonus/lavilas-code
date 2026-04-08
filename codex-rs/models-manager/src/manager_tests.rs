@@ -343,9 +343,10 @@ async fn get_model_info_matches_provider_variant_suffixes() {
 
     let model_info = manager.get_model_info(&variant_slug, &config).await;
 
-    assert_eq!(model_info.slug, variant_slug);
+    assert_eq!(model_info.slug, "mistral-vibe-cli");
     assert_eq!(model_info.display_name, "Mistral Vibe");
     assert!(!model_info.used_fallback_model_metadata);
+    assert!(model_info.supports_parallel_tool_calls);
 }
 
 #[tokio::test]
@@ -389,7 +390,7 @@ async fn get_model_info_uses_compatibility_metadata_for_provider_style_slug() {
 
     let model_info = manager.get_model_info(&compatibility_slug, &config).await;
 
-    assert_eq!(model_info.slug, compatibility_slug);
+    assert_eq!(model_info.slug, "mistral-vibe-cli");
     assert_eq!(model_info.display_name, "Mistral Vibe CLI");
     assert!(model_info.supports_parallel_tool_calls);
     assert!(model_info.supports_search_tool);

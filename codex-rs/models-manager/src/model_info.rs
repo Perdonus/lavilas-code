@@ -20,6 +20,7 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 const COMPATIBILITY_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
+const MISTRAL_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
 const COMPATIBILITY_PROVIDER_HINTS: [&str; 11] = [
     "anthropic",
     "claude",
@@ -80,12 +81,21 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
 /// provider slugs so they do not fall into the user-visible fallback warning
 /// path when the provider model catalog is unavailable.
 pub fn compatibility_model_info_from_slug(slug: &str) -> Option<ModelInfo> {
-    let compatibility_base = compatibility_base_slug(slug)?;
-    let mut model = generic_model_info_from_slug(slug, /*used_fallback_model_metadata*/ false);
+    let normalized_slug =
+        canonicalize_provider_model_slug(slug).unwrap_or_else(|| slug.to_string());
+    let compatibility_base = compatibility_base_slug(normalized_slug.as_str())?;
+    let mut model = generic_model_info_from_slug(
+        normalized_slug.as_str(),
+        /*used_fallback_model_metadata*/ false,
+    );
     model.display_name = compatibility_display_name(compatibility_base);
-    model.supports_parallel_tool_calls = slug_has_tool_variant(slug);
-    model.supports_search_tool = slug_has_tool_variant(slug);
+    model.supports_parallel_tool_calls = slug_supports_tool_use(slug);
+    model.supports_search_tool = slug_supports_tool_use(slug);
     Some(model)
+}
+
+pub fn canonicalize_provider_model_slug(slug: &str) -> Option<String> {
+    canonicalize_mistral_variant_slug(slug)
 }
 
 fn generic_model_info_from_slug(slug: &str, used_fallback_model_metadata: bool) -> ModelInfo {
@@ -176,6 +186,38 @@ fn slug_has_tool_variant(slug: &str) -> bool {
     COMPATIBILITY_VARIANT_SUFFIXES[..2]
         .iter()
         .any(|suffix| slug.ends_with(suffix))
+}
+
+fn slug_supports_tool_use(slug: &str) -> bool {
+    slug_has_tool_variant(slug)
+        || mistral_vibe_cli_terminal_segment(slug)
+        || canonicalize_mistral_variant_slug(slug).is_some()
+}
+
+fn canonicalize_mistral_variant_slug(slug: &str) -> Option<String> {
+    let (prefix, terminal_segment) = match slug.rsplit_once('/') {
+        Some((prefix, terminal_segment)) => (Some(prefix), terminal_segment),
+        None => (None, slug),
+    };
+
+    let canonical_terminal = COMPATIBILITY_VARIANT_SUFFIXES
+        .iter()
+        .find_map(|suffix| {
+            let base = terminal_segment.strip_suffix(suffix)?;
+            base.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL)
+                .then_some(MISTRAL_VIBE_CLI_MODEL)
+        })?;
+
+    Some(match prefix {
+        Some(prefix) => format!("{prefix}/{canonical_terminal}"),
+        None => canonical_terminal.to_string(),
+    })
+}
+
+fn mistral_vibe_cli_terminal_segment(slug: &str) -> bool {
+    slug.rsplit('/')
+        .next()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL))
 }
 
 fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {

@@ -136,6 +136,21 @@ impl ToolRouter {
                             raw_arguments: arguments,
                         },
                     }))
+                } else if name == "tool_search" {
+                    let parsed_arguments: SearchToolCallParams =
+                        serde_json::from_str(&arguments).map_err(|err| {
+                            FunctionCallError::RespondToModel(format!(
+                                "failed to parse tool_search arguments: {err}"
+                            ))
+                        })?;
+                    Ok(Some(ToolCall {
+                        tool_name: name,
+                        tool_namespace: namespace,
+                        call_id,
+                        payload: ToolPayload::ToolSearch {
+                            arguments: parsed_arguments,
+                        },
+                    }))
                 } else {
                     Ok(Some(ToolCall {
                         tool_name: name,

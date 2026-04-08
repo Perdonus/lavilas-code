@@ -4,6 +4,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use serde::Deserialize;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
@@ -11,6 +12,11 @@ use super::build_enabled_tools;
 use super::handle_runtime_response;
 
 pub struct CodeModeExecuteHandler;
+
+#[derive(Deserialize)]
+struct CodeModeExecuteArgs {
+    input: String,
+}
 
 impl CodeModeExecuteHandler {
     async fn execute(
@@ -49,6 +55,20 @@ impl CodeModeExecuteHandler {
             .await
             .map_err(FunctionCallError::RespondToModel)
     }
+
+    fn parse_function_input(arguments: &str) -> Result<String, FunctionCallError> {
+        let args: CodeModeExecuteArgs = serde_json::from_str(arguments).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "{PUBLIC_TOOL_NAME} expects a JSON object with string field `input`: {err}"
+            ))
+        })?;
+        if args.input.trim().is_empty() {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
+            )));
+        }
+        Ok(args.input)
+    }
 }
 
 impl ToolHandler for CodeModeExecuteHandler {
@@ -59,7 +79,7 @@ impl ToolHandler for CodeModeExecuteHandler {
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Custom { .. })
+        matches!(payload, ToolPayload::Custom { .. } | ToolPayload::Function { .. })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -74,6 +94,10 @@ impl ToolHandler for CodeModeExecuteHandler {
 
         match payload {
             ToolPayload::Custom { input } if tool_name == PUBLIC_TOOL_NAME => {
+                self.execute(session, turn, call_id, input).await
+            }
+            ToolPayload::Function { arguments } if tool_name == PUBLIC_TOOL_NAME => {
+                let input = Self::parse_function_input(&arguments)?;
                 self.execute(session, turn, call_id, input).await
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
