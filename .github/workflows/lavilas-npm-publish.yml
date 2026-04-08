@@ -70,6 +70,9 @@ jobs:
           echo "${cargo_home}/bin" >> "$GITHUB_PATH"
           : > "${cargo_home}/config.toml"
 
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+
       - name: Verify installed Rust targets (unix)
         if: runner.os != 'Windows'
         shell: bash
