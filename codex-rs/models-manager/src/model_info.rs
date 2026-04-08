@@ -20,6 +20,7 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
+const COMPATIBILITY_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
 const MISTRAL_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
 const COMPATIBILITY_PROVIDER_HINTS: [&str; 11] = [
     "anthropic",
