@@ -73,7 +73,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
@@ -875,6 +874,7 @@ impl ModelClientSession {
         let input = prompt.get_formatted_input();
         let messages = build_chat_completions_messages(&prompt.base_instructions.text, &input)?;
         let tools = create_tools_json_for_chat_completions(&prompt.tools)?;
+        let has_tools = !tools.is_empty();
         let request_model =
             normalize_request_model_for_provider(&self.client.state.provider, &model_info.slug);
 
@@ -882,8 +882,8 @@ impl ModelClientSession {
             model: request_model.into_owned(),
             messages,
             tools,
-            tool_choice: (!tools.is_empty()).then_some("auto".to_string()),
-            parallel_tool_calls: (!tools.is_empty()).then_some(prompt.parallel_tool_calls),
+            tool_choice: has_tools.then_some("auto".to_string()),
+            parallel_tool_calls: has_tools.then_some(prompt.parallel_tool_calls),
             stream: false,
         })
     }
@@ -2427,17 +2427,19 @@ fn content_items_to_chat_text(content: &[ContentItem]) -> String {
     segments.join("\n")
 }
 
-fn shell_tool_params_from_local_shell_action(action: &LocalShellAction) -> ShellToolCallParams {
+fn shell_tool_params_from_local_shell_action(action: &LocalShellAction) -> JsonValue {
     match action {
-        LocalShellAction::Exec(exec) => ShellToolCallParams {
-            command: exec.command.clone(),
-            workdir: exec.working_directory.clone(),
-            timeout_ms: exec.timeout_ms,
-            sandbox_permissions: None,
-            prefix_rule: None,
-            additional_permissions: None,
-            justification: None,
-        },
+        LocalShellAction::Exec(exec) => {
+            let mut params = serde_json::Map::new();
+            params.insert("command".to_string(), json!(exec.command));
+            if let Some(workdir) = exec.working_directory.clone() {
+                params.insert("workdir".to_string(), json!(workdir));
+            }
+            if let Some(timeout_ms) = exec.timeout_ms {
+                params.insert("timeout_ms".to_string(), json!(timeout_ms));
+            }
+            JsonValue::Object(params)
+        }
     }
 }
 
