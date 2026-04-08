@@ -209,7 +209,7 @@ jobs:
           mkdir -p "$VENDOR_ROOT/vendor/${{ matrix.target_triple }}/codex"
           mkdir -p "$VENDOR_ROOT/vendor/${{ matrix.target_triple }}/path"
 
-          cp "${{ matrix.bin_path }}" "$VENDOR_ROOT/vendor/${{ matrix.target_triple }}/codex/codex"
+          cp "codex-rs/target/${{ matrix.rust_target }}/release/codex" "$VENDOR_ROOT/vendor/${{ matrix.target_triple }}/codex/codex"
           cp "$(command -v rg)" "$VENDOR_ROOT/vendor/${{ matrix.target_triple }}/path/rg"
 
           python3 codex-cli/scripts/build_npm_package.py \
@@ -228,7 +228,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path (Join-Path $vendorRoot 'vendor/${{ matrix.target_triple }}/codex') | Out-Null
           New-Item -ItemType Directory -Force -Path (Join-Path $vendorRoot 'vendor/${{ matrix.target_triple }}/path') | Out-Null
 
-          Copy-Item '${{ matrix.bin_path }}' (Join-Path $vendorRoot 'vendor/${{ matrix.target_triple }}/codex/codex.exe')
+          Copy-Item "codex-rs/target/${{ matrix.rust_target }}/release/codex.exe" (Join-Path $vendorRoot 'vendor/${{ matrix.target_triple }}/codex/codex.exe')
           Copy-Item (Get-Command rg.exe).Source (Join-Path $vendorRoot 'vendor/${{ matrix.target_triple }}/path/rg.exe')
 
           python codex-cli/scripts/build_npm_package.py `
