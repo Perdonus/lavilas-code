@@ -562,8 +562,8 @@ async fn lookup_latest_session_target_with_app_server(
 }
 
 fn latest_session_lookup_params(
-    is_remote: bool,
-    config: &Config,
+    _is_remote: bool,
+    _config: &Config,
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
 ) -> ThreadListParams {
@@ -571,11 +571,9 @@ fn latest_session_lookup_params(
         cursor: None,
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
-        model_providers: if is_remote {
-            None
-        } else {
-            Some(vec![config.model_provider_id.clone()])
-        },
+        // Empty list means "all providers" for app-server. Omitting the field
+        // would fall back to the currently active provider only.
+        model_providers: Some(Vec::new()),
         source_kinds: (!include_non_interactive)
             .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
@@ -1837,7 +1835,7 @@ mod tests {
             /*include_non_interactive*/ false,
         );
 
-        assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
+        assert_eq!(params.model_providers, Some(Vec::new()));
         assert_eq!(params.cwd, Some(cwd.to_string_lossy().to_string()));
         Ok(())
     }
@@ -1853,7 +1851,7 @@ mod tests {
             /*include_non_interactive*/ false,
         );
 
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(Vec::new()));
         assert_eq!(params.cwd, None);
         Ok(())
     }
@@ -1872,7 +1870,7 @@ mod tests {
             /*include_non_interactive*/ false,
         );
 
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(Vec::new()));
         assert_eq!(params.cwd.as_deref(), Some("repo/on/server"));
         Ok(())
     }

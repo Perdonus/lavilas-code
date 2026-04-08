@@ -5,6 +5,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::SearchToolCallParams;
 
 use super::ToolCall;
 use super::ToolCallSource;
@@ -158,6 +159,42 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
             assert_eq!(arguments, "{}");
         }
         other => panic!("expected function payload, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn build_tool_call_maps_function_tool_search_payload() -> anyhow::Result<()> {
+    let (session, _) = make_session_and_context().await;
+    let session = Arc::new(session);
+
+    let call = ToolRouter::build_tool_call(
+        &session,
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "tool_search".to_string(),
+            namespace: None,
+            arguments: r#"{"query":"mistral","limit":5}"#.to_string(),
+            call_id: "call-search".to_string(),
+        },
+    )
+    .await?
+    .expect("tool_search function call should produce a tool call");
+
+    assert_eq!(call.tool_name, "tool_search");
+    assert_eq!(call.call_id, "call-search");
+    match call.payload {
+        ToolPayload::ToolSearch { arguments } => {
+            assert_eq!(
+                arguments,
+                SearchToolCallParams {
+                    query: "mistral".to_string(),
+                    limit: Some(5),
+                }
+            );
+        }
+        other => panic!("expected tool_search payload, got {other:?}"),
     }
 
     Ok(())

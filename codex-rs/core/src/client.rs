@@ -69,20 +69,31 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_tools::ToolSpec;
 use codex_tools::create_tools_json_for_responses_api;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
+use http::Method;
 use http::StatusCode as HttpStatusCode;
 use reqwest::StatusCode;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value as JsonValue;
+use serde_json::json;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -100,6 +111,7 @@ use crate::client_common::ResponseStream;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::api_bridge::CoreAuthProvider;
+use codex_client::HttpTransport;
 use codex_api::api_bridge::map_api_error;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
@@ -132,24 +144,59 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 const MISTRAL_LEGACY_TOOL_MODEL_ALIAS: &str = "mistral-vibe-cli-with-tools";
 const MISTRAL_CANONICAL_TOOL_MODEL: &str = "mistral-vibe-cli";
+const MISTRAL_COMPATIBILITY_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
+
+fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
+    provider.name.eq_ignore_ascii_case("mistral")
+        || provider
+            .base_url
+            .as_deref()
+            .is_some_and(|base_url| base_url.contains("api.mistral.ai"))
+}
+
+fn provider_uses_openai_responses_api(provider: &ModelProviderInfo) -> bool {
+    provider.is_openai()
+        || provider.requires_openai_auth
+        || provider.base_url.as_deref().is_some_and(|base_url| {
+            base_url.contains("api.openai.com")
+                || codex_api::is_azure_responses_wire_base_url(&provider.name, Some(base_url))
+        })
+}
+
+fn effective_wire_api(provider: &ModelProviderInfo) -> WireApi {
+    match provider.wire_api {
+        WireApi::ChatCompletions => WireApi::ChatCompletions,
+        WireApi::Responses => {
+            if provider_uses_openai_responses_api(provider) {
+                WireApi::Responses
+            } else {
+                WireApi::ChatCompletions
+            }
+        }
+    }
+}
 
 fn normalize_request_model_for_provider<'a>(
     provider: &ModelProviderInfo,
     model: &'a str,
 ) -> Cow<'a, str> {
-    let uses_mistral_api = provider.name.eq_ignore_ascii_case("mistral")
-        || provider
-            .base_url
-            .as_deref()
-            .is_some_and(|base_url| base_url.contains("api.mistral.ai"));
-    if uses_mistral_api && model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL_ALIAS) {
-        Cow::Borrowed(MISTRAL_CANONICAL_TOOL_MODEL)
-    } else {
-        Cow::Borrowed(model)
+    if provider_uses_mistral_api(provider) {
+        if model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL_ALIAS) {
+            return Cow::Borrowed(MISTRAL_CANONICAL_TOOL_MODEL);
+        }
+        if MISTRAL_COMPATIBILITY_SUFFIXES
+            .iter()
+            .find_map(|suffix| model.strip_suffix(suffix))
+            .is_some_and(|base| base.eq_ignore_ascii_case(MISTRAL_CANONICAL_TOOL_MODEL))
+        {
+            return Cow::Borrowed(MISTRAL_CANONICAL_TOOL_MODEL);
+        }
     }
+
+    Cow::Borrowed(model)
 }
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
@@ -598,7 +645,8 @@ impl ModelClient {
     ///
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
     pub fn responses_websocket_enabled(&self) -> bool {
-        if !self.state.provider.supports_websockets
+        if matches!(effective_wire_api(&self.state.provider), WireApi::ChatCompletions)
+            || !self.state.provider.supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
             || (*CODEX_RS_SSE_FIXTURE).is_some()
         {
@@ -837,6 +885,27 @@ impl ModelClientSession {
             text,
         };
         Ok(request)
+    }
+
+    fn build_chat_completions_request(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+    ) -> Result<ChatCompletionsRequest> {
+        let input = prompt.get_formatted_input();
+        let messages = build_chat_completions_messages(&prompt.base_instructions.text, &input)?;
+        let tools = create_tools_json_for_chat_completions(&prompt.tools)?;
+        let request_model =
+            normalize_request_model_for_provider(&self.client.state.provider, &model_info.slug);
+
+        Ok(ChatCompletionsRequest {
+            model: request_model.into_owned(),
+            messages,
+            tools,
+            tool_choice: (!tools.is_empty()).then_some("auto".to_string()),
+            parallel_tool_calls: (!tools.is_empty()).then_some(prompt.parallel_tool_calls),
+            stream: false,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1173,6 +1242,82 @@ impl ModelClientSession {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(
+        name = "model_client.stream_chat_completions",
+        level = "info",
+        skip_all,
+        fields(
+            model = %model_info.slug,
+            wire_api = "chat_completions",
+            transport = "chat_completions_http",
+            http.method = "POST",
+            api.path = "chat/completions",
+            turn.has_metadata_header = turn_metadata_header.is_some()
+        )
+    )]
+    async fn stream_chat_completions(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        _effort: Option<ReasoningEffortConfig>,
+        _summary: ReasoningSummaryConfig,
+        _service_tier: Option<ServiceTier>,
+        turn_metadata_header: Option<&str>,
+    ) -> Result<ResponseStream> {
+        if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
+            warn!(path, "Streaming from fixture");
+            let stream = codex_api::stream_from_fixture(
+                path,
+                self.client.state.provider.stream_idle_timeout(),
+            )
+            .map_err(map_api_error)?;
+            let (stream, _last_request_rx) = map_response_stream(stream, session_telemetry.clone());
+            return Ok(stream);
+        }
+
+        let auth_manager = self.client.state.auth_manager.clone();
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(AuthManager::unauthorized_recovery);
+        loop {
+            let client_setup = self.client.current_client_setup().await?;
+            let request = self.build_chat_completions_request(prompt, model_info)?;
+            match execute_chat_completions_request(
+                &client_setup.api_provider,
+                &client_setup.api_auth,
+                &request,
+            )
+            .await
+            {
+                Ok(response) => {
+                    let events = chat_completions_response_to_events(response)?;
+                    let api_stream = futures::stream::iter(
+                        events
+                            .into_iter()
+                            .map(Ok::<ResponseEvent, ApiError>),
+                    );
+                    let (stream, _last_request_rx) =
+                        map_response_stream(api_stream, session_telemetry.clone());
+                    return Ok(stream);
+                }
+                Err(unauthorized_transport @ TransportError::Http { status, .. })
+                    if status == StatusCode::UNAUTHORIZED =>
+                {
+                    handle_unauthorized(
+                        unauthorized_transport,
+                        &mut auth_recovery,
+                        session_telemetry,
+                    )
+                    .await?;
+                    continue;
+                }
+                Err(err) => return Err(map_api_error(ApiError::Transport(err))),
+            }
+        }
+    }
+
     /// Streams a turn via the Responses API over WebSocket transport.
     #[allow(clippy::too_many_arguments)]
     #[instrument(
@@ -1392,9 +1537,8 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
-        let wire_api = self.client.state.provider.wire_api;
-        match wire_api {
-            WireApi::Responses | WireApi::ChatCompletions => {
+        match effective_wire_api(&self.client.state.provider) {
+            WireApi::Responses => {
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
@@ -1419,6 +1563,18 @@ impl ModelClientSession {
                 }
 
                 self.stream_responses_api(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    service_tier,
+                    turn_metadata_header,
+                )
+                .await
+            }
+            WireApi::ChatCompletions => {
+                self.stream_chat_completions(
                     prompt,
                     model_info,
                     session_telemetry,
@@ -1931,6 +2087,541 @@ impl WebsocketTelemetry for ApiTelemetry {
     ) {
         self.session_telemetry
             .record_websocket_event(result, duration);
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ChatCompletionsRequest {
+    model: String,
+    messages: Vec<ChatCompletionsMessage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parallel_tool_calls: Option<bool>,
+    stream: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChatCompletionsMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ChatCompletionToolCall>>,
+}
+
+impl ChatCompletionsMessage {
+    fn text(role: impl Into<String>, text: String) -> Self {
+        Self {
+            role: role.into(),
+            content: Some(JsonValue::String(text)),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    fn assistant_tool_call(name: String, call_id: String, arguments: String) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: Some(JsonValue::String(String::new())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![ChatCompletionToolCall {
+                id: Some(call_id),
+                kind: "function".to_string(),
+                function: ChatCompletionCalledFunction { name, arguments },
+            }]),
+        }
+    }
+
+    fn tool(name: Option<String>, call_id: String, content: String) -> Self {
+        Self {
+            role: "tool".to_string(),
+            content: Some(JsonValue::String(content)),
+            name,
+            tool_call_id: Some(call_id),
+            tool_calls: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChatCompletionToolCall {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(rename = "type")]
+    kind: String,
+    function: ChatCompletionCalledFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChatCompletionCalledFunction {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionsResponse {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    choices: Vec<ChatCompletionChoice>,
+    #[serde(default)]
+    usage: Option<ChatCompletionsUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionChoice {
+    message: ChatCompletionsMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionsUsage {
+    #[serde(default)]
+    prompt_tokens: Option<i64>,
+    #[serde(default)]
+    completion_tokens: Option<i64>,
+    #[serde(default)]
+    total_tokens: Option<i64>,
+}
+
+fn create_tools_json_for_chat_completions(
+    tools: &[ToolSpec],
+) -> std::result::Result<Vec<JsonValue>, serde_json::Error> {
+    let mut values = Vec::new();
+    for tool in tools {
+        if let Some(value) = chat_completions_tool_value(tool)? {
+            values.push(value);
+        }
+    }
+    Ok(values)
+}
+
+fn chat_completions_tool_value(
+    tool: &ToolSpec,
+) -> std::result::Result<Option<JsonValue>, serde_json::Error> {
+    match tool {
+        ToolSpec::Function(tool) => {
+            let parameters = serde_json::to_value(&tool.parameters)?;
+            Ok(Some(json!({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": parameters,
+                }
+            })))
+        }
+        ToolSpec::ToolSearch {
+            description,
+            parameters,
+            ..
+        } => {
+            let parameters = serde_json::to_value(parameters)?;
+            Ok(Some(json!({
+                "type": "function",
+                "function": {
+                    "name": "tool_search",
+                    "description": description,
+                    "parameters": parameters,
+                }
+            })))
+        }
+        ToolSpec::LocalShell {} => Ok(Some(json!({
+            "type": "function",
+            "function": {
+                "name": "local_shell",
+                "description": "Run a shell command on the user's machine using an argv array.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Command and argv segments to execute."
+                        },
+                        "workdir": {
+                            "type": "string",
+                            "description": "Optional working directory."
+                        },
+                        "timeout_ms": {
+                            "type": "integer",
+                            "description": "Maximum runtime in milliseconds."
+                        },
+                        "sandbox_permissions": {
+                            "type": "string",
+                            "enum": ["use_default", "require_escalated", "with_additional_permissions"],
+                            "description": "Optional sandbox override mode."
+                        },
+                        "prefix_rule": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Optional reusable safe command prefix."
+                        },
+                        "justification": {
+                            "type": "string",
+                            "description": "Optional short justification when elevated execution is needed."
+                        }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": false
+                }
+            }
+        }))),
+        ToolSpec::Freeform(tool) => Ok(Some(json!({
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": format!(
+                    "{}\n\nProvide the raw tool input in the `input` field exactly as plain text. Format type: {}. Syntax: {}. Definition: {}",
+                    tool.description,
+                    tool.format.r#type,
+                    tool.format.syntax,
+                    tool.format.definition,
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": "Raw tool input text."
+                        }
+                    },
+                    "required": ["input"],
+                    "additionalProperties": false
+                }
+            }
+        }))),
+        ToolSpec::ImageGeneration { .. } | ToolSpec::WebSearch { .. } => Ok(None),
+    }
+}
+
+fn build_chat_completions_messages(
+    instructions: &str,
+    input: &[ResponseItem],
+) -> Result<Vec<ChatCompletionsMessage>> {
+    let mut messages = Vec::new();
+    if !instructions.trim().is_empty() {
+        messages.push(ChatCompletionsMessage::text(
+            "system",
+            instructions.to_string(),
+        ));
+    }
+
+    let mut tool_names_by_call_id: HashMap<String, String> = HashMap::new();
+    for item in input {
+        match item {
+            ResponseItem::Message { role, content, .. } => {
+                let text = content_items_to_chat_text(content);
+                if !text.is_empty() {
+                    messages.push(ChatCompletionsMessage::text(role.clone(), text));
+                }
+            }
+            ResponseItem::FunctionCall {
+                name,
+                namespace,
+                arguments,
+                call_id,
+                ..
+            } => {
+                let tool_name = chat_completion_tool_name(name, namespace.as_deref());
+                tool_names_by_call_id.insert(call_id.clone(), tool_name.clone());
+                messages.push(ChatCompletionsMessage::assistant_tool_call(
+                    tool_name,
+                    call_id.clone(),
+                    arguments.clone(),
+                ));
+            }
+            ResponseItem::CustomToolCall {
+                name,
+                input,
+                call_id,
+                ..
+            } => {
+                tool_names_by_call_id.insert(call_id.clone(), name.clone());
+                messages.push(ChatCompletionsMessage::assistant_tool_call(
+                    name.clone(),
+                    call_id.clone(),
+                    serde_json::to_string(&json!({ "input": input }))?,
+                ));
+            }
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                execution,
+                arguments,
+                ..
+            } if execution == "client" => {
+                let tool_name = "tool_search".to_string();
+                tool_names_by_call_id.insert(call_id.clone(), tool_name.clone());
+                messages.push(ChatCompletionsMessage::assistant_tool_call(
+                    tool_name,
+                    call_id.clone(),
+                    serde_json::to_string(arguments)?,
+                ));
+            }
+            ResponseItem::LocalShellCall {
+                id,
+                call_id,
+                action,
+                ..
+            } => {
+                let Some(call_id) = call_id.clone().or_else(|| id.clone()) else {
+                    continue;
+                };
+                let tool_name = "local_shell".to_string();
+                let arguments = serde_json::to_string(&shell_tool_params_from_local_shell_action(action))?;
+                tool_names_by_call_id.insert(call_id.clone(), tool_name.clone());
+                messages.push(ChatCompletionsMessage::assistant_tool_call(
+                    tool_name,
+                    call_id,
+                    arguments,
+                ));
+            }
+            ResponseItem::FunctionCallOutput { call_id, output } => {
+                messages.push(ChatCompletionsMessage::tool(
+                    tool_names_by_call_id.get(call_id).cloned(),
+                    call_id.clone(),
+                    tool_output_to_chat_text(output),
+                ));
+            }
+            ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            } => {
+                messages.push(ChatCompletionsMessage::tool(
+                    name.clone().or_else(|| tool_names_by_call_id.get(call_id).cloned()),
+                    call_id.clone(),
+                    tool_output_to_chat_text(output),
+                ));
+            }
+            ResponseItem::ToolSearchOutput {
+                call_id: Some(call_id),
+                tools,
+                ..
+            } => {
+                messages.push(ChatCompletionsMessage::tool(
+                    tool_names_by_call_id
+                        .get(call_id)
+                        .cloned()
+                        .or_else(|| Some("tool_search".to_string())),
+                    call_id.clone(),
+                    serde_json::to_string(tools)
+                        .unwrap_or_else(|_| JsonValue::Array(tools.clone()).to_string()),
+                ));
+            }
+            ResponseItem::Reasoning { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::GhostSnapshot { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::Other => {}
+        }
+    }
+
+    Ok(messages)
+}
+
+fn content_items_to_chat_text(content: &[ContentItem]) -> String {
+    let mut segments = Vec::new();
+    for item in content {
+        match item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                if !text.is_empty() {
+                    segments.push(text.clone());
+                }
+            }
+            ContentItem::InputImage { .. } => segments
+                .push("[image attachment omitted during provider translation]".to_string()),
+        }
+    }
+    segments.join("\n")
+}
+
+fn shell_tool_params_from_local_shell_action(action: &LocalShellAction) -> ShellToolCallParams {
+    match action {
+        LocalShellAction::Exec(exec) => ShellToolCallParams {
+            command: exec.command.clone(),
+            workdir: exec.working_directory.clone(),
+            timeout_ms: exec.timeout_ms,
+            sandbox_permissions: None,
+            prefix_rule: None,
+            additional_permissions: None,
+            justification: None,
+        },
+    }
+}
+
+fn chat_completion_tool_name(name: &str, namespace: Option<&str>) -> String {
+    match namespace {
+        Some(namespace) if !name.starts_with(namespace) => format!("{namespace}{name}"),
+        _ => name.to_string(),
+    }
+}
+
+fn tool_output_to_chat_text(output: &FunctionCallOutputPayload) -> String {
+    output
+        .body
+        .to_text()
+        .unwrap_or_else(|| serde_json::to_string(output).unwrap_or_default())
+}
+
+async fn execute_chat_completions_request(
+    provider: &codex_api::Provider,
+    auth: &CoreAuthProvider,
+    request: &ChatCompletionsRequest,
+) -> std::result::Result<ChatCompletionsResponse, TransportError> {
+    let transport = ReqwestTransport::new(build_reqwest_client());
+    let mut http_request = provider.build_request(Method::POST, "chat/completions");
+    if let Some(token) = auth.token.as_ref()
+        && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
+    {
+        http_request.headers.insert(http::header::AUTHORIZATION, header);
+    }
+    if let Some(account_id) = auth.account_id.as_ref()
+        && let Ok(header) = HeaderValue::from_str(account_id)
+    {
+        http_request.headers.insert("ChatGPT-Account-ID", header);
+    }
+    http_request.body = Some(
+        serde_json::to_value(request)
+            .map_err(|err| TransportError::Build(err.to_string()))?,
+    );
+
+    let response = transport.execute(http_request).await?;
+    serde_json::from_slice::<ChatCompletionsResponse>(&response.body)
+        .map_err(|err| TransportError::Build(format!(
+            "failed to decode chat completions response: {err}"
+        )))
+}
+
+fn chat_completions_response_to_events(
+    response: ChatCompletionsResponse,
+) -> Result<Vec<ResponseEvent>> {
+    let ChatCompletionsResponse {
+        id,
+        model,
+        mut choices,
+        usage,
+    } = response;
+    let Some(choice) = choices.pop() else {
+        return Err(CodexErr::Stream(
+            "chat completions response did not include any choices".to_string(),
+            None,
+        ));
+    };
+
+    let mut events = vec![ResponseEvent::Created];
+    if let Some(model) = model {
+        events.push(ResponseEvent::ServerModel(model));
+    }
+
+    let ChatCompletionsMessage {
+        role,
+        content,
+        tool_calls,
+        ..
+    } = choice.message;
+
+    if let Some(text) = chat_message_content_to_text(content.as_ref())
+        && !text.is_empty()
+    {
+        let item = ResponseItem::Message {
+            id: None,
+            role,
+            content: vec![ContentItem::OutputText { text }],
+            end_turn: None,
+            phase: None,
+        };
+        events.push(ResponseEvent::OutputItemAdded(item.clone()));
+        events.push(ResponseEvent::OutputItemDone(item));
+    }
+
+    for (index, tool_call) in tool_calls.unwrap_or_default().into_iter().enumerate() {
+        let item = ResponseItem::FunctionCall {
+            id: None,
+            name: tool_call.function.name,
+            namespace: None,
+            arguments: tool_call.function.arguments,
+            call_id: tool_call
+                .id
+                .unwrap_or_else(|| format!("chatcmpl-tool-{index}")),
+        };
+        events.push(ResponseEvent::OutputItemDone(item));
+    }
+
+    events.push(ResponseEvent::Completed {
+        response_id: id.unwrap_or_default(),
+        token_usage: usage.map(chat_completions_usage_to_token_usage),
+    });
+    Ok(events)
+}
+
+fn chat_message_content_to_text(content: Option<&JsonValue>) -> Option<String> {
+    let value = content?;
+    match value {
+        JsonValue::Null => None,
+        JsonValue::String(text) => Some(text.clone()),
+        JsonValue::Array(items) => {
+            let parts = items
+                .iter()
+                .filter_map(chat_message_part_to_text)
+                .collect::<Vec<_>>();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        }
+        JsonValue::Object(_) => chat_message_part_to_text(value),
+        other => Some(other.to_string()),
+    }
+}
+
+fn chat_message_part_to_text(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::String(text) => Some(text.clone()),
+        JsonValue::Object(object) => {
+            if object.get("type").and_then(JsonValue::as_str) == Some("image_url") {
+                return Some("[image attachment omitted during provider translation]".to_string());
+            }
+            object
+                .get("text")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    object
+                        .get("text")
+                        .and_then(|text| text.get("value"))
+                        .and_then(JsonValue::as_str)
+                        .map(str::to_string)
+                })
+        }
+        _ => None,
+    }
+}
+
+fn chat_completions_usage_to_token_usage(usage: ChatCompletionsUsage) -> TokenUsage {
+    let input_tokens = usage.prompt_tokens.unwrap_or_default();
+    let output_tokens = usage.completion_tokens.unwrap_or_default();
+    TokenUsage {
+        input_tokens,
+        cached_input_tokens: 0,
+        output_tokens,
+        reasoning_output_tokens: 0,
+        total_tokens: usage
+            .total_tokens
+            .unwrap_or(input_tokens.saturating_add(output_tokens)),
     }
 }
 

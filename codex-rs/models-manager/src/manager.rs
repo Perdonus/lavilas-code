@@ -371,27 +371,43 @@ impl ModelsManager {
         None
     }
 
+    fn normalize_legacy_model_slug(model: &str) -> Option<String> {
+        model_info::canonicalize_provider_model_slug(model)
+    }
+
     fn construct_model_info_from_candidates(
         model: &str,
         candidates: &[ModelInfo],
         config: &ModelsManagerConfig,
     ) -> ModelInfo {
+        let canonical_model = Self::normalize_legacy_model_slug(model)
+            .unwrap_or_else(|| model.to_string());
+        let is_legacy_mistral_tool_alias = canonical_model != model;
+
         // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
         // retry for namespaced slugs like `custom/gpt-5.3-codex`.
-        let remote = Self::find_model_by_longest_prefix(model, candidates)
-            .or_else(|| Self::find_model_by_namespaced_suffix(model, candidates))
-            .or_else(|| Self::find_model_by_variant_suffix(model, candidates));
-        let model_info = if let Some(remote) = remote {
+        let remote = Self::find_model_by_longest_prefix(&canonical_model, candidates)
+            .or_else(|| Self::find_model_by_namespaced_suffix(&canonical_model, candidates))
+            .or_else(|| Self::find_model_by_variant_suffix(&canonical_model, candidates));
+        let mut model_info = if let Some(remote) = remote {
             ModelInfo {
-                slug: model.to_string(),
+                slug: canonical_model.clone(),
                 used_fallback_model_metadata: false,
                 ..remote
             }
-        } else if let Some(compatibility) = model_info::compatibility_model_info_from_slug(model) {
+        } else if let Some(compatibility) =
+            model_info::compatibility_model_info_from_slug(&canonical_model)
+        {
             compatibility
         } else {
-            model_info::model_info_from_slug(model)
+            model_info::model_info_from_slug(&canonical_model)
         };
+
+        if is_legacy_mistral_tool_alias {
+            model_info.supports_parallel_tool_calls = true;
+            model_info.supports_search_tool = true;
+        }
+
         model_info::with_config_overrides(model_info, config)
     }
 

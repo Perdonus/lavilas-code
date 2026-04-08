@@ -6,6 +6,8 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::effective_wire_api;
+use super::normalize_request_model_for_provider;
 use codex_api::api_bridge::CoreAuthProvider;
 use codex_app_server_protocol::AuthMode;
 use codex_model_provider_info::WireApi;
@@ -162,4 +164,34 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[test]
+fn effective_wire_api_keeps_openai_responses_provider() {
+    let provider = create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::Responses);
+
+    assert_eq!(effective_wire_api(&provider), WireApi::Responses);
+}
+
+#[test]
+fn effective_wire_api_upgrades_mistral_responses_provider_to_chat_completions() {
+    let provider =
+        create_oss_provider_with_base_url("https://api.mistral.ai/v1", WireApi::Responses);
+
+    assert_eq!(effective_wire_api(&provider), WireApi::ChatCompletions);
+}
+
+#[test]
+fn normalize_request_model_maps_legacy_mistral_tool_alias() {
+    let provider =
+        create_oss_provider_with_base_url("https://api.mistral.ai/v1", WireApi::Responses);
+
+    assert_eq!(
+        normalize_request_model_for_provider(&provider, "mistral-vibe-cli-with-tools").as_ref(),
+        "mistral-vibe-cli"
+    );
+    assert_eq!(
+        normalize_request_model_for_provider(&provider, "mistral-vibe-cli-fast").as_ref(),
+        "mistral-vibe-cli"
+    );
 }
