@@ -271,7 +271,6 @@ new file mode 100644
 +        "SIMDUTF_IMPLEMENTATION_WESTMERE=1",
 +    ],
 +)
-+
 diff --git a/orig/v8-14.6.202.11/bazel/highway.patch b/mod/v8-14.6.202.11/bazel/highway.patch
 new file mode 100644
 --- /dev/null
