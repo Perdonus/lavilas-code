@@ -20,23 +20,23 @@ importers:
   codex-cli:
     optionalDependencies:
       '@lavilas/codex-linux-arm64':
-        specifier: npm:@lavilas/codex@1.3.11-linux-arm64
-        version: '@lavilas/codex@1.3.11-linux-arm64'
+        specifier: npm:@lavilas/codex@1.3.12-linux-arm64
+        version: '@lavilas/codex@1.3.12-linux-arm64'
       '@lavilas/codex-linux-x64':
-        specifier: npm:@lavilas/codex@1.3.11-linux-x64
-        version: '@lavilas/codex@1.3.11-linux-x64'
+        specifier: npm:@lavilas/codex@1.3.12-linux-x64
+        version: '@lavilas/codex@1.3.12-linux-x64'
       '@lavilas/codex-darwin-arm64':
-        specifier: npm:@lavilas/codex@1.3.11-darwin-arm64
-        version: '@lavilas/codex@1.3.11-darwin-arm64'
+        specifier: npm:@lavilas/codex@1.3.12-darwin-arm64
+        version: '@lavilas/codex@1.3.12-darwin-arm64'
       '@lavilas/codex-darwin-x64':
-        specifier: npm:@lavilas/codex@1.3.11-darwin-x64
-        version: '@lavilas/codex@1.3.11-darwin-x64'
+        specifier: npm:@lavilas/codex@1.3.12-darwin-x64
+        version: '@lavilas/codex@1.3.12-darwin-x64'
       '@lavilas/codex-win32-arm64':
-        specifier: npm:@lavilas/codex@1.3.11-win32-arm64
-        version: '@lavilas/codex@1.3.11-win32-arm64'
+        specifier: npm:@lavilas/codex@1.3.12-win32-arm64
+        version: '@lavilas/codex@1.3.12-win32-arm64'
       '@lavilas/codex-win32-x64':
-        specifier: npm:@lavilas/codex@1.3.11-win32-x64
-        version: '@lavilas/codex@1.3.11-win32-x64'
+        specifier: npm:@lavilas/codex@1.3.12-win32-x64
+        version: '@lavilas/codex@1.3.12-win32-x64'
 
   codex-rs/responses-api-proxy/npm: {}
 
@@ -572,37 +572,37 @@ packages:
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
 
-  '@lavilas/codex@1.3.11-darwin-arm64':
+  '@lavilas/codex@1.3.12-darwin-arm64':
     resolution: {integrity: sha512-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
 
-  '@lavilas/codex@1.3.11-darwin-x64':
+  '@lavilas/codex@1.3.12-darwin-x64':
     resolution: {integrity: sha512-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [darwin]
 
-  '@lavilas/codex@1.3.11-linux-arm64':
+  '@lavilas/codex@1.3.12-linux-arm64':
     resolution: {integrity: sha512-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
 
-  '@lavilas/codex@1.3.11-linux-x64':
+  '@lavilas/codex@1.3.12-linux-x64':
     resolution: {integrity: sha512-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
 
-  '@lavilas/codex@1.3.11-win32-arm64':
+  '@lavilas/codex@1.3.12-win32-arm64':
     resolution: {integrity: sha512-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [win32]
 
-  '@lavilas/codex@1.3.11-win32-x64':
+  '@lavilas/codex@1.3.12-win32-x64':
     resolution: {integrity: sha512-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}
     engines: {node: '>=16'}
     cpu: [x64]
@@ -3093,22 +3093,22 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@lavilas/codex@1.3.11-darwin-arm64':
+  '@lavilas/codex@1.3.12-darwin-arm64':
     optional: true
 
-  '@lavilas/codex@1.3.11-darwin-x64':
+  '@lavilas/codex@1.3.12-darwin-x64':
     optional: true
 
-  '@lavilas/codex@1.3.11-linux-arm64':
+  '@lavilas/codex@1.3.12-linux-arm64':
     optional: true
 
-  '@lavilas/codex@1.3.11-linux-x64':
+  '@lavilas/codex@1.3.12-linux-x64':
     optional: true
 
-  '@lavilas/codex@1.3.11-win32-arm64':
+  '@lavilas/codex@1.3.12-win32-arm64':
     optional: true
 
-  '@lavilas/codex@1.3.11-win32-x64':
+  '@lavilas/codex@1.3.12-win32-x64':
     optional: true
 
   '@modelcontextprotocol/sdk@1.24.3(zod@3.25.76)':
