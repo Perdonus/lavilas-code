@@ -239,14 +239,14 @@ if [[ "${TARGET}" == "aarch64-unknown-linux-musl" ]]; then
   cxxflags="${cxxflags} -Wno-error=frame-larger-than"
 fi
 
+host_arch="$(uname -m)"
+
 echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
 echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
-echo "CC=${cc}" >> "$GITHUB_ENV"
 echo "TARGET_CC=${cc}" >> "$GITHUB_ENV"
 target_cc_var="CC_${TARGET}"
 target_cc_var="${target_cc_var//-/_}"
 echo "${target_cc_var}=${cc}" >> "$GITHUB_ENV"
-echo "CXX=${cxx}" >> "$GITHUB_ENV"
 echo "TARGET_CXX=${cxx}" >> "$GITHUB_ENV"
 target_cxx_var="CXX_${TARGET}"
 target_cxx_var="${target_cxx_var//-/_}"
@@ -256,8 +256,22 @@ cargo_linker_var="CARGO_TARGET_${TARGET^^}_LINKER"
 cargo_linker_var="${cargo_linker_var//-/_}"
 echo "${cargo_linker_var}=${musl_linker}" >> "$GITHUB_ENV"
 
-echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
-echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
+# Only override the generic host compiler variables when the host architecture
+# matches the target architecture. For true cross-compiles (for example,
+# building aarch64-unknown-linux-musl on an x86_64 runner), host tools such as
+# proc-macros still need the native compiler.
+if [[ "${host_arch}" == "${arch}" ]]; then
+  echo "CC=${cc}" >> "$GITHUB_ENV"
+  echo "CXX=${cxx}" >> "$GITHUB_ENV"
+  echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
+  echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
+else
+  echo "CC=" >> "$GITHUB_ENV"
+  echo "CXX=" >> "$GITHUB_ENV"
+  echo "CMAKE_C_COMPILER=" >> "$GITHUB_ENV"
+  echo "CMAKE_CXX_COMPILER=" >> "$GITHUB_ENV"
+fi
+
 echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"
 
 # Allow pkg-config resolution during cross-compilation.
