@@ -44,7 +44,7 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +
 +git_repository(
 +    name = "simdutf",
-+    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = glob([\n        "src/*.cpp",\n        "src/*/*.cpp",\n    ]),\n    hdrs = glob([\n        "include/**/*.h",\n        "src/**/*.h",\n    ]),\n    copts = [\n        "-std=c++20",\n    ],\n    includes = [\n        ".",\n        "include",\n        "src",\n    ],\n    strip_include_prefix = ".",\n    visibility = ["//visibility:public"],\n)\n',
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = ["simdutf.cpp"],\n    hdrs = glob([\n        "include/**/*.h",\n        "*.h",\n    ]),\n    includes = [\n        ".",\n        "include",\n    ],\n    visibility = ["//visibility:public"],\n)\n',
 +    commit = "06258b2c046d233fa53957cced61bc279fadfb41",
 +    remote = "https://github.com/simdutf/simdutf.git",
 +)
