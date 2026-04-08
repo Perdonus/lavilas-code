@@ -241,8 +241,12 @@ fi
 
 host_triple="$(rustc -vV | sed -n 's/^host: //p')"
 
-echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
-echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
+target_cflags_var="CFLAGS_${TARGET}"
+target_cflags_var="${target_cflags_var//-/_}"
+echo "${target_cflags_var}=${cflags}" >> "$GITHUB_ENV"
+target_cxxflags_var="CXXFLAGS_${TARGET}"
+target_cxxflags_var="${target_cxxflags_var//-/_}"
+echo "${target_cxxflags_var}=${cxxflags}" >> "$GITHUB_ENV"
 target_cc_var="CC_${TARGET}"
 target_cc_var="${target_cc_var//-/_}"
 echo "${target_cc_var}=${cc}" >> "$GITHUB_ENV"
@@ -260,11 +264,15 @@ echo "${cargo_linker_var}=${musl_linker}" >> "$GITHUB_ENV"
 # host tools such as proc-macros still need the native compiler and pkg-config
 # settings.
 if [[ "${host_triple}" == "${TARGET}" ]]; then
+  echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
+  echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
   echo "CC=${cc}" >> "$GITHUB_ENV"
   echo "CXX=${cxx}" >> "$GITHUB_ENV"
   echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
   echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
 else
+  echo "CFLAGS=" >> "$GITHUB_ENV"
+  echo "CXXFLAGS=" >> "$GITHUB_ENV"
   echo "CC=" >> "$GITHUB_ENV"
   echo "CXX=" >> "$GITHUB_ENV"
   echo "TARGET_CC=" >> "$GITHUB_ENV"
