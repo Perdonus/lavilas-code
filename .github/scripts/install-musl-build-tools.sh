@@ -239,15 +239,13 @@ if [[ "${TARGET}" == "aarch64-unknown-linux-musl" ]]; then
   cxxflags="${cxxflags} -Wno-error=frame-larger-than"
 fi
 
-host_arch="$(uname -m)"
+host_triple="$(rustc -vV | sed -n 's/^host: //p')"
 
 echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
 echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
-echo "TARGET_CC=${cc}" >> "$GITHUB_ENV"
 target_cc_var="CC_${TARGET}"
 target_cc_var="${target_cc_var//-/_}"
 echo "${target_cc_var}=${cc}" >> "$GITHUB_ENV"
-echo "TARGET_CXX=${cxx}" >> "$GITHUB_ENV"
 target_cxx_var="CXX_${TARGET}"
 target_cxx_var="${target_cxx_var//-/_}"
 echo "${target_cxx_var}=${cxx}" >> "$GITHUB_ENV"
@@ -256,11 +254,12 @@ cargo_linker_var="CARGO_TARGET_${TARGET^^}_LINKER"
 cargo_linker_var="${cargo_linker_var//-/_}"
 echo "${cargo_linker_var}=${musl_linker}" >> "$GITHUB_ENV"
 
-# Only override the generic host compiler variables when the host architecture
-# matches the target architecture. For true cross-compiles (for example,
-# building aarch64-unknown-linux-musl on an x86_64 runner), host tools such as
-# proc-macros still need the native compiler.
-if [[ "${host_arch}" == "${arch}" ]]; then
+# Only override the generic host compiler variables when the full Rust host
+# triple matches the target triple. For cross-compiles (for example, both
+# x86_64-unknown-linux-musl and aarch64-unknown-linux-musl on ubuntu-latest),
+# host tools such as proc-macros still need the native compiler and pkg-config
+# settings.
+if [[ "${host_triple}" == "${TARGET}" ]]; then
   echo "CC=${cc}" >> "$GITHUB_ENV"
   echo "CXX=${cxx}" >> "$GITHUB_ENV"
   echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
@@ -268,6 +267,8 @@ if [[ "${host_arch}" == "${arch}" ]]; then
 else
   echo "CC=" >> "$GITHUB_ENV"
   echo "CXX=" >> "$GITHUB_ENV"
+  echo "TARGET_CC=" >> "$GITHUB_ENV"
+  echo "TARGET_CXX=" >> "$GITHUB_ENV"
   echo "CMAKE_C_COMPILER=" >> "$GITHUB_ENV"
   echo "CMAKE_CXX_COMPILER=" >> "$GITHUB_ENV"
 fi
@@ -280,14 +281,24 @@ pkg_config_path="${libcap_pkgconfig_dir}"
 if [[ -n "${PKG_CONFIG_PATH:-}" ]]; then
   pkg_config_path="${pkg_config_path}:${PKG_CONFIG_PATH}"
 fi
-echo "PKG_CONFIG_PATH=${pkg_config_path}" >> "$GITHUB_ENV"
+if [[ "${host_triple}" == "${TARGET}" ]]; then
+  echo "PKG_CONFIG_PATH=${pkg_config_path}" >> "$GITHUB_ENV"
+else
+  echo "PKG_CONFIG_PATH=" >> "$GITHUB_ENV"
+fi
 pkg_config_path_var="PKG_CONFIG_PATH_${TARGET}"
 pkg_config_path_var="${pkg_config_path_var//-/_}"
 echo "${pkg_config_path_var}=${libcap_pkgconfig_dir}" >> "$GITHUB_ENV"
 
 if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
-  echo "PKG_CONFIG_SYSROOT_DIR=${sysroot}" >> "$GITHUB_ENV"
+  if [[ "${host_triple}" == "${TARGET}" ]]; then
+    echo "PKG_CONFIG_SYSROOT_DIR=${sysroot}" >> "$GITHUB_ENV"
+  else
+    echo "PKG_CONFIG_SYSROOT_DIR=" >> "$GITHUB_ENV"
+  fi
   pkg_config_sysroot_var="PKG_CONFIG_SYSROOT_DIR_${TARGET}"
   pkg_config_sysroot_var="${pkg_config_sysroot_var//-/_}"
   echo "${pkg_config_sysroot_var}=${sysroot}" >> "$GITHUB_ENV"
+elif [[ "${host_triple}" != "${TARGET}" ]]; then
+  echo "PKG_CONFIG_SYSROOT_DIR=" >> "$GITHUB_ENV"
 fi
