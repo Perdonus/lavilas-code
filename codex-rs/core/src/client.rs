@@ -2399,6 +2399,7 @@ fn build_chat_completions_messages(
             }
             ResponseItem::Reasoning { .. }
             | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::GhostSnapshot { .. }
