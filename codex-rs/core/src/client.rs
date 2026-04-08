@@ -150,33 +150,11 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
 
 fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
-    provider.name.eq_ignore_ascii_case("mistral")
-        || provider
-            .base_url
-            .as_deref()
-            .is_some_and(|base_url| base_url.contains("api.mistral.ai"))
-}
-
-fn provider_uses_openai_responses_api(provider: &ModelProviderInfo) -> bool {
-    provider.is_openai()
-        || provider.requires_openai_auth
-        || provider.base_url.as_deref().is_some_and(|base_url| {
-            base_url.contains("api.openai.com")
-                || codex_api::is_azure_responses_wire_base_url(&provider.name, Some(base_url))
-        })
+    provider.uses_mistral_api()
 }
 
 fn effective_wire_api(provider: &ModelProviderInfo) -> WireApi {
-    match provider.wire_api {
-        WireApi::ChatCompletions => WireApi::ChatCompletions,
-        WireApi::Responses => {
-            if provider_uses_openai_responses_api(provider) {
-                WireApi::Responses
-            } else {
-                WireApi::ChatCompletions
-            }
-        }
-    }
+    provider.effective_wire_api()
 }
 
 fn normalize_request_model_for_provider<'a>(

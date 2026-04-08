@@ -4509,7 +4509,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
             active_profile: Some("o3".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig::default(),
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4654,7 +4654,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt3".to_string()),
-        active_project: ProjectConfig { trust_level: None },
+        active_project: ProjectConfig::default(),
         windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
@@ -4797,7 +4797,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("zdr".to_string()),
-        active_project: ProjectConfig { trust_level: None },
+        active_project: ProjectConfig::default(),
         windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
@@ -4926,7 +4926,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt5".to_string()),
-        active_project: ProjectConfig { trust_level: None },
+        active_project: ProjectConfig::default(),
         windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
@@ -5237,6 +5237,7 @@ fn derive_sandbox_policy_falls_back_to_constraint_value_for_implicit_defaults() 
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                ..Default::default()
             },
         )])),
         ..Default::default()
@@ -5277,6 +5278,7 @@ fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallback() 
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                ..Default::default()
             },
         )])),
         ..Default::default()
@@ -5504,6 +5506,7 @@ fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Resul
                 test_path.to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Untrusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()

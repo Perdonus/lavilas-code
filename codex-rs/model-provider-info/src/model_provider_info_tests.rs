@@ -129,6 +129,26 @@ wire_api = "chat_completions"
 }
 
 #[test]
+fn mistral_base_url_wins_over_openai_name_for_effective_wire_api() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://api.mistral.ai/v1".to_string()));
+
+    assert_eq!(provider.effective_wire_api(), WireApi::ChatCompletions);
+}
+
+#[test]
+fn repair_legacy_compatibility_rewrites_stale_mistral_provider_state() {
+    let mut provider =
+        ModelProviderInfo::create_openai_provider(Some("https://api.mistral.ai/v1".to_string()));
+    provider.supports_websockets = true;
+
+    assert!(provider.repair_legacy_compatibility());
+    assert_eq!(provider.wire_api, WireApi::ChatCompletions);
+    assert!(!provider.requires_openai_auth);
+    assert!(!provider.supports_websockets);
+}
+
+#[test]
 fn test_deserialize_websocket_connect_timeout() {
     let provider_toml = r#"
 name = "OpenAI"

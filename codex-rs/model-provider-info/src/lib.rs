@@ -33,6 +33,7 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
+const MISTRAL_API_HOST: &str = "api.mistral.ai";
 const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
@@ -310,6 +311,62 @@ impl ModelProviderInfo {
 
     pub fn has_command_auth(&self) -> bool {
         self.auth.is_some()
+    }
+
+    pub fn uses_mistral_api(&self) -> bool {
+        self.name.eq_ignore_ascii_case("mistral")
+            || self
+                .base_url
+                .as_deref()
+                .is_some_and(|base_url| base_url.contains(MISTRAL_API_HOST))
+    }
+
+    pub fn uses_openai_responses_api(&self) -> bool {
+        if self.uses_mistral_api() {
+            return false;
+        }
+
+        self.is_openai()
+            || self.requires_openai_auth
+            || self.base_url.as_deref().is_some_and(|base_url| {
+                base_url.contains("api.openai.com")
+                    || codex_api::is_azure_responses_wire_base_url(&self.name, Some(base_url))
+            })
+    }
+
+    pub fn effective_wire_api(&self) -> WireApi {
+        match self.wire_api {
+            WireApi::ChatCompletions => WireApi::ChatCompletions,
+            WireApi::Responses => {
+                if self.uses_openai_responses_api() {
+                    WireApi::Responses
+                } else {
+                    WireApi::ChatCompletions
+                }
+            }
+        }
+    }
+
+    pub fn repair_legacy_compatibility(&mut self) -> bool {
+        if !self.uses_mistral_api() {
+            return false;
+        }
+
+        let mut changed = false;
+        if self.wire_api != WireApi::ChatCompletions {
+            self.wire_api = WireApi::ChatCompletions;
+            changed = true;
+        }
+        if self.requires_openai_auth {
+            self.requires_openai_auth = false;
+            changed = true;
+        }
+        if self.supports_websockets {
+            self.supports_websockets = false;
+            changed = true;
+        }
+
+        changed
     }
 }
 

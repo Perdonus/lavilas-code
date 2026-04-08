@@ -104,6 +104,7 @@ struct PageLoadRequest {
     cursor: Option<PageCursor>,
     request_token: usize,
     search_token: Option<usize>,
+    search_term: Option<String>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
 }
@@ -333,7 +334,7 @@ fn spawn_rollout_page_loader(
                 INTERACTIVE_SESSION_SOURCES.as_slice(),
                 default_provider.as_ref().map(std::slice::from_ref),
                 default_provider.as_deref().unwrap_or_default(),
-                /*search_term*/ None,
+                request.search_term.as_deref(),
             )
             .await
             .map(picker_page_from_rollout_page);
@@ -368,6 +369,7 @@ fn spawn_app_server_page_loader(
                 cwd_filter.as_deref(),
                 request.provider_filter,
                 request.sort_key,
+                request.search_term.as_deref(),
                 include_non_interactive,
             )
             .await;
@@ -481,6 +483,7 @@ async fn load_app_server_page(
     cwd_filter: Option<&Path>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
+    search_term: Option<&str>,
     include_non_interactive: bool,
 ) -> std::io::Result<PickerPage> {
     let response = app_server
@@ -489,6 +492,7 @@ async fn load_app_server_page(
             cwd_filter,
             provider_filter,
             sort_key,
+            search_term,
             include_non_interactive,
         ))
         .await
@@ -737,6 +741,7 @@ impl PickerState {
             cursor: None,
             request_token,
             search_token,
+            search_term: self.current_search_term(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
@@ -927,22 +932,7 @@ impl PickerState {
         }
         self.query = new_query;
         self.selected = 0;
-        self.apply_filter();
-        if self.query.is_empty() {
-            self.search_state = SearchState::Idle;
-            return;
-        }
-        if !self.filtered_rows.is_empty() {
-            self.search_state = SearchState::Idle;
-            return;
-        }
-        if self.pagination.reached_scan_cap || self.pagination.next_cursor.is_none() {
-            self.search_state = SearchState::Idle;
-            return;
-        }
-        let token = self.allocate_search_token();
-        self.search_state = SearchState::Active { token };
-        self.load_more_if_needed(LoadTrigger::Search { token });
+        self.start_initial_load();
     }
 
     fn continue_search_if_needed(&mut self) {
@@ -1054,9 +1044,19 @@ impl PickerState {
             cursor: Some(cursor),
             request_token,
             search_token,
+            search_term: self.current_search_term(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
+    }
+
+    fn current_search_term(&self) -> Option<String> {
+        let trimmed = self.query.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
     }
 
     fn allocate_request_token(&mut self) -> usize {
@@ -1161,6 +1161,7 @@ fn thread_list_params(
     cwd_filter: Option<&Path>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
+    search_term: Option<&str>,
     include_non_interactive: bool,
 ) -> ThreadListParams {
     ThreadListParams {
@@ -1180,7 +1181,7 @@ fn thread_list_params(
             .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
         cwd: cwd_filter.map(|cwd| cwd.to_string_lossy().to_string()),
-        search_term: None,
+        search_term: search_term.map(str::to_string),
     }
 }
 
@@ -1899,6 +1900,7 @@ mod tests {
             Some(Path::new("repo/on/server")),
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
+            /*search_term*/ None,
             /*include_non_interactive*/ false,
         );
 
@@ -1918,12 +1920,14 @@ mod tests {
             /*cwd_filter*/ None,
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
+            /*search_term*/ Some("session"),
             /*include_non_interactive*/ true,
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
         assert_eq!(params.model_providers, Some(Vec::new()));
         assert_eq!(params.source_kinds, None);
+        assert_eq!(params.search_term.as_deref(), Some("session"));
     }
 
     #[test]
@@ -2488,6 +2492,7 @@ mod tests {
         let guard = recorded_requests.lock().unwrap();
         assert_eq!(guard.len(), 1);
         assert!(guard[0].search_token.is_none());
+        assert_eq!(guard[0].search_term, None);
     }
 
     #[test]
@@ -2806,6 +2811,7 @@ mod tests {
         let first_request = {
             let guard = recorded_requests.lock().unwrap();
             assert_eq!(guard.len(), 1);
+            assert_eq!(guard[0].search_term.as_deref(), Some("target"));
             guard[0].clone()
         };
 
@@ -2861,6 +2867,7 @@ mod tests {
         let active_request = {
             let guard = recorded_requests.lock().unwrap();
             assert_eq!(guard.len(), 1);
+            assert_eq!(guard[0].search_term.as_deref(), Some("missing"));
             guard[0].clone()
         };
 

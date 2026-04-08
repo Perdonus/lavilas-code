@@ -49,6 +49,7 @@ async fn make_config_for_test(
                 project_path.to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(trust_level),
+                    ..Default::default()
                 },
             )])),
             project_root_markers,
@@ -80,6 +81,41 @@ async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<(
 
     let expected = AbsolutePathBuf::resolve_path_against_base("run-logs", cwd_path)?;
     assert_eq!(config.log_dir, expected.to_path_buf());
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_show_all_sessions_flag_is_loaded() -> std::io::Result<()> {
+    let codex_home = tempdir().expect("tempdir");
+    let project_dir = tempdir().expect("tempdir");
+    let project_path = project_dir.path().to_path_buf();
+
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        toml::to_string(&ConfigToml {
+            projects: Some(HashMap::from([(
+                project_path.to_string_lossy().to_string(),
+                ProjectConfig {
+                    show_all_sessions: Some(true),
+                    ..Default::default()
+                },
+            )])),
+            ..Default::default()
+        })
+        .expect("serialize config"),
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(project_path),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert!(config.active_project.show_all_sessions());
     Ok(())
 }
 

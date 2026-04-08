@@ -1153,6 +1153,9 @@ async fn run_ratatui_app(
         None
     };
 
+    let project_show_all_sessions = config.active_project.show_all_sessions();
+    let fork_show_all = cli.fork_show_all || project_show_all_sessions;
+    let resume_show_all = cli.resume_show_all || project_show_all_sessions;
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
     let session_selection = if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
@@ -1172,7 +1175,7 @@ async fn run_ratatui_app(
                     remote_mode,
                     remote_cwd_override.as_deref(),
                     &config,
-                    cli.fork_show_all,
+                    fork_show_all,
                 )
             } else {
                 None
@@ -1195,7 +1198,7 @@ async fn run_ratatui_app(
             match resume_picker::run_fork_picker_with_app_server(
                 &mut tui,
                 &config,
-                cli.fork_show_all,
+                fork_show_all,
                 app_server,
             )
             .await?
@@ -1232,7 +1235,7 @@ async fn run_ratatui_app(
             remote_mode,
             remote_cwd_override.as_deref(),
             &config,
-            cli.resume_show_all,
+            resume_show_all,
         );
         let Some(app_server) = session_lookup_app_server.as_mut() else {
             unreachable!("session lookup app server should be initialized for --resume --last");
@@ -1255,7 +1258,7 @@ async fn run_ratatui_app(
         match resume_picker::run_resume_picker_with_app_server(
             &mut tui,
             &config,
-            cli.resume_show_all,
+            resume_show_all,
             cli.resume_include_non_interactive,
             app_server,
         )
@@ -1924,7 +1927,7 @@ mod tests {
     async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.active_project = ProjectConfig { trust_level: None };
+        config.active_project = ProjectConfig::default();
         config.set_windows_sandbox_enabled(/*value*/ false);
 
         let should_show = should_show_trust_screen(&config);
@@ -2048,7 +2051,7 @@ mod tests {
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.active_project = ProjectConfig { trust_level: None };
+        config.active_project = ProjectConfig::default();
         config.set_windows_sandbox_enabled(/*value*/ true);
 
         let should_show = should_show_trust_screen(&config);
@@ -2072,6 +2075,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),
+            ..Default::default()
         };
 
         let should_show = should_show_trust_screen(&config);

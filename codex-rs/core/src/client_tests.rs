@@ -183,6 +183,15 @@ fn effective_wire_api_upgrades_mistral_responses_provider_to_chat_completions() 
 }
 
 #[test]
+fn effective_wire_api_prioritizes_mistral_base_url_over_legacy_openai_flags() {
+    let provider = codex_model_provider_info::ModelProviderInfo::create_openai_provider(Some(
+        "https://api.mistral.ai/v1".to_string(),
+    ));
+
+    assert_eq!(effective_wire_api(&provider), WireApi::ChatCompletions);
+}
+
+#[test]
 fn normalize_request_model_maps_legacy_mistral_tool_alias() {
     let provider =
         create_oss_provider_with_base_url("https://api.mistral.ai/v1", WireApi::Responses);

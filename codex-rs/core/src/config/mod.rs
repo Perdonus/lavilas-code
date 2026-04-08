@@ -1486,6 +1486,7 @@ impl From<ConfigToml> for UserSavedConfig {
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
+    pub show_all_sessions: Option<bool>,
 }
 
 impl ProjectConfig {
@@ -1495,6 +1496,10 @@ impl ProjectConfig {
 
     pub fn is_untrusted(&self) -> bool {
         matches!(self.trust_level, Some(TrustLevel::Untrusted))
+    }
+
+    pub fn show_all_sessions(&self) -> bool {
+        self.show_all_sessions.unwrap_or(false)
     }
 }
 
@@ -2168,7 +2173,7 @@ impl Config {
             .collect::<Result<Vec<_>, _>>()?;
         let active_project = cfg
             .get_active_project(resolved_cwd.as_path())
-            .unwrap_or(ProjectConfig { trust_level: None });
+            .unwrap_or_default();
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
             &cfg,
@@ -2328,6 +2333,9 @@ impl Config {
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
+        }
+        for provider in model_providers.values_mut() {
+            provider.repair_legacy_compatibility();
         }
 
         let model_provider_id = model_provider
