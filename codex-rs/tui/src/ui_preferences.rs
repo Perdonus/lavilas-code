@@ -114,7 +114,7 @@ pub(crate) fn repair_profile_model_catalog(path: &Path, provider: &str) -> io::R
     };
 
     let mut changed = false;
-    for entry in models {
+    for entry in &mut *models {
         let Some(model) = entry.as_object_mut() else {
             continue;
         };
