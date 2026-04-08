@@ -111,8 +111,8 @@ use crate::client_common::ResponseStream;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::api_bridge::CoreAuthProvider;
-use codex_client::HttpTransport;
 use codex_api::api_bridge::map_api_error;
+use codex_client::HttpTransport;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_login::api_bridge::auth_provider_from_auth;
@@ -645,8 +645,10 @@ impl ModelClient {
     ///
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
     pub fn responses_websocket_enabled(&self) -> bool {
-        if matches!(effective_wire_api(&self.state.provider), WireApi::ChatCompletions)
-            || !self.state.provider.supports_websockets
+        if matches!(
+            effective_wire_api(&self.state.provider),
+            WireApi::ChatCompletions
+        ) || !self.state.provider.supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
             || (*CODEX_RS_SSE_FIXTURE).is_some()
         {
@@ -1294,9 +1296,7 @@ impl ModelClientSession {
                 Ok(response) => {
                     let events = chat_completions_response_to_events(response)?;
                     let api_stream = futures::stream::iter(
-                        events
-                            .into_iter()
-                            .map(Ok::<ResponseEvent, ApiError>),
+                        events.into_iter().map(Ok::<ResponseEvent, ApiError>),
                     );
                     let (stream, _last_request_rx) =
                         map_response_stream(api_stream, session_telemetry.clone());
@@ -2378,12 +2378,11 @@ fn build_chat_completions_messages(
                     continue;
                 };
                 let tool_name = "local_shell".to_string();
-                let arguments = serde_json::to_string(&shell_tool_params_from_local_shell_action(action))?;
+                let arguments =
+                    serde_json::to_string(&shell_tool_params_from_local_shell_action(action))?;
                 tool_names_by_call_id.insert(call_id.clone(), tool_name.clone());
                 messages.push(ChatCompletionsMessage::assistant_tool_call(
-                    tool_name,
-                    call_id,
-                    arguments,
+                    tool_name, call_id, arguments,
                 ));
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
@@ -2399,7 +2398,8 @@ fn build_chat_completions_messages(
                 output,
             } => {
                 messages.push(ChatCompletionsMessage::tool(
-                    name.clone().or_else(|| tool_names_by_call_id.get(call_id).cloned()),
+                    name.clone()
+                        .or_else(|| tool_names_by_call_id.get(call_id).cloned()),
                     call_id.clone(),
                     tool_output_to_chat_text(output),
                 ));
@@ -2441,8 +2441,9 @@ fn content_items_to_chat_text(content: &[ContentItem]) -> String {
                     segments.push(text.clone());
                 }
             }
-            ContentItem::InputImage { .. } => segments
-                .push("[image attachment omitted during provider translation]".to_string()),
+            ContentItem::InputImage { .. } => {
+                segments.push("[image attachment omitted during provider translation]".to_string())
+            }
         }
     }
     segments.join("\n")
@@ -2486,23 +2487,22 @@ async fn execute_chat_completions_request(
     if let Some(token) = auth.token.as_ref()
         && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
     {
-        http_request.headers.insert(http::header::AUTHORIZATION, header);
+        http_request
+            .headers
+            .insert(http::header::AUTHORIZATION, header);
     }
     if let Some(account_id) = auth.account_id.as_ref()
         && let Ok(header) = HeaderValue::from_str(account_id)
     {
         http_request.headers.insert("ChatGPT-Account-ID", header);
     }
-    http_request.body = Some(
-        serde_json::to_value(request)
-            .map_err(|err| TransportError::Build(err.to_string()))?,
-    );
+    http_request.body =
+        Some(serde_json::to_value(request).map_err(|err| TransportError::Build(err.to_string()))?);
 
     let response = transport.execute(http_request).await?;
-    serde_json::from_slice::<ChatCompletionsResponse>(&response.body)
-        .map_err(|err| TransportError::Build(format!(
-            "failed to decode chat completions response: {err}"
-        )))
+    serde_json::from_slice::<ChatCompletionsResponse>(&response.body).map_err(|err| {
+        TransportError::Build(format!("failed to decode chat completions response: {err}"))
+    })
 }
 
 fn chat_completions_response_to_events(

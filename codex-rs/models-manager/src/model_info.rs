@@ -200,13 +200,11 @@ fn canonicalize_mistral_variant_slug(slug: &str) -> Option<String> {
         None => (None, slug),
     };
 
-    let canonical_terminal = COMPATIBILITY_VARIANT_SUFFIXES
-        .iter()
-        .find_map(|suffix| {
-            let base = terminal_segment.strip_suffix(suffix)?;
-            base.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL)
-                .then_some(MISTRAL_VIBE_CLI_MODEL)
-        })?;
+    let canonical_terminal = COMPATIBILITY_VARIANT_SUFFIXES.iter().find_map(|suffix| {
+        let base = terminal_segment.strip_suffix(suffix)?;
+        base.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL)
+            .then_some(MISTRAL_VIBE_CLI_MODEL)
+    })?;
 
     Some(match prefix {
         Some(prefix) => format!("{prefix}/{canonical_terminal}"),

@@ -168,7 +168,8 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
 
 #[test]
 fn effective_wire_api_keeps_openai_responses_provider() {
-    let provider = create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::Responses);
+    let provider =
+        create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::Responses);
 
     assert_eq!(effective_wire_api(&provider), WireApi::Responses);
 }

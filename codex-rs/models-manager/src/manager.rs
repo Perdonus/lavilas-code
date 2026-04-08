@@ -380,8 +380,8 @@ impl ModelsManager {
         candidates: &[ModelInfo],
         config: &ModelsManagerConfig,
     ) -> ModelInfo {
-        let canonical_model = Self::normalize_legacy_model_slug(model)
-            .unwrap_or_else(|| model.to_string());
+        let canonical_model =
+            Self::normalize_legacy_model_slug(model).unwrap_or_else(|| model.to_string());
         let is_legacy_mistral_tool_alias = canonical_model != model;
 
         // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
