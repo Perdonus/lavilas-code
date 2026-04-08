@@ -44,11 +44,10 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +
 +git_repository(
 +    name = "simdutf",
-+    build_file = "@v8//:bazel/BUILD.simdutf",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = glob([\n        "src/*.cpp",\n        "src/*/*.cpp",\n    ]),\n    hdrs = glob([\n        "include/**/*.h",\n        "src/**/*.h",\n    ]),\n    copts = [\n        "-std=c++20",\n    ],\n    includes = [\n        ".",\n        "include",\n        "src",\n    ],\n    strip_include_prefix = ".",\n    visibility = ["//visibility:public"],\n)\n',
 +    commit = "06258b2c046d233fa53957cced61bc279fadfb41",
 +    remote = "https://github.com/simdutf/simdutf.git",
 +)
-+
 +git_repository(
 +    name = "dragonbox",
 +    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "dragonbox",\n    hdrs = ["include/dragonbox/dragonbox.h"],\n    include_prefix = "third_party/dragonbox/src/include",\n    strip_include_prefix = "include",\n    visibility = ["//visibility:public"],\n)\n',
@@ -237,38 +236,6 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 -libcxx_repository(
 -    name = "libcxx",
 -)
-diff --git a/orig/v8-14.6.202.11/bazel/BUILD.simdutf b/mod/v8-14.6.202.11/bazel/BUILD.simdutf
-new file mode 100644
---- /dev/null
-+++ b/mod/v8-14.6.202.11/bazel/BUILD.simdutf
-@@ -0,0 +1,27 @@
-+load("@rules_cc//cc:defs.bzl", "cc_library")
-+
-+package(default_visibility = ["//visibility:public"])
-+
-+cc_library(
-+    name = "simdutf",
-+    srcs = glob([
-+        "src/*.cpp",
-+        "src/*/*.cpp",
-+    ]),
-+    hdrs = glob([
-+        "include/**/*.h",
-+        "src/**/*.h",
-+    ]),
-+    copts = [
-+        "-std=c++20",
-+    ],
-+    includes = [
-+        ".",
-+        "include",
-+        "src",
-+    ],
-+    defines = [
-+        "SIMDUTF_IMPLEMENTATION_FALLBACK=1",
-+        "SIMDUTF_IMPLEMENTATION_WESTMERE=1",
-+    ],
-+)
 diff --git a/orig/v8-14.6.202.11/bazel/highway.patch b/mod/v8-14.6.202.11/bazel/highway.patch
 new file mode 100644
 --- /dev/null
