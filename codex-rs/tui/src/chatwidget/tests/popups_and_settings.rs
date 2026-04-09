@@ -1743,6 +1743,64 @@ async fn single_reasoning_option_skips_selection() {
 }
 
 #[tokio::test]
+async fn all_models_picker_closes_when_reasoning_popup_is_skipped() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let preset = ModelPreset {
+        id: "provider-model-with-fallback-reasoning".to_string(),
+        model: "provider-model-with-fallback-reasoning".to_string(),
+        display_name: "provider-model-with-fallback-reasoning".to_string(),
+        description: String::new(),
+        default_reasoning_effort: ReasoningEffortConfig::High,
+        supported_reasoning_efforts: Vec::new(),
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+
+    chat.open_all_models_popup(vec![preset.clone()]);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(
+        chat.no_modal_or_popup_active(),
+        "expected all-models popup to close after selecting a model without reasoning choices"
+    );
+
+    let app_event = rx
+        .try_recv()
+        .expect("expected full model catalog selection to emit an app event");
+    let AppEvent::OpenReasoningPopup { model } = app_event else {
+        panic!("expected OpenReasoningPopup, got {app_event:?}");
+    };
+    assert_eq!(model.model, preset.model);
+
+    chat.open_reasoning_popup(model);
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateModel(model) if model == preset.model.as_str())),
+        "expected model to be applied automatically; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
+        "expected fallback reasoning effort to be applied automatically; events: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn feedback_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

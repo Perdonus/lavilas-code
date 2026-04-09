@@ -8,6 +8,7 @@ mod utf8_stream;
 
 pub use assistant_text::AssistantTextChunk;
 pub use assistant_text::AssistantTextStreamParser;
+pub use assistant_text::strip_hidden_reasoning_tags;
 pub use citation::CitationStreamParser;
 pub use citation::strip_citations;
 pub use inline_hidden_tag::ExtractedInlineTag;

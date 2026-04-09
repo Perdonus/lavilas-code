@@ -120,6 +120,7 @@ use codex_git_utils::current_branch_name;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::local_git_branches;
 use codex_git_utils::recent_commits;
+use codex_model_provider_info::WireApi;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -8667,7 +8668,7 @@ impl ChatWidget {
         }
 
         let provider_name = self.config.model_provider.name.as_str();
-        let reasoning_levels = preset.supported_reasoning_efforts.len();
+        let reasoning_levels = Self::reasoning_picker_choice_count(preset);
         let variant_hint = if Self::looks_like_tool_model(preset.model.as_str()) {
             if is_ru {
                 Some(format!(
@@ -8720,6 +8721,26 @@ impl ChatWidget {
         }
     }
 
+    fn reasoning_picker_choice_count(preset: &ModelPreset) -> usize {
+        let count = ReasoningEffortConfig::iter()
+            .filter(|effort| {
+                preset
+                    .supported_reasoning_efforts
+                    .iter()
+                    .any(|option| option.effort == *effort)
+            })
+            .count();
+        count.max(1)
+    }
+
+    fn current_provider_supports_reasoning_controls(&self) -> bool {
+        let provider = &self.config.model_provider;
+        match provider.effective_wire_api() {
+            WireApi::ChatCompletions => false,
+            WireApi::Responses => provider.uses_openai_responses_api(),
+        }
+    }
+
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
         let presets: Vec<ModelPreset> = presets
             .into_iter()
@@ -8738,6 +8759,7 @@ impl ChatWidget {
             .find(|preset| preset.model.as_str() == current_model)
             .map(Self::model_picker_label)
             .unwrap_or_else(|| self.model_display_name().to_string());
+        let provider_supports_reasoning = self.current_provider_supports_reasoning_controls();
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
             .into_iter()
@@ -8788,10 +8810,14 @@ impl ChatWidget {
             (
                 items,
                 all_presets,
-                if is_ru {
+                if is_ru && provider_supports_reasoning {
                     "Быстрые пресеты текущего провайдера. После выбора откроется бюджет размышлений.".to_string()
-                } else {
+                } else if is_ru {
+                    "Быстрые пресеты текущего провайдера. Выбор применяется сразу: этот провайдер сам управляет глубиной размышлений.".to_string()
+                } else if provider_supports_reasoning {
                     "Quick presets for the active provider. Choose one, then pick a reasoning budget.".to_string()
+                } else {
+                    "Quick presets for the active provider. Selection applies immediately because this provider manages reasoning internally.".to_string()
                 },
             )
         } else {
@@ -8872,14 +8898,20 @@ impl ChatWidget {
             })];
 
             let is_current = !items.iter().any(|item| item.is_current);
-            let description = Some(if is_ru {
+            let description = Some(if is_ru && provider_supports_reasoning {
                 format!(
                     "Открыть весь каталог и вручную подобрать модель и режим размышлений. Сейчас активна: {current_label}"
                 )
-            } else {
+            } else if is_ru {
+                format!(
+                    "Открыть весь каталог и вручную выбрать модель. Сейчас активна: {current_label}"
+                )
+            } else if provider_supports_reasoning {
                 format!(
                     "Open the full model catalog and choose a reasoning budget. Current: {current_label}"
                 )
+            } else {
+                format!("Open the full model catalog and choose a model. Current: {current_label}")
             });
 
             items.push(SelectionItem {
@@ -9136,7 +9168,7 @@ impl ChatWidget {
             let description = self.model_preset_description(&preset);
             let item_label = Self::model_picker_label(&preset);
             let is_current = preset.model.as_str() == self.current_model();
-            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            let single_supported_effort = Self::reasoning_picker_choice_count(&preset) <= 1;
             let search_value = description.as_ref().map_or_else(
                 || format!("{} {}", item_label, preset.model),
                 |desc| format!("{} {} {}", item_label, preset.model, desc),
@@ -9167,6 +9199,18 @@ impl ChatWidget {
             } else {
                 "Full model catalog. For manual selection, use a provider profile or update the configured model."
                     .to_string()
+            }
+        } else if !self.current_provider_supports_reasoning_controls() {
+            if is_ru {
+                format!(
+                    "Провайдер: {} ({}). Выберите модель: этот провайдер не поддерживает отдельный выбор бюджета размышлений.",
+                    self.config.model_provider.name, self.config.model_provider_id
+                )
+            } else {
+                format!(
+                    "Provider: {} ({}). Choose a model. This provider does not expose a separate reasoning budget picker.",
+                    self.config.model_provider.name, self.config.model_provider_id
+                )
             }
         } else if is_ru {
             format!(

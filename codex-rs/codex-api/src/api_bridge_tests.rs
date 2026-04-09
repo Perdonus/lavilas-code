@@ -132,6 +132,32 @@ fn map_api_error_extracts_identity_auth_details_from_headers() {
 }
 
 #[test]
+fn map_api_error_preserves_generic_provider_429_as_unexpected_status() {
+    let mut headers = HeaderMap::new();
+    headers.insert(REQUEST_ID_HEADER, http::HeaderValue::from_static("req-429"));
+    let body = serde_json::json!({
+        "error": {
+            "message": "Slow down"
+        }
+    })
+    .to_string();
+
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::TOO_MANY_REQUESTS,
+        url: Some("https://api.mistral.ai/v1/chat/completions".to_string()),
+        headers: Some(headers),
+        body: Some(body),
+    }));
+
+    let CodexErr::UnexpectedStatus(err) = err else {
+        panic!("expected CodexErr::UnexpectedStatus, got {err:?}");
+    };
+    assert_eq!(err.status, http::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(err.request_id.as_deref(), Some("req-429"));
+    assert_eq!(err.body, r#"{"error":{"message":"Slow down"}}"#);
+}
+
+#[test]
 fn core_auth_provider_reports_when_auth_header_will_attach() {
     let auth = CoreAuthProvider {
         token: Some("access-token".to_string()),

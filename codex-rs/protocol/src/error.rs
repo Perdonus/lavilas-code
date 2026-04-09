@@ -191,9 +191,9 @@ impl CodexErr {
             | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::UsageLimitReached(_)
             | CodexErr::ServerOverloaded => false,
+            CodexErr::UnexpectedStatus(err) => err.status != StatusCode::TOO_MANY_REQUESTS,
             CodexErr::Stream(..)
             | CodexErr::Timeout
-            | CodexErr::UnexpectedStatus(_)
             | CodexErr::ResponseStreamFailed(_)
             | CodexErr::ConnectionFailed(_)
             | CodexErr::InternalServerError

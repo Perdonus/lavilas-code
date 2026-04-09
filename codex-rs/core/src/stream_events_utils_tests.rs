@@ -94,6 +94,17 @@ fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() 
 }
 
 #[test]
+fn last_assistant_message_from_item_strips_hidden_reasoning_tags() {
+    let item =
+        assistant_output_text("before<thought>hidden</thought><think>also hidden</think>after");
+
+    let message = last_assistant_message_from_item(&item, /*plan_mode*/ false)
+        .expect("assistant text should remain after stripping hidden reasoning");
+
+    assert_eq!(message, "beforeafter");
+}
+
+#[test]
 fn completed_item_defers_mailbox_delivery_for_unknown_phase_messages() {
     let item = assistant_output_text("final answer");
 

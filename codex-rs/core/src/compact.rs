@@ -169,6 +169,11 @@ async fn run_compact_task_inner(
                 return Err(e);
             }
             Err(e) => {
+                if !e.is_retryable() {
+                    let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                    sess.send_event(&turn_context, event).await;
+                    return Err(e);
+                }
                 if retries < max_retries {
                     retries += 1;
                     let delay = backoff(retries);

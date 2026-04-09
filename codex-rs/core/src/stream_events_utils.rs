@@ -8,6 +8,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
+use codex_utils_stream_parser::strip_hidden_reasoning_tags;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -64,10 +65,11 @@ pub(crate) fn image_generation_artifact_path(
 
 fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
     let (without_citations, _) = strip_citations(text);
+    let without_hidden_reasoning = strip_hidden_reasoning_tags(&without_citations);
     if plan_mode {
-        strip_proposed_plan_blocks(&without_citations)
+        strip_proposed_plan_blocks(&without_hidden_reasoning)
     } else {
-        without_citations
+        without_hidden_reasoning
     }
 }
 
@@ -79,10 +81,11 @@ fn strip_hidden_assistant_markup_and_parse_memory_citation(
     Option<codex_protocol::memory_citation::MemoryCitation>,
 ) {
     let (without_citations, citations) = strip_citations(text);
+    let without_hidden_reasoning = strip_hidden_reasoning_tags(&without_citations);
     let visible_text = if plan_mode {
-        strip_proposed_plan_blocks(&without_citations)
+        strip_proposed_plan_blocks(&without_hidden_reasoning)
     } else {
-        without_citations
+        without_hidden_reasoning
     };
     (visible_text, parse_memory_citation(citations))
 }

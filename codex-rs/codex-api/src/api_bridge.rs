@@ -88,23 +88,9 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                         }
                     }
 
-                    CodexErr::RetryLimit(RetryLimitReachedError {
-                        status,
-                        request_id: extract_request_tracking_id(headers.as_ref()),
-                    })
+                    unexpected_http_status_error(status, url, headers.as_ref(), body_text)
                 } else {
-                    CodexErr::UnexpectedStatus(UnexpectedResponseError {
-                        status,
-                        body: body_text,
-                        url,
-                        cf_ray: extract_header(headers.as_ref(), CF_RAY_HEADER),
-                        request_id: extract_request_id(headers.as_ref()),
-                        identity_authorization_error: extract_header(
-                            headers.as_ref(),
-                            X_OPENAI_AUTHORIZATION_ERROR_HEADER,
-                        ),
-                        identity_error_code: extract_x_error_json_code(headers.as_ref()),
-                    })
+                    unexpected_http_status_error(status, url, headers.as_ref(), body_text)
                 }
             }
             TransportError::RetryLimit => CodexErr::RetryLimit(RetryLimitReachedError {
@@ -127,13 +113,26 @@ const CF_RAY_HEADER: &str = "cf-ray";
 const X_OPENAI_AUTHORIZATION_ERROR_HEADER: &str = "x-openai-authorization-error";
 const X_ERROR_JSON_HEADER: &str = "x-error-json";
 
+fn unexpected_http_status_error(
+    status: http::StatusCode,
+    url: Option<String>,
+    headers: Option<&HeaderMap>,
+    body: String,
+) -> CodexErr {
+    CodexErr::UnexpectedStatus(UnexpectedResponseError {
+        status,
+        body,
+        url,
+        cf_ray: extract_header(headers, CF_RAY_HEADER),
+        request_id: extract_request_id(headers),
+        identity_authorization_error: extract_header(headers, X_OPENAI_AUTHORIZATION_ERROR_HEADER),
+        identity_error_code: extract_x_error_json_code(headers),
+    })
+}
+
 #[cfg(test)]
 #[path = "api_bridge_tests.rs"]
 mod tests;
-
-fn extract_request_tracking_id(headers: Option<&HeaderMap>) -> Option<String> {
-    extract_request_id(headers).or_else(|| extract_header(headers, CF_RAY_HEADER))
-}
 
 fn extract_request_id(headers: Option<&HeaderMap>) -> Option<String> {
     extract_header(headers, REQUEST_ID_HEADER)
