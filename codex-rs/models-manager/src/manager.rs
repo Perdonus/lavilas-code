@@ -29,6 +29,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::fmt;
 use std::path::PathBuf;
@@ -45,6 +46,197 @@ const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
+const PROVIDER_MODEL_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
+const MISTRAL_PROFILE_ALIAS: &str = "mistral-vibe-cli";
+const MISTRAL_CANONICAL_MODEL: &str = "mistral-large-latest";
+const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleModelsEnvelope {
+    #[serde(default)]
+    data: Vec<OpenAiCompatibleModelEntry>,
+    #[serde(default)]
+    models: Vec<OpenAiCompatibleModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OpenAiCompatibleModelEntry {
+    String(String),
+    Object(OpenAiCompatibleModelObject),
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OpenAiCompatibleModelObject {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+fn candidate_model_slug_matches(requested_slug: &str, candidate_slug: &str) -> bool {
+    if candidate_slug.eq_ignore_ascii_case(requested_slug) {
+        return true;
+    }
+    if requested_slug.starts_with(candidate_slug) {
+        return true;
+    }
+
+    let requested_tail = requested_slug.rsplit('/').next().unwrap_or(requested_slug);
+    let candidate_tail = candidate_slug.rsplit('/').next().unwrap_or(candidate_slug);
+    if candidate_tail.eq_ignore_ascii_case(requested_tail) {
+        return true;
+    }
+    if requested_tail.starts_with(candidate_tail) {
+        return true;
+    }
+
+    PROVIDER_MODEL_VARIANT_SUFFIXES.iter().any(|suffix| {
+        requested_tail
+            .strip_suffix(suffix)
+            .is_some_and(|base| !base.is_empty() && candidate_tail.eq_ignore_ascii_case(base))
+    })
+}
+
+fn find_bundled_provider_model_metadata(
+    requested_slug: &str,
+    bundled_models: &[ModelInfo],
+) -> Option<ModelInfo> {
+    bundled_models
+        .iter()
+        .filter(|candidate| candidate_model_slug_matches(requested_slug, candidate.slug.as_str()))
+        .max_by_key(|candidate| candidate.slug.len())
+        .cloned()
+}
+
+fn collect_openai_compatible_model_slugs(
+    entries: impl IntoIterator<Item = OpenAiCompatibleModelEntry>,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut models = Vec::new();
+
+    for entry in entries {
+        let slug = match entry {
+            OpenAiCompatibleModelEntry::String(value) => Some(value),
+            OpenAiCompatibleModelEntry::Object(value) => {
+                value.id.or(value.slug).or(value.model).or(value.name)
+            }
+        };
+        let Some(slug) = slug.map(|value| value.trim().to_string()) else {
+            continue;
+        };
+        if slug.is_empty() || !seen.insert(slug.clone()) {
+            continue;
+        }
+        models.push(slug);
+    }
+
+    models
+}
+
+fn fallback_provider_model_info(slug: &str) -> ModelInfo {
+    let mut model = model_info::compatibility_model_info_from_slug(slug)
+        .unwrap_or_else(|| model_info::model_info_from_slug(slug));
+    model.slug = slug.to_string();
+    if model.display_name.trim().is_empty() || model.display_name == model.slug {
+        model.display_name = slug.to_string();
+    }
+    model.visibility = codex_protocol::openai_models::ModelVisibility::List;
+    model.supported_in_api = true;
+    if model.default_reasoning_level.is_none()
+        || model.default_reasoning_level
+            == Some(codex_protocol::openai_models::ReasoningEffort::None)
+    {
+        model.default_reasoning_level =
+            Some(codex_protocol::openai_models::ReasoningEffort::Medium);
+    }
+    model
+}
+
+fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
+    provider.name.eq_ignore_ascii_case("mistral")
+        || provider
+            .base_url
+            .as_deref()
+            .is_some_and(|base_url| base_url.contains("api.mistral.ai"))
+}
+
+fn normalize_mistral_provider_catalog_slug(requested_slug: &str) -> Option<(String, String)> {
+    let requested_slug = requested_slug.trim();
+    if requested_slug.is_empty() {
+        return None;
+    }
+
+    if requested_slug.eq_ignore_ascii_case(MISTRAL_CANONICAL_MODEL)
+        || requested_slug.eq_ignore_ascii_case(MISTRAL_PROFILE_ALIAS)
+        || requested_slug.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL)
+    {
+        return Some((
+            MISTRAL_PROFILE_ALIAS.to_string(),
+            MISTRAL_CANONICAL_MODEL.to_string(),
+        ));
+    }
+
+    PROVIDER_MODEL_VARIANT_SUFFIXES
+        .iter()
+        .find_map(|suffix| requested_slug.strip_suffix(suffix))
+        .and_then(|base| {
+            (base.eq_ignore_ascii_case(MISTRAL_CANONICAL_MODEL)
+                || base.eq_ignore_ascii_case(MISTRAL_PROFILE_ALIAS))
+            .then(|| {
+                (
+                    MISTRAL_PROFILE_ALIAS.to_string(),
+                    MISTRAL_CANONICAL_MODEL.to_string(),
+                )
+            })
+        })
+}
+
+fn enrich_provider_catalog_model(
+    provider: &ModelProviderInfo,
+    requested_slug: &str,
+    index: usize,
+    bundled_models: &[ModelInfo],
+) -> ModelInfo {
+    let (presented_slug, metadata_slug) = if provider_uses_mistral_api(provider) {
+        normalize_mistral_provider_catalog_slug(requested_slug).unwrap_or_else(|| {
+            let canonical_slug = model_info::canonicalize_provider_model_slug(requested_slug)
+                .unwrap_or_else(|| requested_slug.to_string());
+            (canonical_slug.clone(), canonical_slug)
+        })
+    } else {
+        let canonical_slug = model_info::canonicalize_provider_model_slug(requested_slug)
+            .unwrap_or_else(|| requested_slug.to_string());
+        (canonical_slug.clone(), canonical_slug)
+    };
+    let display_name_override = (presented_slug != metadata_slug).then_some(presented_slug.clone());
+    let mut model = find_bundled_provider_model_metadata(metadata_slug.as_str(), bundled_models)
+        .map(|candidate| ModelInfo {
+            slug: presented_slug.clone(),
+            ..candidate
+        })
+        .unwrap_or_else(|| {
+            let mut model = fallback_provider_model_info(metadata_slug.as_str());
+            model.slug = presented_slug.clone();
+            model
+        });
+
+    model.slug = presented_slug.clone();
+    if let Some(display_name) = display_name_override {
+        model.display_name = display_name;
+    } else if model.display_name.trim().is_empty() || model.display_name == metadata_slug {
+        model.display_name = presented_slug;
+    }
+    model.visibility = codex_protocol::openai_models::ModelVisibility::List;
+    model.supported_in_api = true;
+    model.priority = i32::try_from(index).unwrap_or(i32::MAX);
+    model
+}
+
 #[derive(Clone)]
 struct ModelsRequestTelemetry {
     auth_mode: Option<String>,
@@ -534,13 +726,14 @@ impl ModelsManager {
             .with_telemetry(Some(request_telemetry));
 
         let client_version = crate::client_version_to_whole();
-        let (models, etag) = timeout(
+        let (body, etag) = timeout(
             MODELS_REFRESH_TIMEOUT,
-            client.list_models(&client_version, HeaderMap::new()),
+            client.list_models_raw(&client_version, HeaderMap::new()),
         )
         .await
         .map_err(|_| CodexErr::Timeout)?
         .map_err(map_api_error)?;
+        let models = Self::parse_remote_models_response(&provider, &body)?;
 
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
@@ -548,6 +741,48 @@ impl ModelsManager {
             .persist_cache(&models, etag, client_version)
             .await;
         Ok(())
+    }
+
+    fn parse_remote_models_response(
+        provider: &ModelProviderInfo,
+        body: &[u8],
+    ) -> CoreResult<Vec<ModelInfo>> {
+        if let Ok(ModelsResponse { models }) = serde_json::from_slice::<ModelsResponse>(body) {
+            return Ok(models);
+        }
+
+        let slugs = if let Ok(envelope) =
+            serde_json::from_slice::<OpenAiCompatibleModelsEnvelope>(body)
+        {
+            let entries = if !envelope.data.is_empty() {
+                envelope.data
+            } else {
+                envelope.models
+            };
+            collect_openai_compatible_model_slugs(entries)
+        } else if let Ok(entries) = serde_json::from_slice::<Vec<OpenAiCompatibleModelEntry>>(body)
+        {
+            collect_openai_compatible_model_slugs(entries)
+        } else {
+            return Err(CodexErr::Stream(
+                format!(
+                    "failed to decode models response: provider /models response is not compatible with Codex or OpenAI model listings; body: {}",
+                    String::from_utf8_lossy(body)
+                ),
+                None,
+            ));
+        };
+
+        let bundled_models = crate::bundled_models_response()
+            .map(|response| response.models)
+            .unwrap_or_default();
+        Ok(slugs
+            .into_iter()
+            .enumerate()
+            .map(|(index, slug)| {
+                enrich_provider_catalog_model(provider, slug.as_str(), index, &bundled_models)
+            })
+            .collect())
     }
 
     async fn get_etag(&self) -> Option<String> {

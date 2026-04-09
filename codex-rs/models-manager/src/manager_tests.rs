@@ -9,6 +9,7 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::mount_models_once;
 use http::HeaderMap;
@@ -103,6 +104,14 @@ fn provider_for(base_url: String) -> ModelProviderInfo {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+    }
+}
+
+fn provider_for_name(base_url: String, name: &str, wire_api: WireApi) -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: name.into(),
+        wire_api,
+        ..provider_for(base_url)
     }
 }
 
@@ -517,6 +526,89 @@ async fn refresh_available_models_uses_provider_auth_token() {
         .expect("refresh succeeds");
 
     assert_models_contain(&manager.get_remote_models().await, &remote_models);
+}
+
+#[tokio::test]
+async fn refresh_available_models_accepts_openai_compatible_catalog() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_raw(
+                    r#"{"object":"list","data":[{"id":"gpt-5.4"},{"id":"gpt-5.4"}]}"#,
+                    "application/json",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("unused"));
+    let provider = provider_for_name(server.uri(), "OpenAI API", WireApi::Responses);
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        provider,
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("refresh succeeds");
+
+    let available = manager.list_models(RefreshStrategy::Offline).await;
+    let gpt = available
+        .iter()
+        .find(|model| model.model == "gpt-5.4")
+        .expect("gpt-5.4 should be listed");
+    assert_eq!(gpt.display_name, "GPT-5.4");
+    assert!(
+        gpt.supported_reasoning_efforts
+            .iter()
+            .any(|option| option.effort == ReasoningEffort::XHigh)
+    );
+}
+
+#[tokio::test]
+async fn refresh_available_models_maps_mistral_catalog_to_alias() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_raw(
+                    r#"{"object":"list","data":[{"id":"mistral-large-latest"}]}"#,
+                    "application/json",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("unused"));
+    let provider = provider_for_name(server.uri(), "Mistral", WireApi::ChatCompletions);
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        provider,
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("refresh succeeds");
+
+    let available = manager.list_models(RefreshStrategy::Offline).await;
+    let mistral = available
+        .iter()
+        .find(|model| model.model == "mistral-vibe-cli")
+        .expect("mistral alias should be listed");
+    assert_eq!(mistral.display_name, "mistral-vibe-cli");
 }
 
 #[tokio::test]

@@ -37,11 +37,11 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
         req.url = format!("{}{}client_version={client_version}", req.url, separator);
     }
 
-    pub async fn list_models(
+    pub async fn list_models_raw(
         &self,
         client_version: &str,
         extra_headers: HeaderMap,
-    ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
+    ) -> Result<(Vec<u8>, Option<String>), ApiError> {
         let resp = self
             .session
             .execute_with(
@@ -61,11 +61,21 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
             .and_then(|value| value.to_str().ok())
             .map(ToString::to_string);
 
-        let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
-            .map_err(|e| {
+        Ok((resp.body.to_vec(), header_etag))
+    }
+
+    pub async fn list_models(
+        &self,
+        client_version: &str,
+        extra_headers: HeaderMap,
+    ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
+        let (body, header_etag) = self.list_models_raw(client_version, extra_headers).await?;
+
+        let ModelsResponse { models } =
+            serde_json::from_slice::<ModelsResponse>(&body).map_err(|e| {
                 ApiError::Stream(format!(
                     "failed to decode models response: {e}; body: {}",
-                    String::from_utf8_lossy(&resp.body)
+                    String::from_utf8_lossy(&body)
                 ))
             })?;
 
