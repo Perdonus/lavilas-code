@@ -985,7 +985,7 @@ impl ModelClientSession {
         let has_tools = !tools.is_empty();
         let request_model =
             normalize_request_model_for_provider(&runtime_config.provider, &model_info.slug);
-        let reasoning_effort = Self::build_chat_completions_reasoning_effort(
+        let reasoning_effort = ModelClient::build_chat_completions_reasoning_effort(
             &runtime_config.provider,
             model_info,
             effort,
