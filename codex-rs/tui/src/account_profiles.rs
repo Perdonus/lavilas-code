@@ -799,7 +799,7 @@ mod tests {
             serde_json::json!({
                 "provider": "mistral",
                 "name": "mistral1",
-                "model": "mistral-vibe-cli-with-tools",
+                "model": "mistral-vibe-cli",
                 "model_catalog_json": sidecar_path,
                 "config_profile": "mistral1",
                 "model_provider_id": "mistral1-provider",
@@ -812,8 +812,8 @@ mod tests {
             &sidecar_path,
             serde_json::json!({
                 "models": [{
-                    "slug": "mistral-vibe-cli-with-tools",
-                    "display_name": "mistral-vibe-cli-with-tools"
+                    "slug": "mistral-vibe-cli",
+                    "display_name": "mistral-vibe-cli"
                 }]
             })
             .to_string(),
@@ -825,12 +825,12 @@ mod tests {
         assert!(
             !std::fs::read_to_string(&profile_path)
                 .expect("profile contents")
-                .contains("mistral-vibe-cli-with-tools")
+                .contains("\"mistral-vibe-cli\"")
         );
         assert!(
             !std::fs::read_to_string(&sidecar_path)
                 .expect("sidecar contents")
-                .contains("mistral-vibe-cli-with-tools")
+                .contains("\"mistral-vibe-cli\"")
         );
     }
 

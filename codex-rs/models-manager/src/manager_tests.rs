@@ -361,8 +361,8 @@ async fn get_model_info_matches_provider_variant_suffixes() {
     let codex_home = tempdir().expect("temp dir");
     let config = ModelsManagerConfig::default();
     let remote = remote_model(
-        "mistral-large-latest",
-        "Mistral Large Latest",
+        "mistral-vibe-cli",
+        "Mistral Vibe CLI",
         /*priority*/ 0,
     );
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -378,8 +378,8 @@ async fn get_model_info_matches_provider_variant_suffixes() {
 
     let model_info = manager.get_model_info(&variant_slug, &config).await;
 
-    assert_eq!(model_info.slug, "mistral-large-latest");
-    assert_eq!(model_info.display_name, "Mistral Large Latest");
+    assert_eq!(model_info.slug, "mistral-vibe-cli-with-tools");
+    assert_eq!(model_info.display_name, "Mistral Vibe CLI");
     assert!(!model_info.used_fallback_model_metadata);
     assert!(model_info.supports_parallel_tool_calls);
 }
@@ -425,8 +425,8 @@ async fn get_model_info_uses_compatibility_metadata_for_provider_style_slug() {
 
     let model_info = manager.get_model_info(&compatibility_slug, &config).await;
 
-    assert_eq!(model_info.slug, "mistral-large-latest");
-    assert_eq!(model_info.display_name, "Mistral Large");
+    assert_eq!(model_info.slug, "mistral-vibe-cli-with-tools");
+    assert_eq!(model_info.display_name, "Mistral Vibe CLI");
     assert!(model_info.supports_parallel_tool_calls);
     assert!(model_info.supports_search_tool);
     assert!(!model_info.used_fallback_model_metadata);

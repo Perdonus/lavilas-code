@@ -47,9 +47,8 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
 const PROVIDER_MODEL_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
-const MISTRAL_PROFILE_ALIAS: &str = "mistral-vibe-cli";
-const MISTRAL_CANONICAL_MODEL: &str = "mistral-large-latest";
-const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
+const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
+const MISTRAL_DEFAULT_MODEL: &str = "mistral-vibe-cli-latest";
 
 #[derive(Debug, Deserialize)]
 struct OpenAiCompatibleModelsEnvelope {
@@ -165,37 +164,6 @@ fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
             .is_some_and(|base_url| base_url.contains("api.mistral.ai"))
 }
 
-fn normalize_mistral_provider_catalog_slug(requested_slug: &str) -> Option<(String, String)> {
-    let requested_slug = requested_slug.trim();
-    if requested_slug.is_empty() {
-        return None;
-    }
-
-    if requested_slug.eq_ignore_ascii_case(MISTRAL_CANONICAL_MODEL)
-        || requested_slug.eq_ignore_ascii_case(MISTRAL_PROFILE_ALIAS)
-        || requested_slug.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL)
-    {
-        return Some((
-            MISTRAL_PROFILE_ALIAS.to_string(),
-            MISTRAL_CANONICAL_MODEL.to_string(),
-        ));
-    }
-
-    PROVIDER_MODEL_VARIANT_SUFFIXES
-        .iter()
-        .find_map(|suffix| requested_slug.strip_suffix(suffix))
-        .and_then(|base| {
-            (base.eq_ignore_ascii_case(MISTRAL_CANONICAL_MODEL)
-                || base.eq_ignore_ascii_case(MISTRAL_PROFILE_ALIAS))
-            .then(|| {
-                (
-                    MISTRAL_PROFILE_ALIAS.to_string(),
-                    MISTRAL_CANONICAL_MODEL.to_string(),
-                )
-            })
-        })
-}
-
 fn enrich_provider_catalog_model(
     provider: &ModelProviderInfo,
     requested_slug: &str,
@@ -203,11 +171,10 @@ fn enrich_provider_catalog_model(
     bundled_models: &[ModelInfo],
 ) -> ModelInfo {
     let (presented_slug, metadata_slug) = if provider_uses_mistral_api(provider) {
-        normalize_mistral_provider_catalog_slug(requested_slug).unwrap_or_else(|| {
-            let canonical_slug = model_info::canonicalize_provider_model_slug(requested_slug)
-                .unwrap_or_else(|| requested_slug.to_string());
-            (canonical_slug.clone(), canonical_slug)
-        })
+        let presented_slug = requested_slug.to_string();
+        let metadata_slug = model_info::canonicalize_provider_model_slug(requested_slug)
+            .unwrap_or_else(|| presented_slug.clone());
+        (presented_slug, metadata_slug)
     } else {
         let canonical_slug = model_info::canonicalize_provider_model_slug(requested_slug)
             .unwrap_or_else(|| requested_slug.to_string());
@@ -608,7 +575,9 @@ impl ModelsManager {
     }
 
     fn normalize_legacy_model_slug(model: &str) -> Option<String> {
-        model_info::canonicalize_provider_model_slug(model)
+        model
+            .eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
+            .then(|| MISTRAL_DEFAULT_MODEL.to_string())
     }
 
     fn construct_model_info_from_candidates(

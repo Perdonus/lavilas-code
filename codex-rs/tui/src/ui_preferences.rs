@@ -6,11 +6,11 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "mistral-vibe-cli";
-pub(crate) const MISTRAL_CANONICAL_PROFILE_MODEL: &str = "mistral-large-latest";
+pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "mistral-vibe-cli-latest";
+pub(crate) const MISTRAL_CANONICAL_PROFILE_MODEL: &str = "mistral-vibe-cli-latest";
 pub(crate) const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
-pub(crate) const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
-const MISTRAL_COMPATIBILITY_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
+pub(crate) const MISTRAL_TOOL_PROFILE_MODEL: &str = "mistral-vibe-cli-with-tools";
+pub(crate) const MISTRAL_FAST_PROFILE_MODEL: &str = "mistral-vibe-cli-fast";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiLanguage {
@@ -106,26 +106,10 @@ pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
         }
     }
 
-    if provider.eq_ignore_ascii_case("mistral") {
-        if model.eq_ignore_ascii_case(MISTRAL_CANONICAL_PROFILE_MODEL)
-            || model.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
-            || model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
-            || model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL)
-        {
-            return MISTRAL_CANONICAL_PROFILE_MODEL.to_string();
-        }
-
-        if MISTRAL_COMPATIBILITY_SUFFIXES
-            .iter()
-            .find_map(|suffix| model.strip_suffix(suffix))
-            .is_some_and(|base| {
-                base.eq_ignore_ascii_case(MISTRAL_CANONICAL_PROFILE_MODEL)
-                    || base.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
-                    || base.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
-            })
-        {
-            return MISTRAL_CANONICAL_PROFILE_MODEL.to_string();
-        }
+    if provider.eq_ignore_ascii_case("mistral")
+        && model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
+    {
+        return MISTRAL_CANONICAL_PROFILE_MODEL.to_string();
     }
 
     model.to_string()
@@ -483,23 +467,30 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "mistral" => vec![
             ProfileCatalogSeed {
                 model: MISTRAL_CANONICAL_PROFILE_MODEL,
-                description: "Основной профиль Mistral с legacy alias `mistral-vibe-cli`, который маппится на canonical request slug.",
+                description: "Основной профиль Mistral Vibe CLI для повседневной работы.",
                 default_reasoning_level: "medium",
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
             ProfileCatalogSeed {
-                model: "codestral-latest",
-                description: "Тяжёлый Mistral-профиль для сложного кода и крупных правок.",
+                model: MISTRAL_TOOL_PROFILE_MODEL,
+                description: "Профиль Mistral Vibe CLI для вызовов инструментов и агентных ходов.",
                 default_reasoning_level: "high",
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
             ProfileCatalogSeed {
-                model: "mistral-small-latest",
-                description: "Быстрый Mistral-профиль для коротких проходов.",
+                model: MISTRAL_FAST_PROFILE_MODEL,
+                description: "Быстрый профиль Mistral Vibe CLI для коротких проходов.",
                 default_reasoning_level: "low",
-                supports_parallel_tool_calls: false,
+                supports_parallel_tool_calls: true,
+                supports_image_input: false,
+            },
+            ProfileCatalogSeed {
+                model: "codestral-latest",
+                description: "Отдельный Mistral-профиль для тяжёлого кода и крупных правок.",
+                default_reasoning_level: "high",
+                supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
         ],
@@ -664,7 +655,7 @@ mod tests {
     #[test]
     fn profile_catalog_helper_repairs_legacy_mistral_sidecar() {
         use super::MISTRAL_CANONICAL_PROFILE_MODEL;
-        use super::MISTRAL_LEGACY_TOOL_MODEL;
+        use super::MISTRAL_LEGACY_BASE_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path = profile_model_catalog_path(codex_home.path(), "mistral-profile");
         std::fs::create_dir_all(catalog_path.parent().expect("catalog dir")).expect("mkdirs");
@@ -672,8 +663,8 @@ mod tests {
             &catalog_path,
             serde_json::json!({
                 "models": [{
-                    "slug": MISTRAL_LEGACY_TOOL_MODEL,
-                    "display_name": MISTRAL_LEGACY_TOOL_MODEL,
+                    "slug": MISTRAL_LEGACY_BASE_MODEL,
+                    "display_name": MISTRAL_LEGACY_BASE_MODEL,
                 }]
             })
             .to_string(),
@@ -685,10 +676,14 @@ mod tests {
 
         let contents = std::fs::read_to_string(&catalog_path).expect("catalog contents");
         assert!(contents.contains(MISTRAL_CANONICAL_PROFILE_MODEL));
-        assert!(!contents.contains(MISTRAL_LEGACY_TOOL_MODEL));
+        assert!(!contents.contains(MISTRAL_LEGACY_BASE_MODEL));
+        assert_eq!(
+            normalize_profile_model("mistral", "mistral-vibe-cli"),
+            MISTRAL_CANONICAL_PROFILE_MODEL
+        );
         assert_eq!(
             normalize_profile_model("mistral", "mistral-vibe-cli-fast"),
-            MISTRAL_CANONICAL_PROFILE_MODEL
+            "mistral-vibe-cli-fast"
         );
     }
 
@@ -724,7 +719,7 @@ mod tests {
     #[test]
     fn profile_catalog_helper_deduplicates_repaired_mistral_entries() {
         use super::MISTRAL_CANONICAL_PROFILE_MODEL;
-        use super::MISTRAL_LEGACY_TOOL_MODEL;
+        use super::MISTRAL_LEGACY_BASE_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path = profile_model_catalog_path(codex_home.path(), "mistral-profile");
         std::fs::create_dir_all(catalog_path.parent().expect("catalog dir")).expect("mkdirs");
@@ -733,8 +728,8 @@ mod tests {
             serde_json::json!({
                 "models": [
                     {
-                        "slug": MISTRAL_LEGACY_TOOL_MODEL,
-                        "display_name": MISTRAL_LEGACY_TOOL_MODEL,
+                        "slug": MISTRAL_LEGACY_BASE_MODEL,
+                        "display_name": MISTRAL_LEGACY_BASE_MODEL,
                         "supports_parallel_tool_calls": true,
                     },
                     {

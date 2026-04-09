@@ -143,10 +143,8 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
-const MISTRAL_LEGACY_TOOL_MODEL_ALIAS: &str = "mistral-vibe-cli-with-tools";
 const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
-const MISTRAL_CANONICAL_TOOL_MODEL: &str = "mistral-large-latest";
-const MISTRAL_COMPATIBILITY_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
+const MISTRAL_DEFAULT_MODEL: &str = "mistral-vibe-cli-latest";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -171,23 +169,10 @@ fn normalize_request_model_for_provider<'a>(
         return Cow::Borrowed(model.trim_start_matches("models/"));
     }
 
-    if provider_uses_mistral_api(provider) {
-        if model.eq_ignore_ascii_case(MISTRAL_CANONICAL_TOOL_MODEL)
-            || model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
-            || model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL_ALIAS)
-        {
-            return Cow::Borrowed(MISTRAL_CANONICAL_TOOL_MODEL);
-        }
-        if MISTRAL_COMPATIBILITY_SUFFIXES
-            .iter()
-            .find_map(|suffix| model.strip_suffix(suffix))
-            .is_some_and(|base| {
-                base.eq_ignore_ascii_case(MISTRAL_CANONICAL_TOOL_MODEL)
-                    || base.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
-            })
-        {
-            return Cow::Borrowed(MISTRAL_CANONICAL_TOOL_MODEL);
-        }
+    if provider_uses_mistral_api(provider)
+        && model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
+    {
+        return Cow::Borrowed(MISTRAL_DEFAULT_MODEL);
     }
 
     Cow::Borrowed(model)

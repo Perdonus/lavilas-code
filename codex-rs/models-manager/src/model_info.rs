@@ -21,7 +21,7 @@ const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective so
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 const COMPATIBILITY_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
 const MISTRAL_LEGACY_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
-const MISTRAL_CANONICAL_MODEL: &str = "mistral-large-latest";
+const MISTRAL_CANONICAL_MODEL: &str = "mistral-vibe-cli";
 const COMPATIBILITY_PROVIDER_HINTS: [&str; 11] = [
     "anthropic",
     "claude",
@@ -89,6 +89,7 @@ pub fn compatibility_model_info_from_slug(slug: &str) -> Option<ModelInfo> {
         normalized_slug.as_str(),
         /*used_fallback_model_metadata*/ false,
     );
+    model.slug = slug.to_string();
     model.display_name = compatibility_display_name(compatibility_base);
     model.supports_parallel_tool_calls = slug_supports_tool_use(slug);
     model.supports_search_tool = slug_supports_tool_use(slug);
