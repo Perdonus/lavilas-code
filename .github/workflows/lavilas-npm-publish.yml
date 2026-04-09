@@ -186,6 +186,14 @@ jobs:
           echo "release_version=$v" >> "$GITHUB_OUTPUT"
           echo "Release version: $v"
 
+      - if: ${{ matrix.target_triple == 'aarch64-unknown-linux-musl' }}
+        name: Throttle arm64 musl release build
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4" >> "$GITHUB_ENV"
+
       - name: Build Codex binary (unix)
         if: runner.os != 'Windows'
         working-directory: codex-rs

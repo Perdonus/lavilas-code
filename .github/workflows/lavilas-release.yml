@@ -141,6 +141,14 @@ jobs:
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
 
+      - if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Throttle arm64 musl release build
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4" >> "$GITHUB_ENV"
+
       - name: Build release binary (unix)
         if: runner.os != 'Windows'
         run: cargo build -p codex-cli --release --target ${{ matrix.target }}
