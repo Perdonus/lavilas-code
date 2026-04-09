@@ -163,6 +163,9 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use reqwest::Method;
+use reqwest::header::AUTHORIZATION;
+use reqwest::header::HeaderValue;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -1496,21 +1499,22 @@ impl App {
             account_id: None,
         };
         let transport = ReqwestTransport::new(build_reqwest_client());
-        let mut request = api_provider.build_request(http::Method::GET, "models");
+        let mut request = api_provider.build_request(Method::GET, "models");
+        request.timeout = Some(Duration::from_secs(5));
         if let Some(token) = auth.token.as_ref()
-            && let Ok(header) = http::HeaderValue::from_str(&format!("Bearer {token}"))
+            && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
         {
-            request.headers.insert(http::header::AUTHORIZATION, header);
+            request.headers.insert(AUTHORIZATION, header);
         }
         if let Some(account_id) = auth.account_id.as_ref()
-            && let Ok(header) = http::HeaderValue::from_str(account_id)
+            && let Ok(header) = HeaderValue::from_str(account_id)
         {
             request.headers.insert("ChatGPT-Account-ID", header);
         }
 
-        let response = timeout(Duration::from_secs(5), transport.execute(request))
+        let response = transport
+            .execute(request)
             .await
-            .wrap_err("timed out while fetching custom provider models")?
             .wrap_err("custom provider model list request failed")?;
         let models = parse_provider_model_catalog(response.body.as_ref())
             .wrap_err("failed to parse custom provider model list response")?;

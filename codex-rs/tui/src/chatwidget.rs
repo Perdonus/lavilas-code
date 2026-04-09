@@ -10793,43 +10793,27 @@ impl ChatWidget {
         let is_ru = self.ui_language().is_ru();
         self.bottom_pane
             .push_user_input_request(RequestUserInputEvent {
-                id: request_id.to_string(),
-                title: if is_ru {
-                    "Свой префикс команд".to_string()
-                } else {
-                    "Custom command prefix".to_string()
-                },
-                description: if is_ru {
-                    Some("Введите один ASCII-символ без пробела. Примеры: ?, :, #".to_string())
-                } else {
-                    Some("Enter one non-space ASCII character. Examples: ?, :, #".to_string())
-                },
+                call_id: request_id.to_string(),
+                turn_id: request_id.to_string(),
                 questions: vec![
                     codex_protocol::request_user_input::RequestUserInputQuestion {
                         id: "custom_command_prefix".to_string(),
                         header: if is_ru {
-                            "Префикс".to_string()
+                            "Свой префикс команд".to_string()
                         } else {
-                            "Prefix".to_string()
+                            "Custom command prefix".to_string()
                         },
                         question: if is_ru {
-                            "Какой символ использовать для команд?"
+                            "Введите один ASCII-символ без пробела. Примеры: ?, :, #.\n\nКакой символ использовать для команд?"
                         } else {
-                            "Which character should trigger commands?"
+                            "Enter one non-space ASCII character. Examples: ?, :, #.\n\nWhich character should trigger commands?"
                         }
                         .to_string(),
-                        multiline: false,
-                        required: true,
-                        options: Vec::new(),
+                        is_other: false,
+                        is_secret: false,
+                        options: None,
                     },
                 ],
-                allow_cancel: true,
-                submit_label: if is_ru {
-                    Some("Сохранить".to_string())
-                } else {
-                    Some("Save".to_string())
-                },
-                cancel_label: None,
             });
         self.request_redraw();
     }
@@ -11281,45 +11265,28 @@ impl ChatWidget {
     ) {
         let is_ru = self.ui_language().is_ru();
         self.bottom_pane.push_user_input_request(RequestUserInputEvent {
-            id: request_id.to_string(),
-            title: if is_ru {
-                "Название пресета".to_string()
-            } else {
-                "Preset name".to_string()
-            },
-            description: Some(if is_ru {
-                format!(
-                    "Введите название для пресета. Если оставить пустым, будет использовано `{suggested_name}`. Модель: {model}"
-                )
-            } else {
-                format!(
-                    "Enter a name for the preset. Leave it empty to use `{suggested_name}`. Model: {model}"
-                )
-            }),
+            call_id: request_id.to_string(),
+            turn_id: request_id.to_string(),
             questions: vec![codex_protocol::request_user_input::RequestUserInputQuestion {
                 id: "model_preset_name".to_string(),
                 header: if is_ru {
-                    "Название".to_string()
+                    "Название пресета".to_string()
                 } else {
-                    "Name".to_string()
+                    "Preset name".to_string()
                 },
                 question: if is_ru {
-                    "Как назвать этот пресет?"
+                    format!(
+                        "Введите название для пресета. Если оставить пустым, будет использовано `{suggested_name}`. Модель: {model}\n\nКак назвать этот пресет?"
+                    )
                 } else {
-                    "What should this preset be called?"
-                }
-                .to_string(),
-                multiline: false,
-                required: false,
-                options: Vec::new(),
+                    format!(
+                        "Enter a name for the preset. Leave it empty to use `{suggested_name}`. Model: {model}\n\nWhat should this preset be called?"
+                    )
+                },
+                is_other: false,
+                is_secret: false,
+                options: None,
             }],
-            allow_cancel: true,
-            submit_label: if is_ru {
-                Some("Сохранить".to_string())
-            } else {
-                Some("Save".to_string())
-            },
-            cancel_label: None,
         });
         self.request_redraw();
     }
