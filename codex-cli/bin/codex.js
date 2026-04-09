@@ -2,7 +2,7 @@
 // Unified entry point for the Codex CLI.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "fs";
+import { chmodSync, existsSync, readdirSync, statSync } from "fs";
 import { createRequire } from "node:module";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -171,6 +171,28 @@ const packageManagerEnvVar =
     ? "CODEX_MANAGED_BY_BUN"
     : "CODEX_MANAGED_BY_NPM";
 env[packageManagerEnvVar] = "1";
+
+function ensureUnixExecutable(filePath) {
+  if (process.platform === "win32" || !existsSync(filePath)) {
+    return;
+  }
+
+  try {
+    const currentMode = statSync(filePath).mode;
+    if ((currentMode & 0o111) !== 0o111) {
+      chmodSync(filePath, currentMode | 0o111);
+    }
+  } catch {
+    // Ignore permission repair failures here and let spawn surface the real error.
+  }
+}
+
+ensureUnixExecutable(binaryPath);
+if (process.platform !== "win32" && existsSync(pathDir)) {
+  for (const entry of readdirSync(pathDir)) {
+    ensureUnixExecutable(path.join(pathDir, entry));
+  }
+}
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",

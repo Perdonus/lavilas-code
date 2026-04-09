@@ -309,6 +309,14 @@ jobs:
         with:
           path: ${{ runner.temp }}/npm-artifacts
 
+      - name: Restore executable bits in staged unix platform packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          find "$RUNNER_TEMP/npm-artifacts" -type f \
+            \( -path '*/vendor/*/codex/codex' -o -path '*/vendor/*/path/*' \) \
+            -exec chmod 755 {} +
+
       - name: Stage base npm package
         shell: bash
         run: |
