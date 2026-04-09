@@ -66,6 +66,9 @@ use crate::resume_picker::SessionSelection;
 use crate::test_support::PathBufExt;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::ui_preferences::MISTRAL_CANONICAL_PROFILE_MODEL;
+use crate::ui_preferences::MISTRAL_DEFAULT_PROFILE_MODEL;
+use crate::ui_preferences::MISTRAL_LEGACY_TOOL_MODEL;
 use crate::ui_preferences::load_ui_preferences;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
@@ -333,21 +336,66 @@ fn fallback_provider_model_info(slug: &str) -> ModelInfo {
     model
 }
 
+fn normalize_mistral_provider_catalog_slug(requested_slug: &str) -> Option<(String, String)> {
+    let requested_slug = requested_slug.trim();
+    if requested_slug.is_empty() {
+        return None;
+    }
+
+    if requested_slug.eq_ignore_ascii_case(MISTRAL_CANONICAL_PROFILE_MODEL)
+        || requested_slug.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
+        || requested_slug.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL)
+    {
+        return Some((
+            MISTRAL_DEFAULT_PROFILE_MODEL.to_string(),
+            MISTRAL_CANONICAL_PROFILE_MODEL.to_string(),
+        ));
+    }
+
+    PROVIDER_MODEL_VARIANT_SUFFIXES
+        .iter()
+        .find_map(|suffix| requested_slug.strip_suffix(suffix))
+        .and_then(|base| {
+            (base.eq_ignore_ascii_case(MISTRAL_CANONICAL_PROFILE_MODEL)
+                || base.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL))
+            .then(|| {
+                (
+                    MISTRAL_DEFAULT_PROFILE_MODEL.to_string(),
+                    MISTRAL_CANONICAL_PROFILE_MODEL.to_string(),
+                )
+            })
+        })
+}
+
 fn enrich_provider_catalog_model(
     requested_slug: &str,
     index: usize,
     bundled_models: &[ModelInfo],
 ) -> ModelInfo {
-    let canonical_slug = canonicalize_provider_model_slug(requested_slug)
-        .unwrap_or_else(|| requested_slug.to_string());
-    let mut model = find_bundled_provider_model_metadata(canonical_slug.as_str(), bundled_models)
+    let (presented_slug, metadata_slug) = normalize_mistral_provider_catalog_slug(requested_slug)
+        .unwrap_or_else(|| {
+            let canonical_slug = canonicalize_provider_model_slug(requested_slug)
+                .unwrap_or_else(|| requested_slug.to_string());
+            (canonical_slug.clone(), canonical_slug)
+        });
+    let display_name_override = (presented_slug != metadata_slug).then_some(presented_slug.clone());
+    let mut model = find_bundled_provider_model_metadata(metadata_slug.as_str(), bundled_models)
         .map(|candidate| ModelInfo {
-            slug: canonical_slug.clone(),
+            slug: presented_slug.clone(),
             ..candidate
         })
-        .unwrap_or_else(|| fallback_provider_model_info(canonical_slug.as_str()));
+        .unwrap_or_else(|| {
+            let mut model = fallback_provider_model_info(metadata_slug.as_str());
+            model.slug = presented_slug.clone();
+            model
+        });
 
-    model.slug = canonical_slug;
+    model.slug = presented_slug.clone();
+    if let Some(display_name) = display_name_override {
+        model.display_name = display_name;
+    } else if model.display_name.trim().is_empty() || model.display_name == metadata_slug {
+        model.display_name = presented_slug;
+    }
     model.visibility = ModelVisibility::List;
     model.supported_in_api = true;
     model.priority = i32::try_from(index).unwrap_or(i32::MAX);
@@ -7600,12 +7648,23 @@ mod tests {
         let models = parse_provider_model_catalog(br#"{"data":[{"id":"mistral-vibe-cli"}]}"#)?;
 
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0].slug, "mistral-large-latest");
+        assert_eq!(models[0].slug, MISTRAL_DEFAULT_PROFILE_MODEL);
+        assert_eq!(models[0].display_name, MISTRAL_DEFAULT_PROFILE_MODEL);
         assert_eq!(models[0].visibility, ModelVisibility::List);
         assert_eq!(
             models[0].default_reasoning_level,
             Some(ReasoningEffortConfig::Medium)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_provider_model_catalog_maps_canonical_mistral_slug_back_to_alias() -> Result<()> {
+        let models = parse_provider_model_catalog(br#"{"data":[{"id":"mistral-large-latest"}]}"#)?;
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, MISTRAL_DEFAULT_PROFILE_MODEL);
+        assert_eq!(models[0].display_name, MISTRAL_DEFAULT_PROFILE_MODEL);
         Ok(())
     }
 
