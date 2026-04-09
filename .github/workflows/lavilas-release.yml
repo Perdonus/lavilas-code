@@ -16,7 +16,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             artifact_name: lavilas-codex-linux-x64
             bin_path: codex-rs/target/x86_64-unknown-linux-musl/release/codex
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             artifact_name: lavilas-codex-linux-arm64
             bin_path: codex-rs/target/aarch64-unknown-linux-musl/release/codex
