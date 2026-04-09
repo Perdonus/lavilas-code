@@ -70,9 +70,9 @@ use crate::ui_preferences::load_ui_preferences;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
-use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
 use codex_api::api_bridge::CoreAuthProvider;
+use codex_api::is_azure_responses_wire_base_url;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
@@ -102,6 +102,7 @@ use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_client::HttpTransport;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_core::config::Config;
@@ -115,7 +116,13 @@ use codex_core::message_history;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
 use codex_login::default_client::build_reqwest_client;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
+use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::model_info::canonicalize_provider_model_slug;
+use codex_models_manager::model_info::compatibility_model_info_from_slug;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
@@ -128,6 +135,8 @@ use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
+use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FinalOutput;
@@ -154,6 +163,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -219,6 +229,190 @@ enum PendingModelPresetInputRequest {
 
 const CUSTOM_COMMAND_PREFIX_QUESTION_ID: &str = "custom_command_prefix";
 const MODEL_PRESET_NAME_QUESTION_ID: &str = "model_preset_name";
+const PROVIDER_MODEL_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleModelsEnvelope {
+    #[serde(default)]
+    data: Vec<OpenAiCompatibleModelEntry>,
+    #[serde(default)]
+    models: Vec<OpenAiCompatibleModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OpenAiCompatibleModelEntry {
+    Object(OpenAiCompatibleModelObject),
+    String(String),
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleModelObject {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+fn candidate_model_slug_matches(requested_slug: &str, candidate_slug: &str) -> bool {
+    if candidate_slug.eq_ignore_ascii_case(requested_slug) {
+        return true;
+    }
+    if requested_slug.starts_with(candidate_slug) {
+        return true;
+    }
+
+    let requested_tail = requested_slug.rsplit('/').next().unwrap_or(requested_slug);
+    let candidate_tail = candidate_slug.rsplit('/').next().unwrap_or(candidate_slug);
+    if candidate_tail.eq_ignore_ascii_case(requested_tail) {
+        return true;
+    }
+    if requested_tail.starts_with(candidate_tail) {
+        return true;
+    }
+
+    PROVIDER_MODEL_VARIANT_SUFFIXES.iter().any(|suffix| {
+        requested_tail
+            .strip_suffix(suffix)
+            .is_some_and(|base| !base.is_empty() && candidate_tail.eq_ignore_ascii_case(base))
+    })
+}
+
+fn find_bundled_provider_model_metadata(
+    requested_slug: &str,
+    bundled_models: &[ModelInfo],
+) -> Option<ModelInfo> {
+    bundled_models
+        .iter()
+        .filter(|candidate| candidate_model_slug_matches(requested_slug, candidate.slug.as_str()))
+        .max_by_key(|candidate| candidate.slug.len())
+        .cloned()
+}
+
+fn collect_openai_compatible_model_slugs(
+    entries: impl IntoIterator<Item = OpenAiCompatibleModelEntry>,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut models = Vec::new();
+
+    for entry in entries {
+        let slug = match entry {
+            OpenAiCompatibleModelEntry::String(value) => Some(value),
+            OpenAiCompatibleModelEntry::Object(value) => value.id.or(value.slug).or(value.name),
+        };
+        let Some(slug) = slug.map(|value| value.trim().to_string()) else {
+            continue;
+        };
+        if slug.is_empty() || !seen.insert(slug.clone()) {
+            continue;
+        }
+        models.push(slug);
+    }
+
+    models
+}
+
+fn fallback_provider_model_info(slug: &str) -> ModelInfo {
+    let mut model =
+        compatibility_model_info_from_slug(slug).unwrap_or_else(|| model_info_from_slug(slug));
+    model.slug = slug.to_string();
+    if model.display_name.trim().is_empty() || model.display_name == model.slug {
+        model.display_name = slug.to_string();
+    }
+    model.visibility = ModelVisibility::List;
+    model.supported_in_api = true;
+    if model.default_reasoning_level.is_none()
+        || model.default_reasoning_level == Some(ReasoningEffortConfig::None)
+    {
+        model.default_reasoning_level = Some(ReasoningEffortConfig::Medium);
+    }
+    model
+}
+
+fn enrich_provider_catalog_model(
+    requested_slug: &str,
+    index: usize,
+    bundled_models: &[ModelInfo],
+) -> ModelInfo {
+    let canonical_slug = canonicalize_provider_model_slug(requested_slug)
+        .unwrap_or_else(|| requested_slug.to_string());
+    let mut model = find_bundled_provider_model_metadata(canonical_slug.as_str(), bundled_models)
+        .map(|candidate| ModelInfo {
+            slug: canonical_slug.clone(),
+            ..candidate
+        })
+        .unwrap_or_else(|| fallback_provider_model_info(canonical_slug.as_str()));
+
+    model.slug = canonical_slug;
+    model.visibility = ModelVisibility::List;
+    model.supported_in_api = true;
+    model.priority = i32::try_from(index).unwrap_or(i32::MAX);
+    model
+}
+
+fn parse_provider_model_catalog(body: &[u8]) -> Result<Vec<ModelInfo>> {
+    if let Ok(ModelsResponse { models }) = serde_json::from_slice::<ModelsResponse>(body) {
+        return Ok(models);
+    }
+
+    let slugs = if let Ok(envelope) = serde_json::from_slice::<OpenAiCompatibleModelsEnvelope>(body)
+    {
+        let entries = if !envelope.data.is_empty() {
+            envelope.data
+        } else {
+            envelope.models
+        };
+        collect_openai_compatible_model_slugs(entries)
+    } else if let Ok(entries) = serde_json::from_slice::<Vec<OpenAiCompatibleModelEntry>>(body) {
+        collect_openai_compatible_model_slugs(entries)
+    } else {
+        return Err(color_eyre::eyre::eyre!(
+            "provider /models response is not compatible with Codex or OpenAI model listings"
+        ));
+    };
+
+    let bundled_models = bundled_models_response()
+        .map(|response| response.models)
+        .unwrap_or_default();
+    Ok(slugs
+        .into_iter()
+        .enumerate()
+        .map(|(index, slug)| enrich_provider_catalog_model(slug.as_str(), index, &bundled_models))
+        .collect())
+}
+
+fn provider_supports_reasoning_controls(provider: &ModelProviderInfo) -> bool {
+    match provider.wire_api {
+        WireApi::ChatCompletions => false,
+        WireApi::Responses => {
+            provider.requires_openai_auth
+                || provider.is_openai()
+                || provider.base_url.as_deref().is_some_and(|base_url| {
+                    base_url.contains("api.openai.com")
+                        || is_azure_responses_wire_base_url(&provider.name, Some(base_url))
+                })
+        }
+    }
+}
+
+fn sanitize_provider_reasoning_presets(
+    mut models: Vec<ModelPreset>,
+    provider: &ModelProviderInfo,
+) -> Vec<ModelPreset> {
+    if provider_supports_reasoning_controls(provider) {
+        return models;
+    }
+
+    for model in &mut models {
+        model.supported_reasoning_efforts.clear();
+        if matches!(model.default_reasoning_effort, ReasoningEffortConfig::None) {
+            model.default_reasoning_effort = ReasoningEffortConfig::Medium;
+        }
+    }
+    models
+}
 
 fn app_server_request_id_to_mcp_request_id(
     request_id: &codex_app_server_protocol::RequestId,
@@ -1234,6 +1428,7 @@ impl App {
         mut models: Vec<ModelPreset>,
         config: &Config,
     ) -> Arc<ModelCatalog> {
+        models = sanitize_provider_reasoning_presets(models, &config.model_provider);
         ModelPreset::mark_default_by_picker_visibility(&mut models);
         Arc::new(ModelCatalog::new(
             models,
@@ -1300,18 +1495,25 @@ impl App {
                 .or(provider.experimental_bearer_token.clone()),
             account_id: None,
         };
-        let client = ModelsClient::new(
-            ReqwestTransport::new(build_reqwest_client()),
-            api_provider,
-            auth,
-        );
-        let (models, _) = timeout(
-            Duration::from_secs(5),
-            client.list_models(CODEX_CLI_VERSION, http::HeaderMap::new()),
-        )
-        .await
-        .wrap_err("timed out while fetching custom provider models")?
-        .wrap_err("custom provider model list request failed")?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+        let mut request = api_provider.build_request(http::Method::GET, "models");
+        if let Some(token) = auth.token.as_ref()
+            && let Ok(header) = http::HeaderValue::from_str(&format!("Bearer {token}"))
+        {
+            request.headers.insert(http::header::AUTHORIZATION, header);
+        }
+        if let Some(account_id) = auth.account_id.as_ref()
+            && let Ok(header) = http::HeaderValue::from_str(account_id)
+        {
+            request.headers.insert("ChatGPT-Account-ID", header);
+        }
+
+        let response = timeout(Duration::from_secs(5), transport.execute(request))
+            .await
+            .wrap_err("timed out while fetching custom provider models")?
+            .wrap_err("custom provider model list request failed")?;
+        let models = parse_provider_model_catalog(response.body.as_ref())
+            .wrap_err("failed to parse custom provider model list response")?;
         Ok(Some(models))
     }
 
@@ -7338,6 +7540,150 @@ mod tests {
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
+
+    #[test]
+    fn parse_provider_model_catalog_enriches_known_openai_models() -> Result<()> {
+        let models = parse_provider_model_catalog(
+            br#"{"object":"list","data":[{"id":"gpt-5.4"},{"id":"gpt-5.4"}]}"#,
+        )?;
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "gpt-5.4");
+        assert_eq!(models[0].visibility, ModelVisibility::List);
+        assert!(
+            models[0]
+                .supported_reasoning_levels
+                .iter()
+                .any(|option| option.effort == ReasoningEffortConfig::XHigh)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_provider_model_catalog_preserves_namespaced_slugs() -> Result<()> {
+        let models = parse_provider_model_catalog(br#"{"data":[{"id":"openai/gpt-5.4"}]}"#)?;
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "openai/gpt-5.4");
+        assert_eq!(models[0].visibility, ModelVisibility::List);
+        assert!(
+            models[0]
+                .supported_reasoning_levels
+                .iter()
+                .any(|option| option.effort == ReasoningEffortConfig::XHigh)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_provider_model_catalog_enriches_versioned_openai_slugs() -> Result<()> {
+        let models = parse_provider_model_catalog(br#"{"data":[{"id":"gpt-5.4-2026-03-27"}]}"#)?;
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "gpt-5.4-2026-03-27");
+        assert_eq!(models[0].visibility, ModelVisibility::List);
+        assert!(
+            models[0]
+                .supported_reasoning_levels
+                .iter()
+                .any(|option| option.effort == ReasoningEffortConfig::XHigh)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_provider_model_catalog_repairs_legacy_mistral_slug() -> Result<()> {
+        let models = parse_provider_model_catalog(br#"{"data":[{"id":"mistral-vibe-cli"}]}"#)?;
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "mistral-large-latest");
+        assert_eq!(models[0].visibility, ModelVisibility::List);
+        assert_eq!(
+            models[0].default_reasoning_level,
+            Some(ReasoningEffortConfig::Medium)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn custom_openai_base_url_keeps_reasoning_controls_enabled() {
+        let provider = ModelProviderInfo {
+            name: "OpenAI API".to_string(),
+            base_url: Some("https://api.openai.com/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+
+        assert!(provider_supports_reasoning_controls(&provider));
+    }
+
+    #[test]
+    fn chat_completions_provider_presets_hide_reasoning_choices() {
+        let provider = ModelProviderInfo {
+            name: "Mistral".to_string(),
+            base_url: Some("https://api.mistral.ai/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::ChatCompletions,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+        let sanitized = sanitize_provider_reasoning_presets(
+            vec![ModelPreset {
+                id: "mistral-large-latest".to_string(),
+                model: "mistral-large-latest".to_string(),
+                display_name: "mistral-large-latest".to_string(),
+                description: String::new(),
+                default_reasoning_effort: ReasoningEffortConfig::High,
+                supported_reasoning_efforts: vec![
+                    codex_protocol::openai_models::ReasoningEffortPreset {
+                        effort: ReasoningEffortConfig::Low,
+                        description: "low".to_string(),
+                    },
+                    codex_protocol::openai_models::ReasoningEffortPreset {
+                        effort: ReasoningEffortConfig::High,
+                        description: "high".to_string(),
+                    },
+                ],
+                supports_personality: false,
+                is_default: true,
+                upgrade: None,
+                show_in_picker: true,
+                availability_nux: None,
+                supported_in_api: true,
+                input_modalities: codex_protocol::openai_models::default_input_modalities(),
+            }],
+            &provider,
+        );
+
+        assert_eq!(sanitized.len(), 1);
+        assert!(sanitized[0].supported_reasoning_efforts.is_empty());
+        assert_eq!(
+            sanitized[0].default_reasoning_effort,
+            ReasoningEffortConfig::High
+        );
     }
 
     #[test]
