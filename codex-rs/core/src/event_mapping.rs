@@ -78,7 +78,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
         match content_item {
             ContentItem::InputText { text } => {
                 let text = strip_hidden_reasoning_tags(text);
-                if (is_local_image_open_tag_text(text) || is_image_open_tag_text(text))
+                if (is_local_image_open_tag_text(&text) || is_image_open_tag_text(&text))
                     && (matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. })))
                     || (idx > 0
                         && (is_local_image_close_tag_text(&text) || is_image_close_tag_text(&text))
