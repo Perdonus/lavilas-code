@@ -4,9 +4,12 @@ use std::path::PathBuf;
 
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use serde::Deserialize;
@@ -292,6 +295,148 @@ pub(crate) fn profile_model_catalog_sidecar_path(
     normalized_profile_model_catalog_path(profile_path, profile.model_catalog_json.as_deref())
 }
 
+const PROVIDER_MODEL_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
+
+fn candidate_model_slug_matches(requested_slug: &str, candidate_slug: &str) -> bool {
+    if candidate_slug.eq_ignore_ascii_case(requested_slug) {
+        return true;
+    }
+    if requested_slug.starts_with(candidate_slug) {
+        return true;
+    }
+
+    let requested_tail = requested_slug.rsplit('/').next().unwrap_or(requested_slug);
+    let candidate_tail = candidate_slug.rsplit('/').next().unwrap_or(candidate_slug);
+    if candidate_tail.eq_ignore_ascii_case(requested_tail) {
+        return true;
+    }
+    if requested_tail.starts_with(candidate_tail) {
+        return true;
+    }
+
+    PROVIDER_MODEL_VARIANT_SUFFIXES.iter().any(|suffix| {
+        requested_tail
+            .strip_suffix(suffix)
+            .is_some_and(|base| !base.is_empty() && candidate_tail.eq_ignore_ascii_case(base))
+    })
+}
+
+fn find_bundled_sidecar_model_metadata(
+    requested_slug: &str,
+    bundled_models: &[ModelInfo],
+) -> Option<ModelInfo> {
+    bundled_models
+        .iter()
+        .filter(|candidate| candidate_model_slug_matches(requested_slug, candidate.slug.as_str()))
+        .max_by_key(|candidate| candidate.slug.len())
+        .cloned()
+}
+
+fn generic_provider_reasoning_levels(provider: &str) -> Option<Vec<ReasoningEffortPreset>> {
+    provider.eq_ignore_ascii_case("gemini").then(|| {
+        vec![
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Low,
+                description: "Быстрее отвечает и тратит меньше бюджета размышлений".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "Сбалансированный режим для повседневной разработки".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "Глубже разбирает сложные и неоднозначные задачи".to_string(),
+            },
+        ]
+    })
+}
+
+fn repair_sidecar_model_metadata(
+    provider: &str,
+    model: &mut ModelInfo,
+    bundled_models: &[ModelInfo],
+) -> bool {
+    let mut changed = false;
+    let original_slug = model.slug.clone();
+    let normalized_slug = normalize_profile_model(provider, original_slug.as_str());
+    if normalized_slug != original_slug {
+        model.slug = normalized_slug.clone();
+        if model.display_name == original_slug {
+            model.display_name = normalized_slug;
+        }
+        changed = true;
+    }
+
+    if model.display_name.trim().is_empty() {
+        model.display_name = model.slug.clone();
+        changed = true;
+    }
+
+    if let Some(bundled) = find_bundled_sidecar_model_metadata(model.slug.as_str(), bundled_models) {
+        if model.supported_reasoning_levels.is_empty() && !bundled.supported_reasoning_levels.is_empty() {
+            model.supported_reasoning_levels = bundled.supported_reasoning_levels.clone();
+            changed = true;
+        }
+        if model.default_reasoning_level.is_none() && bundled.default_reasoning_level.is_some() {
+            model.default_reasoning_level = bundled.default_reasoning_level;
+            changed = true;
+        }
+        if !model.supports_reasoning_summaries && bundled.supports_reasoning_summaries {
+            model.supports_reasoning_summaries = true;
+            changed = true;
+        }
+        if !model.support_verbosity && bundled.support_verbosity {
+            model.support_verbosity = true;
+            changed = true;
+        }
+        if model.default_verbosity.is_none() && bundled.default_verbosity.is_some() {
+            model.default_verbosity = bundled.default_verbosity;
+            changed = true;
+        }
+        if model.apply_patch_tool_type.is_none() && bundled.apply_patch_tool_type.is_some() {
+            model.apply_patch_tool_type = bundled.apply_patch_tool_type;
+            changed = true;
+        }
+        if !model.supports_parallel_tool_calls && bundled.supports_parallel_tool_calls {
+            model.supports_parallel_tool_calls = true;
+            changed = true;
+        }
+        if model.input_modalities.is_empty() && !bundled.input_modalities.is_empty() {
+            model.input_modalities = bundled.input_modalities.clone();
+            changed = true;
+        }
+        if !model.supports_search_tool && bundled.supports_search_tool {
+            model.supports_search_tool = true;
+            changed = true;
+        }
+    }
+
+    if model.supported_reasoning_levels.is_empty()
+        && let Some(levels) = generic_provider_reasoning_levels(provider)
+    {
+        model.supported_reasoning_levels = levels;
+        changed = true;
+    }
+
+    if model.default_reasoning_level.is_none() && !model.supported_reasoning_levels.is_empty() {
+        model.default_reasoning_level = Some(ReasoningEffort::Medium);
+        changed = true;
+    }
+
+    changed
+}
+
+fn repair_sidecar_models(provider: &str, models: &mut [ModelInfo]) -> bool {
+    let bundled_models = bundled_models_response()
+        .map(|response| response.models)
+        .unwrap_or_default();
+    let mut changed = false;
+    for model in models {
+        changed |= repair_sidecar_model_metadata(provider, model, &bundled_models);
+    }
+    changed
+}
+
 pub(crate) fn read_profile_model_catalog_sidecar(
     profile_path: &Path,
     profile: &StoredAccountProfile,
@@ -306,8 +451,14 @@ pub(crate) fn read_profile_model_catalog_sidecar(
         Err(err) => return Err(err),
     };
 
-    let models_response = serde_json::from_str::<ModelsResponse>(&contents)
+    let mut models_response = serde_json::from_str::<ModelsResponse>(&contents)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    if repair_sidecar_models(profile.provider.as_str(), &mut models_response.models) {
+        let repaired_body = serde_json::to_string_pretty(&models_response)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+            + "\n";
+        std::fs::write(&path, repaired_body)?;
+    }
     let presets = models_response
         .models
         .clone()
@@ -575,7 +726,7 @@ pub(crate) fn build_create_profile_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_preferences::MISTRAL_DEFAULT_PROFILE_MODEL;
+    use crate::ui_preferences::MISTRAL_CANONICAL_PROFILE_MODEL;
     use codex_protocol::config_types::ReasoningSummary;
     use codex_protocol::openai_models::ConfigShellToolType;
     use codex_protocol::openai_models::ModelVisibility;
@@ -670,7 +821,7 @@ mod tests {
         .expect("write sidecar");
 
         let loaded = load_stored_profile(&profile_path).expect("load repaired profile");
-        assert_eq!(loaded.model, MISTRAL_DEFAULT_PROFILE_MODEL);
+        assert_eq!(loaded.model, MISTRAL_CANONICAL_PROFILE_MODEL);
         assert!(
             !std::fs::read_to_string(&profile_path)
                 .expect("profile contents")
@@ -680,6 +831,54 @@ mod tests {
             !std::fs::read_to_string(&sidecar_path)
                 .expect("sidecar contents")
                 .contains("mistral-vibe-cli-with-tools")
+        );
+    }
+
+    #[test]
+    fn load_stored_profile_repairs_legacy_gemini_model_and_sidecar() {
+        let codex_home = tempdir().expect("tempdir");
+        let profiles = profiles_dir(codex_home.path());
+        std::fs::create_dir_all(&profiles).expect("profiles dir");
+
+        let profile_path = profiles.join("gemini1.json");
+        let sidecar_path = profiles.join("gemini1.models.json");
+        std::fs::write(
+            &profile_path,
+            serde_json::json!({
+                "provider": "gemini",
+                "name": "gemini1",
+                "model": "models/gemini-2.5-pro",
+                "model_catalog_json": sidecar_path,
+                "config_profile": "gemini1",
+                "model_provider_id": "gemini1-provider",
+                "experimental_bearer_token": "secret"
+            })
+            .to_string(),
+        )
+        .expect("write profile");
+        std::fs::write(
+            &sidecar_path,
+            serde_json::json!({
+                "models": [{
+                    "slug": "models/gemini-2.5-pro",
+                    "display_name": "models/gemini-2.5-pro"
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write sidecar");
+
+        let loaded = load_stored_profile(&profile_path).expect("load repaired profile");
+        assert_eq!(loaded.model, "gemini-2.5-pro");
+        assert!(
+            !std::fs::read_to_string(&profile_path)
+                .expect("profile contents")
+                .contains("models/gemini-2.5-pro")
+        );
+        assert!(
+            !std::fs::read_to_string(&sidecar_path)
+                .expect("sidecar contents")
+                .contains("models/gemini-2.5-pro")
         );
     }
 
@@ -724,6 +923,61 @@ mod tests {
         assert_eq!(loaded.0.models[0].slug, "gpt-5.4");
         assert_eq!(loaded.1.len(), 1);
         assert_eq!(loaded.1[0].model, "gpt-5.4");
+    }
+
+    #[test]
+    fn read_profile_model_catalog_sidecar_repairs_openai_reasoning_metadata() {
+        let codex_home = tempdir().expect("tempdir");
+        let profile_path = codex_home.path().join("Profiles/openai-profile.json");
+        let profile = test_profile("openai");
+        std::fs::create_dir_all(profile_path.parent().expect("profiles dir")).expect("mkdirs");
+
+        let mut model = test_model_info("gpt-5.4");
+        model.supported_reasoning_levels.clear();
+        model.default_reasoning_level = None;
+        model.supports_reasoning_summaries = false;
+        write_profile_model_catalog_sidecar(profile_path.as_path(), &profile, &[model])
+            .expect("write sidecar");
+
+        let loaded = read_profile_model_catalog_sidecar(profile_path.as_path(), &profile)
+            .expect("read sidecar")
+            .expect("present sidecar");
+        assert!(loaded.0.models[0].supports_reasoning_summaries);
+        assert!(loaded.1[0]
+            .supported_reasoning_efforts
+            .iter()
+            .any(|option| option.effort == ReasoningEffort::XHigh));
+    }
+
+    #[test]
+    fn read_profile_model_catalog_sidecar_repairs_gemini_slug_and_reasoning_levels() {
+        let codex_home = tempdir().expect("tempdir");
+        let profile_path = codex_home.path().join("Profiles/gemini-profile.json");
+        let profile = test_profile("gemini");
+        std::fs::create_dir_all(profile_path.parent().expect("profiles dir")).expect("mkdirs");
+
+        let mut model = test_model_info("models/gemini-2.5-pro");
+        model.display_name = "models/gemini-2.5-pro".to_string();
+        model.supported_reasoning_levels.clear();
+        model.default_reasoning_level = None;
+        write_profile_model_catalog_sidecar(profile_path.as_path(), &profile, &[model])
+            .expect("write sidecar");
+
+        let loaded = read_profile_model_catalog_sidecar(profile_path.as_path(), &profile)
+            .expect("read sidecar")
+            .expect("present sidecar");
+        assert_eq!(loaded.0.models[0].slug, "gemini-2.5-pro");
+        assert_eq!(loaded.1[0].model, "gemini-2.5-pro");
+        assert_eq!(loaded.0.models[0].default_reasoning_level, Some(ReasoningEffort::Medium));
+        assert!(loaded.1[0]
+            .supported_reasoning_efforts
+            .iter()
+            .any(|option| option.effort == ReasoningEffort::High));
+        assert!(
+            !std::fs::read_to_string(profile_path.with_file_name("gemini-profile.models.json"))
+                .expect("sidecar contents")
+                .contains("models/gemini-2.5-pro")
+        );
     }
 
     #[test]

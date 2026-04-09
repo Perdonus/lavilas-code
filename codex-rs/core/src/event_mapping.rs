@@ -17,6 +17,7 @@ use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_protocol::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use codex_protocol::user_input::UserInput;
+use codex_utils_stream_parser::strip_hidden_reasoning_tags;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -76,10 +77,11 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     for (idx, content_item) in message.iter().enumerate() {
         match content_item {
             ContentItem::InputText { text } => {
+                let text = strip_hidden_reasoning_tags(text);
                 if (is_local_image_open_tag_text(text) || is_image_open_tag_text(text))
                     && (matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. })))
                     || (idx > 0
-                        && (is_local_image_close_tag_text(text) || is_image_close_tag_text(text))
+                        && (is_local_image_close_tag_text(&text) || is_image_close_tag_text(&text))
                         && matches!(message.get(idx - 1), Some(ContentItem::InputImage { .. })))
                 {
                     continue;
@@ -113,7 +115,9 @@ fn parse_agent_message(
     for content_item in message.iter() {
         match content_item {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                content.push(AgentMessageContent::Text { text: text.clone() });
+                content.push(AgentMessageContent::Text {
+                    text: strip_hidden_reasoning_tags(text),
+                });
             }
             _ => {
                 warn!(
@@ -205,6 +209,39 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             },
         )),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod hidden_reasoning_tests {
+    use super::parse_turn_item;
+    use codex_protocol::items::AgentMessageContent;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn assistant_messages_strip_hidden_reasoning_tags() {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "before<thought>hidden</thought>after".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected assistant message");
+        match turn_item {
+            TurnItem::AgentMessage(message) => {
+                assert_eq!(message.content.len(), 1);
+                let AgentMessageContent::Text { text } = &message.content[0];
+                assert_eq!(text, "beforeafter");
+            }
+            other => panic!("expected TurnItem::AgentMessage, got {other:?}"),
+        }
     }
 }
 

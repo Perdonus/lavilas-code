@@ -33,6 +33,8 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
+const GEMINI_API_HOST: &str = "generativelanguage.googleapis.com";
+const GEMINI_PROVIDER_NAME: &str = "gemini";
 const MISTRAL_API_HOST: &str = "api.mistral.ai";
 const MISTRAL_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
 const PROVIDER_MODEL_COMPATIBILITY_SUFFIXES: [&str; 4] =
@@ -344,6 +346,14 @@ impl ModelProviderInfo {
                 .is_some_and(|base_url| base_url.contains(MISTRAL_API_HOST))
     }
 
+    pub fn uses_gemini_api(&self) -> bool {
+        self.name.eq_ignore_ascii_case(GEMINI_PROVIDER_NAME)
+            || self
+                .base_url
+                .as_deref()
+                .is_some_and(|base_url| base_url.contains(GEMINI_API_HOST))
+    }
+
     pub fn uses_openai_responses_api(&self) -> bool {
         if self.uses_mistral_api() {
             return false;
@@ -355,6 +365,14 @@ impl ModelProviderInfo {
                 base_url.contains("api.openai.com")
                     || codex_api::is_azure_responses_wire_base_url(&self.name, Some(base_url))
             })
+    }
+
+    pub fn supports_reasoning_controls(&self) -> bool {
+        self.uses_gemini_api()
+    }
+
+    pub fn supports_chat_completions_reasoning_effort(&self) -> bool {
+        self.uses_gemini_api()
     }
 
     pub fn effective_wire_api(&self) -> WireApi {

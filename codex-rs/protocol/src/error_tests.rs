@@ -165,6 +165,26 @@ fn unexpected_status_429_is_not_retryable() {
 }
 
 #[test]
+fn unexpected_status_429_maps_to_rate_limit_protocol_error() {
+    let err = CodexErr::UnexpectedStatus(UnexpectedResponseError {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        body: r#"{"error":{"message":"Slow down"}}"#.to_string(),
+        url: Some("https://api.mistral.ai/v1/chat/completions".to_string()),
+        cf_ray: None,
+        request_id: Some("req-429".to_string()),
+        identity_authorization_error: None,
+        identity_error_code: None,
+    });
+
+    assert_eq!(
+        err.to_codex_protocol_error(),
+        CodexErrorInfo::ResponseTooManyFailedAttempts {
+            http_status_code: Some(429),
+        }
+    );
+}
+
+#[test]
 fn sandbox_denied_reports_exit_code_when_no_output_available() {
     let output = ExecToolCallOutput {
         exit_code: 13,

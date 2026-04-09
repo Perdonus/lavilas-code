@@ -95,13 +95,24 @@ pub(crate) fn default_profile_model(provider: &str) -> String {
 }
 
 pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
+    if provider.eq_ignore_ascii_case("gemini")
+        && model
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("models/"))
+    {
+        let normalized = model[7..].trim();
+        if !normalized.is_empty() {
+            return normalized.to_ascii_lowercase();
+        }
+    }
+
     if provider.eq_ignore_ascii_case("mistral") {
         if model.eq_ignore_ascii_case(MISTRAL_CANONICAL_PROFILE_MODEL)
             || model.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
             || model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
             || model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL)
         {
-            return MISTRAL_DEFAULT_PROFILE_MODEL.to_string();
+            return MISTRAL_CANONICAL_PROFILE_MODEL.to_string();
         }
 
         if MISTRAL_COMPATIBILITY_SUFFIXES
@@ -113,7 +124,7 @@ pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
                     || base.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
             })
         {
-            return MISTRAL_DEFAULT_PROFILE_MODEL.to_string();
+            return MISTRAL_CANONICAL_PROFILE_MODEL.to_string();
         }
     }
 
@@ -471,8 +482,8 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         ],
         "mistral" => vec![
             ProfileCatalogSeed {
-                model: MISTRAL_DEFAULT_PROFILE_MODEL,
-                description: "Основной профиль Mistral с alias `mistral-vibe-cli`, который прозрачно маппится на рабочий slug.",
+                model: MISTRAL_CANONICAL_PROFILE_MODEL,
+                description: "Основной профиль Mistral с legacy alias `mistral-vibe-cli`, который маппится на canonical request slug.",
                 default_reasoning_level: "medium",
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
@@ -633,7 +644,7 @@ mod tests {
 
     #[test]
     fn profile_catalog_helper_creates_sidecar_file() {
-        use super::MISTRAL_DEFAULT_PROFILE_MODEL;
+        use super::MISTRAL_CANONICAL_PROFILE_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path =
             ensure_profile_model_catalog(codex_home.path(), "mistral-profile", "mistral")
@@ -643,16 +654,16 @@ mod tests {
             profile_model_catalog_path(codex_home.path(), "mistral-profile")
         );
         let contents = std::fs::read_to_string(&catalog_path).expect("catalog contents");
-        assert!(contents.contains(MISTRAL_DEFAULT_PROFILE_MODEL));
+        assert!(contents.contains(MISTRAL_CANONICAL_PROFILE_MODEL));
         assert_eq!(
             default_profile_model("mistral"),
-            MISTRAL_DEFAULT_PROFILE_MODEL
+            MISTRAL_CANONICAL_PROFILE_MODEL
         );
     }
 
     #[test]
     fn profile_catalog_helper_repairs_legacy_mistral_sidecar() {
-        use super::MISTRAL_DEFAULT_PROFILE_MODEL;
+        use super::MISTRAL_CANONICAL_PROFILE_MODEL;
         use super::MISTRAL_LEGACY_TOOL_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path = profile_model_catalog_path(codex_home.path(), "mistral-profile");
@@ -673,17 +684,46 @@ mod tests {
             .expect("repair catalog");
 
         let contents = std::fs::read_to_string(&catalog_path).expect("catalog contents");
-        assert!(contents.contains(MISTRAL_DEFAULT_PROFILE_MODEL));
+        assert!(contents.contains(MISTRAL_CANONICAL_PROFILE_MODEL));
         assert!(!contents.contains(MISTRAL_LEGACY_TOOL_MODEL));
         assert_eq!(
             normalize_profile_model("mistral", "mistral-vibe-cli-fast"),
-            MISTRAL_DEFAULT_PROFILE_MODEL
+            MISTRAL_CANONICAL_PROFILE_MODEL
+        );
+    }
+
+    #[test]
+    fn profile_catalog_helper_repairs_legacy_gemini_sidecar() {
+        let codex_home = tempdir().expect("tempdir");
+        let catalog_path = profile_model_catalog_path(codex_home.path(), "gemini-profile");
+        std::fs::create_dir_all(catalog_path.parent().expect("catalog dir")).expect("mkdirs");
+        std::fs::write(
+            &catalog_path,
+            serde_json::json!({
+                "models": [{
+                    "slug": "models/gemini-2.5-pro",
+                    "display_name": "models/gemini-2.5-pro",
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write legacy sidecar");
+
+        ensure_profile_model_catalog(codex_home.path(), "gemini-profile", "gemini")
+            .expect("repair catalog");
+
+        let contents = std::fs::read_to_string(&catalog_path).expect("catalog contents");
+        assert!(contents.contains("gemini-2.5-pro"));
+        assert!(!contents.contains("models/gemini-2.5-pro"));
+        assert_eq!(
+            normalize_profile_model("gemini", "models/gemini-2.5-pro"),
+            "gemini-2.5-pro"
         );
     }
 
     #[test]
     fn profile_catalog_helper_deduplicates_repaired_mistral_entries() {
-        use super::MISTRAL_DEFAULT_PROFILE_MODEL;
+        use super::MISTRAL_CANONICAL_PROFILE_MODEL;
         use super::MISTRAL_LEGACY_TOOL_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path = profile_model_catalog_path(codex_home.path(), "mistral-profile");
@@ -698,8 +738,8 @@ mod tests {
                         "supports_parallel_tool_calls": true,
                     },
                     {
-                        "slug": MISTRAL_DEFAULT_PROFILE_MODEL,
-                        "display_name": MISTRAL_DEFAULT_PROFILE_MODEL,
+                        "slug": MISTRAL_CANONICAL_PROFILE_MODEL,
+                        "display_name": MISTRAL_CANONICAL_PROFILE_MODEL,
                         "supports_parallel_tool_calls": false,
                     }
                 ]
@@ -717,7 +757,7 @@ mod tests {
         .expect("parse repaired catalog");
         let models = payload["models"].as_array().expect("models array");
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0]["slug"], MISTRAL_DEFAULT_PROFILE_MODEL);
+        assert_eq!(models[0]["slug"], MISTRAL_CANONICAL_PROFILE_MODEL);
         assert_eq!(models[0]["supports_parallel_tool_calls"], true);
     }
 }

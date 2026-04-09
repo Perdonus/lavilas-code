@@ -8721,24 +8721,29 @@ impl ChatWidget {
         }
     }
 
+    fn reasoning_effort_choices_for_preset(preset: &ModelPreset) -> Vec<ReasoningEffortConfig> {
+        let choices: Vec<ReasoningEffortConfig> = preset
+            .supported_reasoning_efforts
+            .iter()
+            .map(|option| option.effort)
+            .collect();
+        if choices.is_empty() {
+            vec![match preset.default_reasoning_effort {
+                ReasoningEffortConfig::None => ReasoningEffortConfig::Medium,
+                effort => effort,
+            }]
+        } else {
+            choices
+        }
+    }
+
     fn reasoning_picker_choice_count(preset: &ModelPreset) -> usize {
-        let count = ReasoningEffortConfig::iter()
-            .filter(|effort| {
-                preset
-                    .supported_reasoning_efforts
-                    .iter()
-                    .any(|option| option.effort == *effort)
-            })
-            .count();
-        count.max(1)
+        Self::reasoning_effort_choices_for_preset(preset).len()
     }
 
     fn current_provider_supports_reasoning_controls(&self) -> bool {
         let provider = &self.config.model_provider;
-        match provider.effective_wire_api() {
-            WireApi::ChatCompletions => false,
-            WireApi::Responses => provider.uses_openai_responses_api(),
-        }
+        provider.supports_reasoning_controls() || provider.uses_openai_responses_api()
     }
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
@@ -9573,6 +9578,7 @@ impl ChatWidget {
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts.clone();
+        let available_efforts = Self::reasoning_effort_choices_for_preset(&preset);
         let in_plan_mode =
             self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
         let is_ru = self.ui_language().is_ru();
@@ -9625,13 +9631,11 @@ impl ChatWidget {
             display: ReasoningEffortConfig,
         }
         let mut choices: Vec<EffortChoice> = Vec::new();
-        for effort in ReasoningEffortConfig::iter() {
-            if supported.iter().any(|option| option.effort == effort) {
-                choices.push(EffortChoice {
-                    stored: Some(effort),
-                    display: effort,
-                });
-            }
+        for effort in available_efforts {
+            choices.push(EffortChoice {
+                stored: Some(effort),
+                display: effort,
+            });
         }
         if choices.is_empty() {
             choices.push(EffortChoice {
@@ -14843,6 +14847,50 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Введите текст для поиска коммитов".to_string()),
         ..Default::default()
     });
+}
+
+#[cfg(test)]
+mod reasoning_picker_tests {
+    use super::*;
+
+    fn preset_with_reasoning(
+        supported_reasoning_efforts: Vec<codex_protocol::openai_models::ReasoningEffortPreset>,
+    ) -> ModelPreset {
+        ModelPreset {
+            id: "custom-model".to_string(),
+            model: "custom-model".to_string(),
+            display_name: "custom-model".to_string(),
+            description: String::new(),
+            default_reasoning_effort: ReasoningEffortConfig::Medium,
+            supported_reasoning_efforts,
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            availability_nux: None,
+            supported_in_api: true,
+            input_modalities: codex_protocol::openai_models::default_input_modalities(),
+        }
+    }
+
+    #[test]
+    fn reasoning_picker_uses_full_budget_list_when_metadata_is_missing() {
+        let preset = preset_with_reasoning(Vec::new());
+        assert_eq!(
+            ChatWidget::reasoning_picker_choice_count(&preset),
+            ReasoningEffortConfig::iter().count()
+        );
+    }
+
+    #[test]
+    fn reasoning_picker_counts_explicit_metadata() {
+        let preset =
+            preset_with_reasoning(vec![codex_protocol::openai_models::ReasoningEffortPreset {
+                effort: ReasoningEffortConfig::High,
+                description: "high".to_string(),
+            }]);
+        assert_eq!(ChatWidget::reasoning_picker_choice_count(&preset), 1);
+    }
 }
 
 #[cfg(test)]

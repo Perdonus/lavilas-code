@@ -82,6 +82,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_tools::ToolSpec;
 use codex_tools::create_tools_json_for_responses_api;
+use codex_utils_stream_parser::strip_hidden_reasoning_tags;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -154,6 +155,10 @@ fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
     provider.uses_mistral_api()
 }
 
+fn provider_uses_gemini_api(provider: &ModelProviderInfo) -> bool {
+    provider.uses_gemini_api()
+}
+
 fn effective_wire_api(provider: &ModelProviderInfo) -> WireApi {
     provider.effective_wire_api()
 }
@@ -162,6 +167,10 @@ fn normalize_request_model_for_provider<'a>(
     provider: &ModelProviderInfo,
     model: &'a str,
 ) -> Cow<'a, str> {
+    if provider_uses_gemini_api(provider) && model.starts_with("models/") {
+        return Cow::Borrowed(model.trim_start_matches("models/"));
+    }
+
     if provider_uses_mistral_api(provider) {
         if model.eq_ignore_ascii_case(MISTRAL_CANONICAL_TOOL_MODEL)
             || model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
@@ -513,7 +522,8 @@ impl ModelClient {
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let runtime_config = self.runtime_config();
-        let reasoning = Self::build_reasoning(model_info, effort, summary);
+        let reasoning =
+            Self::build_reasoning(&runtime_config.provider, model_info, effort, summary);
         let verbosity = if model_info.support_verbosity {
             runtime_config
                 .model_verbosity
@@ -676,19 +686,34 @@ impl ModelClient {
     }
 
     fn build_reasoning(
+        provider: &ModelProviderInfo,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
     ) -> Option<Reasoning> {
-        if model_info.supports_reasoning_summaries {
+        if provider.supports_reasoning_controls() || model_info.supports_reasoning_summaries {
             Some(Reasoning {
                 effort: effort.or(model_info.default_reasoning_level),
-                summary: if summary == ReasoningSummaryConfig::None {
-                    None
-                } else {
+                summary: if model_info.supports_reasoning_summaries
+                    && summary != ReasoningSummaryConfig::None
+                {
                     Some(summary)
+                } else {
+                    None
                 },
             })
+        } else {
+            None
+        }
+    }
+
+    fn build_chat_completions_reasoning_effort(
+        provider: &ModelProviderInfo,
+        model_info: &ModelInfo,
+        effort: Option<ReasoningEffortConfig>,
+    ) -> Option<ReasoningEffortConfig> {
+        if provider.supports_chat_completions_reasoning_effort() {
+            effort.or(model_info.default_reasoning_level)
         } else {
             None
         }
@@ -887,13 +912,17 @@ impl ModelClientSession {
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let default_reasoning_effort = model_info.default_reasoning_level;
-        let reasoning = if model_info.supports_reasoning_summaries {
+        let reasoning = if runtime_config.provider.supports_reasoning_controls()
+            || model_info.supports_reasoning_summaries
+        {
             Some(Reasoning {
                 effort: effort.or(default_reasoning_effort),
-                summary: if summary == ReasoningSummaryConfig::None {
-                    None
-                } else {
+                summary: if model_info.supports_reasoning_summaries
+                    && summary != ReasoningSummaryConfig::None
+                {
                     Some(summary)
+                } else {
+                    None
                 },
             })
         } else {
@@ -947,6 +976,7 @@ impl ModelClientSession {
         &self,
         prompt: &Prompt,
         model_info: &ModelInfo,
+        effort: Option<ReasoningEffortConfig>,
     ) -> Result<ChatCompletionsRequest> {
         let runtime_config = self.client.runtime_config();
         let input = prompt.get_formatted_input();
@@ -955,6 +985,11 @@ impl ModelClientSession {
         let has_tools = !tools.is_empty();
         let request_model =
             normalize_request_model_for_provider(&runtime_config.provider, &model_info.slug);
+        let reasoning_effort = Self::build_chat_completions_reasoning_effort(
+            &runtime_config.provider,
+            model_info,
+            effort,
+        );
 
         Ok(ChatCompletionsRequest {
             model: request_model.into_owned(),
@@ -962,6 +997,7 @@ impl ModelClientSession {
             tools,
             tool_choice: has_tools.then_some("auto".to_string()),
             parallel_tool_calls: has_tools.then_some(prompt.parallel_tool_calls),
+            reasoning_effort,
             stream: false,
         })
     }
@@ -1320,7 +1356,7 @@ impl ModelClientSession {
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
-        _effort: Option<ReasoningEffortConfig>,
+        effort: Option<ReasoningEffortConfig>,
         _summary: ReasoningSummaryConfig,
         _service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
@@ -1341,7 +1377,7 @@ impl ModelClientSession {
             .map(AuthManager::unauthorized_recovery);
         loop {
             let client_setup = self.client.current_client_setup().await?;
-            let request = self.build_chat_completions_request(prompt, model_info)?;
+            let request = self.build_chat_completions_request(prompt, model_info, effort)?;
             match execute_chat_completions_request(
                 &client_setup.api_provider,
                 &client_setup.api_auth,
@@ -2157,6 +2193,8 @@ struct ChatCompletionsRequest {
     tool_choice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parallel_tool_calls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<ReasoningEffortConfig>,
     stream: bool,
 }
 
@@ -2498,8 +2536,9 @@ fn content_items_to_chat_text(content: &[ContentItem]) -> String {
     for item in content {
         match item {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                let text = strip_hidden_reasoning_tags(text);
                 if !text.is_empty() {
-                    segments.push(text.clone());
+                    segments.push(text);
                 }
             }
             ContentItem::InputImage { .. } => {
@@ -2634,7 +2673,7 @@ fn chat_message_content_to_text(content: Option<&JsonValue>) -> Option<String> {
     let value = content?;
     match value {
         JsonValue::Null => None,
-        JsonValue::String(text) => Some(text.clone()),
+        JsonValue::String(text) => Some(strip_hidden_reasoning_tags(text)),
         JsonValue::Array(items) => {
             let parts = items
                 .iter()
@@ -2643,17 +2682,19 @@ fn chat_message_content_to_text(content: Option<&JsonValue>) -> Option<String> {
             if parts.is_empty() {
                 None
             } else {
-                Some(parts.join("\n"))
+                Some(strip_hidden_reasoning_tags(&parts.join("\n")))
             }
         }
-        JsonValue::Object(_) => chat_message_part_to_text(value),
+        JsonValue::Object(_) => {
+            chat_message_part_to_text(value).map(|text| strip_hidden_reasoning_tags(&text))
+        }
         other => Some(other.to_string()),
     }
 }
 
 fn chat_message_part_to_text(value: &JsonValue) -> Option<String> {
     match value {
-        JsonValue::String(text) => Some(text.clone()),
+        JsonValue::String(text) => Some(strip_hidden_reasoning_tags(text)),
         JsonValue::Object(object) => {
             if object.get("type").and_then(JsonValue::as_str) == Some("image_url") {
                 return Some("[image attachment omitted during provider translation]".to_string());
@@ -2661,13 +2702,13 @@ fn chat_message_part_to_text(value: &JsonValue) -> Option<String> {
             object
                 .get("text")
                 .and_then(JsonValue::as_str)
-                .map(str::to_string)
+                .map(|text| strip_hidden_reasoning_tags(text))
                 .or_else(|| {
                     object
                         .get("text")
                         .and_then(|text| text.get("value"))
                         .and_then(JsonValue::as_str)
-                        .map(str::to_string)
+                        .map(strip_hidden_reasoning_tags)
                 })
         }
         _ => None,

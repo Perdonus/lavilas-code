@@ -1,4 +1,6 @@
 use super::AuthRequestTelemetryContext;
+use super::ChatCompletionsMessage;
+use super::ChatCompletionsResponse;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
@@ -7,18 +9,22 @@ use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
 use super::build_chat_completions_messages;
+use super::chat_completions_response_to_events;
 use super::effective_wire_api;
 use super::normalize_request_model_for_provider;
 use codex_api::api_bridge::CoreAuthProvider;
 use codex_app_server_protocol::AuthMode;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::sync::atomic::Ordering;
 
@@ -34,6 +40,61 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
     )
+}
+
+fn test_model_client_with_provider(provider: ModelProviderInfo) -> ModelClient {
+    ModelClient::new(
+        /*auth_manager*/ None,
+        ThreadId::new(),
+        provider,
+        SessionSource::Cli,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+    )
+}
+
+fn gemini_provider() -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "Gemini".to_string(),
+        base_url: Some("https://generativelanguage.googleapis.com/v1beta/openai".to_string()),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        wire_api: WireApi::ChatCompletions,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    }
+}
+
+fn mistral_provider() -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "Mistral".to_string(),
+        base_url: Some("https://api.mistral.ai/v1".to_string()),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        wire_api: WireApi::ChatCompletions,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    }
 }
 
 fn test_model_info() -> ModelInfo {
@@ -205,6 +266,136 @@ fn normalize_request_model_maps_legacy_mistral_tool_alias() {
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-fast").as_ref(),
         "mistral-large-latest"
+    );
+}
+
+#[test]
+fn normalize_request_model_strips_gemini_models_prefix() {
+    let provider = gemini_provider();
+
+    assert_eq!(
+        normalize_request_model_for_provider(&provider, "models/gemini-2.5-flash").as_ref(),
+        "gemini-2.5-flash"
+    );
+    assert!(provider.supports_chat_completions_reasoning_effort());
+    assert!(provider.supports_reasoning_controls());
+}
+
+#[test]
+fn build_chat_completions_request_includes_reasoning_effort_for_gemini() {
+    let client = test_model_client_with_provider(gemini_provider());
+    let prompt = super::Prompt {
+        base_instructions: BaseInstructions {
+            text: "".to_string(),
+        },
+        input: vec![super::ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![super::ContentItem::InputText {
+                text: "hello <thought>hidden</thought> world".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+        tools: vec![],
+        parallel_tool_calls: false,
+        personality: None,
+        output_schema: None,
+    };
+    let model_info = test_model_info();
+    let request = client
+        .new_session()
+        .build_chat_completions_request(
+            &prompt,
+            &model_info,
+            Some(codex_protocol::openai_models::ReasoningEffort::High),
+        )
+        .expect("chat completions request");
+
+    assert_eq!(
+        request.reasoning_effort,
+        Some(codex_protocol::openai_models::ReasoningEffort::High)
+    );
+    assert_eq!(request.messages.len(), 1);
+    assert_eq!(
+        request.messages[0].content,
+        Some(Value::String("hello  world".to_string()))
+    );
+}
+
+#[test]
+fn build_chat_completions_request_omits_reasoning_effort_for_mistral() {
+    let client = test_model_client_with_provider(mistral_provider());
+    let prompt = super::Prompt {
+        base_instructions: BaseInstructions {
+            text: "".to_string(),
+        },
+        input: vec![],
+        tools: vec![],
+        parallel_tool_calls: false,
+        personality: None,
+        output_schema: None,
+    };
+    let model_info = test_model_info();
+    let request = client
+        .new_session()
+        .build_chat_completions_request(&prompt, &model_info, None)
+        .expect("chat completions request");
+
+    assert_eq!(request.reasoning_effort, None);
+}
+
+#[test]
+fn chat_completions_response_strips_hidden_reasoning_tags() {
+    let response = ChatCompletionsResponse {
+        id: Some("resp-1".to_string()),
+        model: Some("models/gemini-2.5-flash".to_string()),
+        choices: vec![super::ChatCompletionChoice {
+            message: ChatCompletionsMessage::text(
+                "assistant",
+                "A<thought>hidden</thought>B".to_string(),
+            ),
+        }],
+        usage: None,
+    };
+
+    let events = chat_completions_response_to_events(response).expect("events");
+    let text = events
+        .into_iter()
+        .find_map(|event| match event {
+            super::ResponseEvent::OutputItemDone(super::ResponseItem::Message {
+                content, ..
+            }) => content.into_iter().find_map(|content| match content {
+                super::ContentItem::OutputText { text } => Some(text),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("assistant text");
+
+    assert_eq!(text, "AB");
+}
+
+#[test]
+fn build_chat_completions_messages_strips_hidden_reasoning_tags_from_replay() {
+    let messages = build_chat_completions_messages(
+        "system prompt",
+        &[super::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![super::ContentItem::InputText {
+                text: "before<thought>hidden</thought>after".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+    )
+    .expect("chat completions messages");
+
+    assert_eq!(messages.len(), 2);
+    assert_eq!(
+        messages[1].content,
+        Some(Value::String("beforeafter".to_string()))
     );
 }
 

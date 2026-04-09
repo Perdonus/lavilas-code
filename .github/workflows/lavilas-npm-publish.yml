@@ -333,9 +333,25 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+
+          publish_if_needed() {
+            local dir="$1"
+            local pkg_json name version
+            pkg_json="$dir/package.json"
+            name="$(node -p "require(process.argv[1]).name" "$pkg_json")"
+            version="$(node -p "require(process.argv[1]).version" "$pkg_json")"
+
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "Skipping ${name}@${version}: already published"
+              return 0
+            fi
+
+            (cd "$dir" && npm publish --access public)
+          }
+
           for dir in "$RUNNER_TEMP"/npm-artifacts/*; do
             if [[ -d "$dir" ]]; then
-              (cd "$dir" && npm publish --access public)
+              publish_if_needed "$dir"
             fi
           done
 
@@ -345,5 +361,20 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/pkg-codex"
-          npm publish --access public
+
+          publish_if_needed() {
+            local dir="$1"
+            local pkg_json name version
+            pkg_json="$dir/package.json"
+            name="$(node -p "require(process.argv[1]).name" "$pkg_json")"
+            version="$(node -p "require(process.argv[1]).version" "$pkg_json")"
+
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "Skipping ${name}@${version}: already published"
+              return 0
+            fi
+
+            (cd "$dir" && npm publish --access public)
+          }
+
+          publish_if_needed "$RUNNER_TEMP/pkg-codex"
