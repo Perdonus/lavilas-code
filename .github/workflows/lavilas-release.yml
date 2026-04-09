@@ -142,12 +142,13 @@ jobs:
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
 
       - if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
-        name: Throttle arm64 musl release build
+        name: Reduce arm64 musl linker memory pressure
         shell: bash
         run: |
           set -euo pipefail
-          echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
-          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_LTO=thin" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=-C link-arg=-Wl,--no-keep-memory" >> "$GITHUB_ENV"
 
       - name: Build release binary (unix)
         if: runner.os != 'Windows'
