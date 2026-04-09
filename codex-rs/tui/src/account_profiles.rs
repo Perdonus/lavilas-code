@@ -445,7 +445,7 @@ pub(crate) fn read_profile_model_catalog_sidecar(
         return Ok(None);
     };
 
-    let contents = match std::fs::read_to_string(path) {
+    let contents = match std::fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
