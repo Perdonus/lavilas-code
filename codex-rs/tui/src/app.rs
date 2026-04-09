@@ -186,7 +186,6 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use toml::Value as TomlValue;
 use toml_edit::value;
 use uuid::Uuid;
@@ -1512,7 +1511,7 @@ impl App {
             request.headers.insert("ChatGPT-Account-ID", header);
         }
 
-        let response = transport
+        let response: codex_client::Response = transport
             .execute(request)
             .await
             .wrap_err("custom provider model list request failed")?;
