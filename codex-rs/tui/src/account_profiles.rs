@@ -416,6 +416,7 @@ pub(crate) fn build_create_profile_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_preferences::MISTRAL_DEFAULT_PROFILE_MODEL;
     use tempfile::tempdir;
 
     #[test]
@@ -453,7 +454,7 @@ mod tests {
         .expect("write sidecar");
 
         let loaded = load_stored_profile(&profile_path).expect("load repaired profile");
-        assert_eq!(loaded.model, "mistral-vibe-cli");
+        assert_eq!(loaded.model, MISTRAL_DEFAULT_PROFILE_MODEL);
         assert!(
             !std::fs::read_to_string(&profile_path)
                 .expect("profile contents")

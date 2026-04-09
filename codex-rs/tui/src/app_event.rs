@@ -326,6 +326,16 @@ pub(crate) enum AppEvent {
         profile_key: String,
     },
 
+    /// Open the action menu for one stored profile.
+    OpenStoredProfileActions {
+        profile_key: String,
+    },
+
+    /// Delete one stored profile and its derived local metadata.
+    DeleteStoredProfile {
+        profile_key: String,
+    },
+
     /// Open language picker for interface/profile settings.
     OpenLanguagePicker,
 
@@ -336,6 +346,9 @@ pub(crate) enum AppEvent {
 
     /// Open command prefix picker.
     OpenCommandPrefixPicker,
+
+    /// Open a free-form prompt for a custom command prefix.
+    OpenCustomCommandPrefixPrompt,
 
     /// Persist slash-command prefix.
     SetCommandPrefix {
@@ -348,6 +361,44 @@ pub(crate) enum AppEvent {
     /// Toggle visibility of one slash command by canonical key.
     ToggleCommandVisibility {
         command_key: String,
+    },
+
+    /// Open model preset settings for the active provider.
+    OpenModelPresetsSettings,
+
+    /// Toggle whether quick model presets are shown before the full catalog.
+    ToggleModelPresetsEnabled,
+
+    /// Open the editor for active-provider quick model presets.
+    OpenCurrentProviderModelPresetEditor,
+
+    /// Open actions for one active-provider quick model preset.
+    OpenCurrentProviderModelPresetActions {
+        preset_id: String,
+    },
+
+    /// Open a model picker to add a preset or replace an existing preset model.
+    OpenCurrentProviderModelPresetModelPicker {
+        preset_id: Option<String>,
+    },
+
+    /// Open a naming prompt for a new or existing quick model preset.
+    OpenCurrentProviderModelPresetNamePrompt {
+        preset_id: Option<String>,
+        model: String,
+        suggested_name: String,
+    },
+
+    /// Upsert one active-provider quick model preset.
+    UpsertCurrentProviderModelPreset {
+        preset_id: Option<String>,
+        name: String,
+        model: String,
+    },
+
+    /// Delete one active-provider quick model preset.
+    DeleteCurrentProviderModelPreset {
+        preset_id: String,
     },
 
     /// Open the realtime audio settings popup.

@@ -12,7 +12,7 @@ use tracing::error;
 use tracing::info;
 
 /// Manages loading and saving of models cache to disk.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ModelsCacheManager {
     cache_path: PathBuf,
     cache_ttl: Duration,

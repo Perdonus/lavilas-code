@@ -1,4 +1,3 @@
-use codex_model_provider_info::canonicalize_provider_model_slug as canonicalize_provider_catalog_model_slug;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -21,7 +20,8 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 const COMPATIBILITY_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
-const MISTRAL_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
+const MISTRAL_LEGACY_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
+const MISTRAL_CANONICAL_MODEL: &str = "mistral-large-latest";
 const COMPATIBILITY_PROVIDER_HINTS: [&str; 11] = [
     "anthropic",
     "claude",
@@ -196,13 +196,37 @@ fn slug_supports_tool_use(slug: &str) -> bool {
 }
 
 fn canonicalize_mistral_variant_slug(slug: &str) -> Option<String> {
-    canonicalize_provider_catalog_model_slug(slug)
+    let (prefix, terminal_segment) = match slug.rsplit_once('/') {
+        Some((prefix, terminal_segment)) => (Some(prefix), terminal_segment),
+        None => (None, slug),
+    };
+
+    let canonical_terminal = if terminal_segment.eq_ignore_ascii_case(MISTRAL_CANONICAL_MODEL)
+        || terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL)
+        || terminal_segment.eq_ignore_ascii_case("mistral-vibe-cli-with-tools")
+    {
+        Some(MISTRAL_CANONICAL_MODEL)
+    } else {
+        COMPATIBILITY_VARIANT_SUFFIXES
+            .iter()
+            .find_map(|suffix| terminal_segment.strip_suffix(suffix))
+            .filter(|base| {
+                base.eq_ignore_ascii_case(MISTRAL_CANONICAL_MODEL)
+                    || base.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL)
+            })
+            .map(|_| MISTRAL_CANONICAL_MODEL)
+    }?;
+
+    Some(match prefix {
+        Some(prefix) => format!("{prefix}/{canonical_terminal}"),
+        None => canonical_terminal.to_string(),
+    })
 }
 
 fn mistral_vibe_cli_terminal_segment(slug: &str) -> bool {
     slug.rsplit('/')
         .next()
-        .is_some_and(|segment| segment.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL))
+        .is_some_and(|segment| segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL))
 }
 
 fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {

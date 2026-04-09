@@ -2714,6 +2714,17 @@ impl Session {
                 previous_configuration.base_instructions.clone()
             }
         });
+        self.services.model_client.reconfigure(
+            Some(Arc::clone(&self.services.auth_manager)),
+            new_config.model_provider.clone(),
+            previous_configuration.session_source.clone(),
+            new_config.model_verbosity.clone(),
+            new_config
+                .features
+                .enabled(Feature::EnableRequestCompression),
+            new_config.features.enabled(Feature::RuntimeMetrics),
+            Self::build_model_client_beta_features_header(&new_config),
+        );
 
         let mut state = self.state.lock().await;
         state.session_configuration.provider = new_config.model_provider.clone();

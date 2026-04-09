@@ -30,6 +30,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -267,6 +268,11 @@ const LANGUAGE_PICKER_VIEW_ID: &str = "language-picker";
 const COMMAND_PREFIX_VIEW_ID: &str = "command-prefix-picker";
 const COMMAND_VISIBILITY_VIEW_ID: &str = "command-visibility-picker";
 const PROFILES_MANAGER_VIEW_ID: &str = "profiles-manager";
+const PROFILE_ACTIONS_VIEW_ID: &str = "profile-actions";
+const MODEL_PRESETS_SETTINGS_VIEW_ID: &str = "model-presets-settings";
+const MODEL_PRESET_EDITOR_VIEW_ID: &str = "model-preset-editor";
+const MODEL_PRESET_ACTIONS_VIEW_ID: &str = "model-preset-actions";
+const MODEL_PRESET_MODEL_PICKER_VIEW_ID: &str = "model-preset-model-picker";
 const ADD_ACCOUNT_PROVIDER_VIEW_ID: &str = "add-account-provider";
 const PERSONALITY_VIEW_ID: &str = "personality-picker";
 const MODEL_PICKER_VIEW_ID: &str = "model-picker";
@@ -380,6 +386,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use crate::ui_preferences::StoredModelPreset;
 use crate::ui_preferences::UiLanguage;
 use crate::ui_preferences::default_profile_model as default_profile_model_for_provider;
 use crate::ui_preferences::load_ui_preferences;
@@ -387,6 +394,8 @@ use crate::ui_preferences::profile_model_catalog_path as ui_profile_model_catalo
 use crate::ui_preferences::profiles_dir as ui_profiles_dir;
 use crate::ui_preferences::save_command_prefix as save_ui_command_prefix;
 use crate::ui_preferences::save_hidden_commands as save_ui_hidden_commands;
+use crate::ui_preferences::save_model_presets_enabled as save_ui_model_presets_enabled;
+use crate::ui_preferences::save_provider_model_presets as save_ui_provider_model_presets;
 use crate::ui_preferences::save_ui_language;
 use crate::ui_preferences::settings_path as ui_settings_path;
 mod interrupts;
@@ -8739,7 +8748,12 @@ impl ChatWidget {
             Vec<ModelPreset>,
             String,
         ) = if auto_presets.is_empty() {
-            let provider_quick_presets = Self::provider_quick_presets(&all_presets);
+            if !self.current_model_presets_enabled() {
+                self.open_all_models_popup(all_presets);
+                return;
+            }
+
+            let provider_quick_presets = self.resolved_provider_model_presets(&all_presets);
             if provider_quick_presets.is_empty() {
                 self.open_all_models_popup(all_presets);
                 return;
@@ -8747,23 +8761,12 @@ impl ChatWidget {
 
             let items = provider_quick_presets
                 .into_iter()
-                .map(|(kind, preset)| {
-                    let item_label = self.provider_quick_preset_label(kind);
+                .map(|(stored_preset, preset)| {
+                    let item_label = stored_preset.name.clone();
                     let model_label = Self::model_picker_label(&preset);
-                    let description = self.provider_quick_preset_description(kind, &preset);
                     let model = preset.model.clone();
                     let preset_for_action = preset.clone();
-                    let search_tags = match (is_ru, kind) {
-                        (true, "fast") => "быстрый fast скорость",
-                        (true, "latest") => "основной latest актуальный",
-                        (true, "tools") => "инструменты tools mcp exec",
-                        (false, "fast") => "fast quick speed",
-                        (false, "latest") => "latest primary default",
-                        (false, "tools") => "tools mcp exec",
-                        _ => "model",
-                    };
-                    let search_value =
-                        format!("{item_label} {model_label} {model} {search_tags} {description}");
+                    let search_value = format!("{item_label} {model_label} {model}");
                     let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                         tx.send(AppEvent::OpenReasoningPopup {
                             model: preset_for_action.clone(),
@@ -8771,7 +8774,7 @@ impl ChatWidget {
                     })];
                     SelectionItem {
                         name: item_label,
-                        description: Some(description),
+                        selected_description: Some(model_label),
                         search_value: Some(search_value),
                         is_current: model.as_str() == current_model,
                         is_default: preset.is_default,
@@ -8786,9 +8789,9 @@ impl ChatWidget {
                 items,
                 all_presets,
                 if is_ru {
-                    "Быстрые пресеты под текущего провайдера: сначала тип сценария, затем выбор бюджета размышлений.".to_string()
+                    "Быстрые пресеты текущего провайдера. После выбора откроется бюджет размышлений.".to_string()
                 } else {
-                    "Provider-aware quick presets: choose the scenario first, then pick a reasoning budget.".to_string()
+                    "Quick presets for the active provider. Choose one, then pick a reasoning budget.".to_string()
                 },
             )
         } else {
@@ -8958,6 +8961,10 @@ impl ChatWidget {
             || slug.contains("tool_use")
     }
 
+    fn preset_supports_tool_workflows(preset: &ModelPreset) -> bool {
+        Self::looks_like_tool_model(preset.model.as_str())
+    }
+
     fn looks_like_fast_model(model: &str) -> bool {
         let slug = model.to_ascii_lowercase();
         [
@@ -8981,7 +8988,7 @@ impl ChatWidget {
 
         if let Some(preset) = presets
             .iter()
-            .filter(|preset| !Self::looks_like_tool_model(preset.model.as_str()))
+            .filter(|preset| !Self::preset_supports_tool_workflows(preset))
             .filter(|preset| Self::looks_like_fast_model(preset.model.as_str()))
             .min_by_key(|preset| {
                 (
@@ -9002,7 +9009,7 @@ impl ChatWidget {
                 (
                     !Self::looks_like_latest_model(preset.model.as_str()),
                     Self::looks_like_fast_model(preset.model.as_str()),
-                    Self::looks_like_tool_model(preset.model.as_str()),
+                    Self::preset_supports_tool_workflows(preset),
                     !preset.is_default,
                 )
             })
@@ -9015,11 +9022,19 @@ impl ChatWidget {
         if let Some(preset) = presets
             .iter()
             .filter(|preset| !used_models.contains(preset.model.as_str()))
-            .filter(|preset| Self::looks_like_tool_model(preset.model.as_str()))
             .min_by_key(|preset| {
                 (
-                    !Self::looks_like_latest_model(preset.model.as_str()),
+                    !Self::preset_supports_tool_workflows(preset),
                     Self::looks_like_fast_model(preset.model.as_str()),
+                    !preset
+                        .supported_reasoning_efforts
+                        .iter()
+                        .any(|option| option.effort == ReasoningEffortConfig::XHigh),
+                    !preset
+                        .supported_reasoning_efforts
+                        .iter()
+                        .any(|option| option.effort == ReasoningEffortConfig::High),
+                    !Self::looks_like_latest_model(preset.model.as_str()),
                     !preset.is_default,
                 )
             })
@@ -10000,6 +10015,132 @@ impl ChatWidget {
         self.ui_language().code().to_string()
     }
 
+    fn current_model_presets_enabled(&self) -> bool {
+        self.ui_preferences().model_presets_enabled
+    }
+
+    fn current_provider_model_preset_key(&self) -> String {
+        self.config.model_provider_id.clone()
+    }
+
+    fn saved_current_provider_model_presets(&self) -> Vec<StoredModelPreset> {
+        self.ui_preferences()
+            .provider_model_presets
+            .get(self.current_provider_model_preset_key().as_str())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn current_provider_catalog_models(&self) -> Vec<ModelPreset> {
+        self.model_catalog
+            .try_list_models()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|preset| preset.show_in_picker)
+            .collect()
+    }
+
+    fn preset_matches_model_slug(preset: &StoredModelPreset, model: &ModelPreset) -> bool {
+        if preset.model == model.model {
+            return true;
+        }
+        let saved_tail = preset
+            .model
+            .rsplit('/')
+            .next()
+            .unwrap_or(preset.model.as_str());
+        let model_tail = model
+            .model
+            .rsplit('/')
+            .next()
+            .unwrap_or(model.model.as_str());
+        saved_tail.eq_ignore_ascii_case(model_tail)
+    }
+
+    fn derive_provider_model_presets(&self, models: &[ModelPreset]) -> Vec<StoredModelPreset> {
+        let is_ru = self.ui_language().is_ru();
+        let mut derived = Vec::new();
+        let quick_presets = Self::provider_quick_presets(models);
+        for (kind, preset) in quick_presets {
+            let name = match (is_ru, kind) {
+                (true, "fast") => "Быстрый",
+                (true, "latest") => "Средний",
+                (true, "tools") => "Максимум",
+                (false, "fast") => "Fast",
+                (false, "latest") => "Balanced",
+                (false, "tools") => "Max",
+                (_, _) => "Preset",
+            };
+            derived.push(StoredModelPreset {
+                id: kind.to_string(),
+                name: name.to_string(),
+                model: preset.model,
+            });
+        }
+        derived
+    }
+
+    fn resolved_provider_model_presets(
+        &self,
+        models: &[ModelPreset],
+    ) -> Vec<(StoredModelPreset, ModelPreset)> {
+        let saved = self.saved_current_provider_model_presets();
+        let mut resolved = saved
+            .iter()
+            .filter_map(|preset| {
+                models
+                    .iter()
+                    .find(|model| Self::preset_matches_model_slug(preset, model))
+                    .cloned()
+                    .map(|model| (preset.clone(), model))
+            })
+            .collect::<Vec<_>>();
+        if resolved.is_empty() {
+            resolved = self
+                .derive_provider_model_presets(models)
+                .into_iter()
+                .filter_map(|preset| {
+                    models
+                        .iter()
+                        .find(|model| Self::preset_matches_model_slug(&preset, model))
+                        .cloned()
+                        .map(|model| (preset, model))
+                })
+                .collect();
+        }
+        resolved
+    }
+
+    fn editable_current_provider_model_presets(&self) -> Vec<StoredModelPreset> {
+        let saved = self.saved_current_provider_model_presets();
+        if !saved.is_empty() {
+            return saved;
+        }
+        self.derive_provider_model_presets(self.current_provider_catalog_models().as_slice())
+    }
+
+    fn next_current_provider_model_preset_id(&self, presets: &[StoredModelPreset]) -> String {
+        let mut next_index = presets.len() + 1;
+        loop {
+            let candidate = format!("preset-{next_index}");
+            if !presets.iter().any(|preset| preset.id == candidate) {
+                return candidate;
+            }
+            next_index += 1;
+        }
+    }
+
+    fn persist_current_provider_model_presets(
+        &mut self,
+        presets: &[StoredModelPreset],
+    ) -> io::Result<()> {
+        save_ui_provider_model_presets(
+            self.config.codex_home.as_path(),
+            self.current_provider_model_preset_key().as_str(),
+            presets,
+        )
+    }
+
     fn apply_ui_preferences_from_profiles(&mut self) {
         let preferences = self.ui_preferences();
         set_command_prefix(preferences.command_prefix);
@@ -10222,6 +10363,36 @@ impl ChatWidget {
                     "profiles accounts api keys providers models".to_string()
                 }),
                 actions: vec![Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: if is_ru {
+                    "Пресеты моделей".to_string()
+                } else {
+                    "Model presets".to_string()
+                },
+                description: Some(if self.current_model_presets_enabled() {
+                    if is_ru {
+                        format!(
+                            "Включены. Быстрые пресеты для текущего провайдера можно править отдельно."
+                        )
+                    } else {
+                        "Enabled. Quick presets for the active provider can be managed separately."
+                            .to_string()
+                    }
+                } else if is_ru {
+                    "Выключены. /model сразу открывает полный каталог без быстрых пресетов."
+                        .to_string()
+                } else {
+                    "Disabled. /model opens the full catalog immediately.".to_string()
+                }),
+                search_value: Some(if is_ru {
+                    "пресеты моделей быстрый выбор".to_string()
+                } else {
+                    "model presets quick picker".to_string()
+                }),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelPresetsSettings))],
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -10567,6 +10738,28 @@ impl ChatWidget {
             dismiss_on_select: true,
             ..Default::default()
         }));
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Свой символ".to_string()
+            } else {
+                "Custom character".to_string()
+            },
+            description: Some(if is_ru {
+                "Ввести любой одиночный ASCII-символ без пробела.".to_string()
+            } else {
+                "Enter any single non-space ASCII character.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "свой префикс символ".to_string()
+            } else {
+                "custom prefix character".to_string()
+            }),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenCustomCommandPrefixPrompt)
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
 
         let params = SelectionViewParams {
             view_id: Some(COMMAND_PREFIX_VIEW_ID),
@@ -10594,6 +10787,632 @@ impl ChatWidget {
         } else {
             self.bottom_pane.show_selection_view(params);
         }
+    }
+
+    pub(crate) fn open_custom_command_prefix_prompt(&mut self, request_id: &str) {
+        let is_ru = self.ui_language().is_ru();
+        self.bottom_pane
+            .push_user_input_request(RequestUserInputEvent {
+                id: request_id.to_string(),
+                title: if is_ru {
+                    "Свой префикс команд".to_string()
+                } else {
+                    "Custom command prefix".to_string()
+                },
+                description: if is_ru {
+                    Some("Введите один ASCII-символ без пробела. Примеры: ?, :, #".to_string())
+                } else {
+                    Some("Enter one non-space ASCII character. Examples: ?, :, #".to_string())
+                },
+                questions: vec![
+                    codex_protocol::request_user_input::RequestUserInputQuestion {
+                        id: "custom_command_prefix".to_string(),
+                        header: if is_ru {
+                            "Префикс".to_string()
+                        } else {
+                            "Prefix".to_string()
+                        },
+                        question: if is_ru {
+                            "Какой символ использовать для команд?"
+                        } else {
+                            "Which character should trigger commands?"
+                        }
+                        .to_string(),
+                        multiline: false,
+                        required: true,
+                        options: Vec::new(),
+                    },
+                ],
+                allow_cancel: true,
+                submit_label: if is_ru {
+                    Some("Сохранить".to_string())
+                } else {
+                    Some("Save".to_string())
+                },
+                cancel_label: None,
+            });
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_stored_profile_actions_popup(&mut self, profile_key: &str) {
+        let is_ru = self.ui_language().is_ru();
+        let path =
+            ui_profiles_dir(self.config.codex_home.as_path()).join(format!("{profile_key}.json"));
+        let preview = self.profile_preview(path.as_path());
+        let display_name = preview
+            .display_name
+            .clone()
+            .unwrap_or_else(|| profile_key.to_string());
+        let provider = preview
+            .provider
+            .as_deref()
+            .map(|provider| provider_display_name(provider, is_ru))
+            .unwrap_or_else(|| {
+                if is_ru {
+                    "Провайдер не указан".to_string()
+                } else {
+                    "Provider missing".to_string()
+                }
+            });
+        let model = preview.model.unwrap_or_else(|| {
+            if is_ru {
+                "Модель не указана".to_string()
+            } else {
+                "Model missing".to_string()
+            }
+        });
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад к профилям".to_string()
+            } else {
+                "← Back to profiles".to_string()
+            },
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Активировать".to_string()
+            } else {
+                "Activate".to_string()
+            },
+            description: Some(format!("{provider} • {model}")),
+            actions: vec![Box::new({
+                let profile_key = profile_key.to_string();
+                move |tx| {
+                    tx.send(AppEvent::ActivateStoredProfile {
+                        profile_key: profile_key.clone(),
+                    })
+                }
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Удалить профиль".to_string()
+            } else {
+                "Delete profile".to_string()
+            },
+            description: Some(if is_ru {
+                "Удалит JSON профиля и локальный слепок моделей из папки Profiles.".to_string()
+            } else {
+                "Deletes the profile JSON and its local model snapshot from Profiles.".to_string()
+            }),
+            actions: vec![Box::new({
+                let profile_key = profile_key.to_string();
+                move |tx| {
+                    tx.send(AppEvent::DeleteStoredProfile {
+                        profile_key: profile_key.clone(),
+                    })
+                }
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(PROFILE_ACTIONS_VIEW_ID),
+            title: Some(display_name),
+            subtitle: Some(if is_ru {
+                "Выберите действие для сохранённого профиля".to_string()
+            } else {
+                "Choose an action for this saved profile".to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_model_presets_settings_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
+        let enabled = self.current_model_presets_enabled();
+        let provider_name = format!(
+            "{} ({})",
+            self.config.model_provider.name, self.config.model_provider_id
+        );
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.push(SelectionItem {
+            name: if enabled {
+                if is_ru {
+                    "Быстрые пресеты: включены".to_string()
+                } else {
+                    "Quick presets: enabled".to_string()
+                }
+            } else if is_ru {
+                "Быстрые пресеты: выключены".to_string()
+            } else {
+                "Quick presets: disabled".to_string()
+            },
+            description: Some(if is_ru {
+                "Переключает быстрые пресеты в /model.".to_string()
+            } else {
+                "Toggles quick presets in /model.".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::ToggleModelPresetsEnabled))],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        if enabled {
+            items.push(SelectionItem {
+                name: if is_ru {
+                    "Редактировать пресеты текущего провайдера".to_string()
+                } else {
+                    "Edit active provider presets".to_string()
+                },
+                description: Some(if is_ru {
+                    format!("Сейчас активен: {provider_name}")
+                } else {
+                    format!("Active provider: {provider_name}")
+                }),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenCurrentProviderModelPresetEditor)
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(MODEL_PRESETS_SETTINGS_VIEW_ID),
+            title: Some(if is_ru {
+                "Пресеты моделей".to_string()
+            } else {
+                "Model presets".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Быстрые пресеты для /model хранятся отдельно по активному провайдеру.".to_string()
+            } else {
+                "Quick /model presets are stored separately for the active provider.".to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_current_provider_model_preset_editor_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
+        let provider_models = self.current_provider_catalog_models();
+        if provider_models.is_empty() {
+            self.add_info_message(
+                if is_ru {
+                    "Каталог моделей текущего провайдера пока пуст.".to_string()
+                } else {
+                    "The active provider model catalog is still empty.".to_string()
+                },
+                None,
+            );
+            return;
+        }
+
+        let presets = self.editable_current_provider_model_presets();
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад к пресетам моделей".to_string()
+            } else {
+                "← Back to model presets".to_string()
+            },
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelPresetsSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Добавить пресет".to_string()
+            } else {
+                "Add preset".to_string()
+            },
+            description: Some(if is_ru {
+                "Сначала выберите модель, затем задайте имя пресета.".to_string()
+            } else {
+                "Choose a model first, then name the preset.".to_string()
+            }),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenCurrentProviderModelPresetModelPicker { preset_id: None })
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        items.extend(presets.into_iter().map(|preset| {
+            let model_label = provider_models
+                .iter()
+                .find(|model| Self::preset_matches_model_slug(&preset, model))
+                .map(Self::model_picker_label)
+                .unwrap_or_else(|| preset.model.clone());
+            SelectionItem {
+                name: preset.name.clone(),
+                selected_description: Some(model_label),
+                search_value: Some(format!("{} {}", preset.name, preset.model)),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenCurrentProviderModelPresetActions {
+                        preset_id: preset.id.clone(),
+                    })
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        }));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(MODEL_PRESET_EDITOR_VIEW_ID),
+            title: Some(if is_ru {
+                "Пресеты текущего провайдера".to_string()
+            } else {
+                "Active provider presets".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                format!(
+                    "Провайдер: {} ({}). Здесь можно добавить, переименовать, переназначить и удалить пресеты.",
+                    self.config.model_provider.name, self.config.model_provider_id
+                )
+            } else {
+                format!(
+                    "Provider: {} ({}). Add, rename, retarget, or delete presets here.",
+                    self.config.model_provider.name, self.config.model_provider_id
+                )
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти пресет".to_string()
+            } else {
+                "Find a preset".to_string()
+            }),
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenModelPresetsSettings))),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_current_provider_model_preset_actions_popup(&mut self, preset_id: &str) {
+        let is_ru = self.ui_language().is_ru();
+        let presets = self.editable_current_provider_model_presets();
+        let Some(preset) = presets.into_iter().find(|preset| preset.id == preset_id) else {
+            self.add_error_message(if is_ru {
+                "Не удалось найти пресет для редактирования.".to_string()
+            } else {
+                "Preset not found for editing.".to_string()
+            });
+            return;
+        };
+
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад к списку пресетов".to_string()
+            } else {
+                "← Back to presets".to_string()
+            },
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenCurrentProviderModelPresetEditor)
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Переименовать".to_string()
+            } else {
+                "Rename".to_string()
+            },
+            actions: vec![Box::new({
+                let preset = preset.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenCurrentProviderModelPresetNamePrompt {
+                        preset_id: Some(preset.id.clone()),
+                        model: preset.model.clone(),
+                        suggested_name: preset.name.clone(),
+                    })
+                }
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Сменить модель".to_string()
+            } else {
+                "Change model".to_string()
+            },
+            actions: vec![Box::new({
+                let preset_id = preset.id.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenCurrentProviderModelPresetModelPicker {
+                        preset_id: Some(preset_id.clone()),
+                    })
+                }
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Удалить пресет".to_string()
+            } else {
+                "Delete preset".to_string()
+            },
+            actions: vec![Box::new({
+                let preset_id = preset.id.clone();
+                move |tx| {
+                    tx.send(AppEvent::DeleteCurrentProviderModelPreset {
+                        preset_id: preset_id.clone(),
+                    })
+                }
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(MODEL_PRESET_ACTIONS_VIEW_ID),
+            title: Some(preset.name),
+            subtitle: Some(preset.model),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            on_cancel: Some(Box::new(|tx| {
+                tx.send(AppEvent::OpenCurrentProviderModelPresetEditor)
+            })),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_current_provider_model_preset_model_picker(
+        &mut self,
+        preset_id: Option<&str>,
+    ) {
+        let is_ru = self.ui_language().is_ru();
+        let models = self.current_provider_catalog_models();
+        if models.is_empty() {
+            self.add_info_message(
+                if is_ru {
+                    "Сначала дождитесь каталога моделей текущего провайдера.".to_string()
+                } else {
+                    "Wait for the active provider model catalog first.".to_string()
+                },
+                None,
+            );
+            return;
+        }
+
+        let preset_name = preset_id.and_then(|id| {
+            self.editable_current_provider_model_presets()
+                .into_iter()
+                .find(|preset| preset.id == id)
+                .map(|preset| preset.name)
+        });
+        let items = models
+            .into_iter()
+            .map(|model| {
+                let model_slug = model.model.clone();
+                let model_name = Self::model_picker_label(&model);
+                let suggested_name = preset_name.clone().unwrap_or_else(|| model_name.clone());
+                let action_preset_id = preset_id.map(str::to_string);
+                SelectionItem {
+                    name: model_name.clone(),
+                    selected_description: Some(model_slug.clone()),
+                    search_value: Some(format!("{model_name} {model_slug}")),
+                    actions: vec![Box::new(move |tx| {
+                        if let Some(preset_id) = action_preset_id.clone() {
+                            tx.send(AppEvent::UpsertCurrentProviderModelPreset {
+                                preset_id: Some(preset_id),
+                                name: suggested_name.clone(),
+                                model: model_slug.clone(),
+                            });
+                        } else {
+                            tx.send(AppEvent::OpenCurrentProviderModelPresetNamePrompt {
+                                preset_id: None,
+                                model: model_slug.clone(),
+                                suggested_name: suggested_name.clone(),
+                            });
+                        }
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(MODEL_PRESET_MODEL_PICKER_VIEW_ID),
+            title: Some(if is_ru {
+                "Выберите модель для пресета".to_string()
+            } else {
+                "Choose a preset model".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Список моделей активного провайдера.".to_string()
+            } else {
+                "Model list for the active provider.".to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти модель".to_string()
+            } else {
+                "Find a model".to_string()
+            }),
+            on_cancel: Some(Box::new(|tx| {
+                tx.send(AppEvent::OpenCurrentProviderModelPresetEditor)
+            })),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_current_provider_model_preset_name_prompt(
+        &mut self,
+        request_id: &str,
+        suggested_name: &str,
+        model: &str,
+    ) {
+        let is_ru = self.ui_language().is_ru();
+        self.bottom_pane.push_user_input_request(RequestUserInputEvent {
+            id: request_id.to_string(),
+            title: if is_ru {
+                "Название пресета".to_string()
+            } else {
+                "Preset name".to_string()
+            },
+            description: Some(if is_ru {
+                format!(
+                    "Введите название для пресета. Если оставить пустым, будет использовано `{suggested_name}`. Модель: {model}"
+                )
+            } else {
+                format!(
+                    "Enter a name for the preset. Leave it empty to use `{suggested_name}`. Model: {model}"
+                )
+            }),
+            questions: vec![codex_protocol::request_user_input::RequestUserInputQuestion {
+                id: "model_preset_name".to_string(),
+                header: if is_ru {
+                    "Название".to_string()
+                } else {
+                    "Name".to_string()
+                },
+                question: if is_ru {
+                    "Как назвать этот пресет?"
+                } else {
+                    "What should this preset be called?"
+                }
+                .to_string(),
+                multiline: false,
+                required: false,
+                options: Vec::new(),
+            }],
+            allow_cancel: true,
+            submit_label: if is_ru {
+                Some("Сохранить".to_string())
+            } else {
+                Some("Save".to_string())
+            },
+            cancel_label: None,
+        });
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_model_presets_enabled(&mut self, enabled: bool) {
+        if let Err(err) = save_ui_model_presets_enabled(self.config.codex_home.as_path(), enabled) {
+            self.add_error_message(if self.ui_language().is_ru() {
+                format!("Не удалось сохранить состояние пресетов моделей: {err}")
+            } else {
+                format!("Failed to save model preset state: {err}")
+            });
+            return;
+        }
+
+        self.add_info_message(
+            if self.ui_language().is_ru() {
+                if enabled {
+                    "Быстрые пресеты моделей включены.".to_string()
+                } else {
+                    "Быстрые пресеты моделей выключены.".to_string()
+                }
+            } else if enabled {
+                "Quick model presets enabled.".to_string()
+            } else {
+                "Quick model presets disabled.".to_string()
+            },
+            None,
+        );
+        self.open_model_presets_settings_popup();
+    }
+
+    pub(crate) fn upsert_current_provider_model_preset(
+        &mut self,
+        preset_id: Option<&str>,
+        name: &str,
+        model: &str,
+    ) {
+        let mut presets = self.editable_current_provider_model_presets();
+        let normalized_name = name.trim();
+        let normalized_model = model.trim();
+        if normalized_name.is_empty() || normalized_model.is_empty() {
+            self.add_error_message(if self.ui_language().is_ru() {
+                "У пресета должны быть имя и модель.".to_string()
+            } else {
+                "A preset requires both a name and a model.".to_string()
+            });
+            return;
+        }
+
+        if let Some(preset_id) = preset_id {
+            if let Some(existing) = presets.iter_mut().find(|preset| preset.id == preset_id) {
+                existing.name = normalized_name.to_string();
+                existing.model = normalized_model.to_string();
+            } else {
+                presets.push(StoredModelPreset {
+                    id: preset_id.to_string(),
+                    name: normalized_name.to_string(),
+                    model: normalized_model.to_string(),
+                });
+            }
+        } else {
+            let next_id = self.next_current_provider_model_preset_id(&presets);
+            presets.push(StoredModelPreset {
+                id: next_id,
+                name: normalized_name.to_string(),
+                model: normalized_model.to_string(),
+            });
+        }
+
+        if let Err(err) = self.persist_current_provider_model_presets(&presets) {
+            self.add_error_message(if self.ui_language().is_ru() {
+                format!("Не удалось сохранить пресет модели: {err}")
+            } else {
+                format!("Failed to save model preset: {err}")
+            });
+            return;
+        }
+
+        self.open_current_provider_model_preset_editor_popup();
+    }
+
+    pub(crate) fn delete_current_provider_model_preset(&mut self, preset_id: &str) {
+        let mut presets = self.editable_current_provider_model_presets();
+        presets.retain(|preset| preset.id != preset_id);
+        if let Err(err) = self.persist_current_provider_model_presets(&presets) {
+            self.add_error_message(if self.ui_language().is_ru() {
+                format!("Не удалось удалить пресет модели: {err}")
+            } else {
+                format!("Failed to delete model preset: {err}")
+            });
+            return;
+        }
+        self.open_current_provider_model_preset_editor_popup();
     }
 
     pub(crate) fn open_command_visibility_picker_popup(&mut self) {
@@ -10876,7 +11695,7 @@ impl ChatWidget {
                 selected_description: Some(selected_description),
                 is_current,
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::ActivateStoredProfile {
+                    tx.send(AppEvent::OpenStoredProfileActions {
                         profile_key: profile_key.clone(),
                     })
                 })],
@@ -10889,7 +11708,7 @@ impl ChatWidget {
             Line::from(vec![
                 "Нажмите ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " чтобы переключить аккаунт, ".into(),
+                " чтобы открыть действия профиля, ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
                 " для возврата".into(),
             ])
@@ -10897,7 +11716,7 @@ impl ChatWidget {
             Line::from(vec![
                 "Press ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " to switch accounts, ".into(),
+                " to open profile actions, ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
                 " to go back".into(),
             ])
