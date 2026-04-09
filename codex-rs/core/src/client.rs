@@ -184,6 +184,14 @@ fn normalize_request_model_for_provider<'a>(
     Cow::Borrowed(model)
 }
 
+fn normalize_chat_completions_role(role: &str) -> &str {
+    if role.eq_ignore_ascii_case("developer") {
+        "system"
+    } else {
+        role
+    }
+}
+
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -2372,7 +2380,10 @@ fn build_chat_completions_messages(
             ResponseItem::Message { role, content, .. } => {
                 let text = content_items_to_chat_text(content);
                 if !text.is_empty() {
-                    messages.push(ChatCompletionsMessage::text(role.clone(), text));
+                    messages.push(ChatCompletionsMessage::text(
+                        normalize_chat_completions_role(role),
+                        text,
+                    ));
                 }
             }
             ResponseItem::FunctionCall {

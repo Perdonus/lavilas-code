@@ -6,6 +6,7 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::build_chat_completions_messages;
 use super::effective_wire_api;
 use super::normalize_request_model_for_provider;
 use codex_api::api_bridge::CoreAuthProvider;
@@ -205,6 +206,27 @@ fn normalize_request_model_maps_legacy_mistral_tool_alias() {
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-fast").as_ref(),
         "mistral-large-latest"
     );
+}
+
+#[test]
+fn build_chat_completions_messages_maps_developer_role_to_system() {
+    let messages = build_chat_completions_messages(
+        "system prompt",
+        &[ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "developer prompt".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+    )
+    .expect("chat completions messages");
+
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].role, "system");
+    assert_eq!(messages[1].role, "system");
 }
 
 #[test]

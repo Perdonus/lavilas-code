@@ -6,7 +6,8 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "mistral-large-latest";
+pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "mistral-vibe-cli";
+pub(crate) const MISTRAL_CANONICAL_PROFILE_MODEL: &str = "mistral-large-latest";
 pub(crate) const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
 pub(crate) const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
 const MISTRAL_COMPATIBILITY_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
@@ -95,7 +96,8 @@ pub(crate) fn default_profile_model(provider: &str) -> String {
 
 pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
     if provider.eq_ignore_ascii_case("mistral") {
-        if model.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
+        if model.eq_ignore_ascii_case(MISTRAL_CANONICAL_PROFILE_MODEL)
+            || model.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
             || model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
             || model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL)
         {
@@ -106,7 +108,8 @@ pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
             .iter()
             .find_map(|suffix| model.strip_suffix(suffix))
             .is_some_and(|base| {
-                base.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
+                base.eq_ignore_ascii_case(MISTRAL_CANONICAL_PROFILE_MODEL)
+                    || base.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
                     || base.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
             })
         {
@@ -469,7 +472,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "mistral" => vec![
             ProfileCatalogSeed {
                 model: MISTRAL_DEFAULT_PROFILE_MODEL,
-                description: "Основной профиль Mistral с реальным slug модели для повседневной работы.",
+                description: "Основной профиль Mistral с alias `mistral-vibe-cli`, который прозрачно маппится на рабочий slug.",
                 default_reasoning_level: "medium",
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
