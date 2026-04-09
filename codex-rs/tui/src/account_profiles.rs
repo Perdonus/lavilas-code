@@ -2,6 +2,11 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use serde::Deserialize;
@@ -187,6 +192,158 @@ fn derived_profile_model_catalog_path(profile_path: &Path) -> Option<PathBuf> {
     Some(profile_path.with_file_name(format!("{stem}.models.json")))
 }
 
+fn normalize_sidecar_path(profile_path: &Path, candidate: &Path) -> PathBuf {
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
+    }
+    profile_path
+        .parent()
+        .map(|parent| parent.join(candidate))
+        .unwrap_or_else(|| candidate.to_path_buf())
+}
+
+fn normalized_profile_model_catalog_path(
+    profile_path: &Path,
+    model_catalog_json: Option<&Path>,
+) -> Option<PathBuf> {
+    model_catalog_json
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| normalize_sidecar_path(profile_path, path))
+        .or_else(|| derived_profile_model_catalog_path(profile_path))
+}
+
+fn wire_api_from_spec(spec: AccountProviderSpec) -> io::Result<WireApi> {
+    match spec.wire_api.trim().to_ascii_lowercase().as_str() {
+        "responses" => Ok(WireApi::Responses),
+        "chat_completions" => Ok(WireApi::ChatCompletions),
+        other => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "unsupported wire_api `{other}` in provider spec `{}`",
+                spec.id
+            ),
+        )),
+    }
+}
+
+pub(crate) fn build_custom_model_provider_info(
+    profile: &StoredAccountProfile,
+    spec: AccountProviderSpec,
+) -> io::Result<ModelProviderInfo> {
+    if spec.builtin_model_provider_id.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("provider `{}` is built-in and not custom", spec.id),
+        ));
+    }
+
+    let base_url = profile
+        .base_url
+        .as_ref()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| (!spec.base_url.trim().is_empty()).then(|| spec.base_url.trim().to_string()));
+    if spec.requires_base_url && base_url.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("provider `{}` requires a base_url", spec.id),
+        ));
+    }
+
+    let name = profile.name.trim();
+    let token = profile
+        .experimental_bearer_token
+        .as_ref()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    Ok(ModelProviderInfo {
+        name: if name.is_empty() {
+            provider_display_name(spec.id, false)
+        } else {
+            name.to_string()
+        },
+        base_url,
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: token,
+        auth: None,
+        wire_api: wire_api_from_spec(spec)?,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    })
+}
+
+pub(crate) fn profile_model_catalog_sidecar_path(
+    profile_path: &Path,
+    profile: &StoredAccountProfile,
+) -> Option<PathBuf> {
+    normalized_profile_model_catalog_path(profile_path, profile.model_catalog_json.as_deref())
+}
+
+pub(crate) fn read_profile_model_catalog_sidecar(
+    profile_path: &Path,
+    profile: &StoredAccountProfile,
+) -> io::Result<Option<(ModelsResponse, Vec<ModelPreset>)>> {
+    let Some(path) = profile_model_catalog_sidecar_path(profile_path, profile) else {
+        return Ok(None);
+    };
+
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+
+    let models_response = serde_json::from_str::<ModelsResponse>(&contents)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let presets = models_response
+        .models
+        .clone()
+        .into_iter()
+        .map(ModelPreset::from)
+        .collect::<Vec<_>>();
+    Ok(Some((models_response, presets)))
+}
+
+pub(crate) fn write_profile_model_catalog_sidecar(
+    profile_path: &Path,
+    profile: &StoredAccountProfile,
+    models: &[ModelInfo],
+) -> io::Result<PathBuf> {
+    let path = profile_model_catalog_sidecar_path(profile_path, profile).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "cannot derive sidecar model catalog path from `{}`",
+                profile_path.display()
+            ),
+        )
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let payload = ModelsResponse {
+        models: models.to_vec(),
+    };
+    let body = serde_json::to_string_pretty(&payload)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+        + "\n";
+    std::fs::write(&path, body)?;
+    Ok(path)
+}
+
 fn write_stored_profile_file(
     profile_path: &Path,
     profile: &StoredAccountProfile,
@@ -199,7 +356,9 @@ fn write_stored_profile_file(
 
 fn repair_profile_catalogs(profile_path: &Path, profile: &StoredAccountProfile) -> io::Result<()> {
     let mut candidates = Vec::new();
-    if let Some(path) = profile.model_catalog_json.clone() {
+    if let Some(path) =
+        normalized_profile_model_catalog_path(profile_path, profile.model_catalog_json.as_deref())
+    {
         candidates.push(path);
     }
     if let Some(path) = derived_profile_model_catalog_path(profile_path)
@@ -417,7 +576,64 @@ pub(crate) fn build_create_profile_request(
 mod tests {
     use super::*;
     use crate::ui_preferences::MISTRAL_DEFAULT_PROFILE_MODEL;
+    use codex_protocol::config_types::ReasoningSummary;
+    use codex_protocol::openai_models::ConfigShellToolType;
+    use codex_protocol::openai_models::ModelVisibility;
+    use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::openai_models::ReasoningEffortPreset;
+    use codex_protocol::openai_models::TruncationPolicyConfig;
+    use codex_protocol::openai_models::WebSearchToolType;
     use tempfile::tempdir;
+
+    fn test_profile(provider: &str) -> StoredAccountProfile {
+        StoredAccountProfile {
+            provider: provider.to_string(),
+            name: "profile".to_string(),
+            base_url: None,
+            model: "model".to_string(),
+            model_catalog_json: None,
+            config_profile: Some("profile".to_string()),
+            model_provider_id: Some("profile-provider".to_string()),
+            experimental_bearer_token: None,
+        }
+    }
+
+    fn test_model_info(slug: &str) -> ModelInfo {
+        ModelInfo {
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            description: None,
+            default_reasoning_level: Some(ReasoningEffort::Medium),
+            supported_reasoning_levels: vec![ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "default".to_string(),
+            }],
+            shell_type: ConfigShellToolType::Default,
+            visibility: ModelVisibility::List,
+            supported_in_api: true,
+            priority: 1,
+            availability_nux: None,
+            upgrade: None,
+            base_instructions: "base".to_string(),
+            model_messages: None,
+            supports_reasoning_summaries: false,
+            default_reasoning_summary: ReasoningSummary::Auto,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: None,
+            web_search_tool_type: WebSearchToolType::Text,
+            truncation_policy: TruncationPolicyConfig::bytes(1024),
+            supports_parallel_tool_calls: true,
+            supports_image_detail_original: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: 95,
+            experimental_supported_tools: Vec::new(),
+            input_modalities: Vec::new(),
+            used_fallback_model_metadata: false,
+            supports_search_tool: false,
+        }
+    }
 
     #[test]
     fn load_stored_profile_repairs_legacy_mistral_model_and_sidecar() {
@@ -465,5 +681,78 @@ mod tests {
                 .expect("sidecar contents")
                 .contains("mistral-vibe-cli-with-tools")
         );
+    }
+
+    #[test]
+    fn profile_model_catalog_sidecar_path_uses_derived_fallback() {
+        let profile = test_profile("openai");
+        let profile_path = Path::new("/tmp/profiles/openai.json");
+        let sidecar = profile_model_catalog_sidecar_path(profile_path, &profile).expect("path");
+        assert_eq!(sidecar, PathBuf::from("/tmp/profiles/openai.models.json"));
+    }
+
+    #[test]
+    fn profile_model_catalog_sidecar_path_normalizes_relative_path() {
+        let mut profile = test_profile("openai");
+        profile.model_catalog_json = Some(PathBuf::from("custom.models.json"));
+        let profile_path = Path::new("/tmp/profiles/openai.json");
+        let sidecar = profile_model_catalog_sidecar_path(profile_path, &profile).expect("path");
+        assert_eq!(sidecar, PathBuf::from("/tmp/profiles/custom.models.json"));
+    }
+
+    #[test]
+    fn write_and_read_profile_model_catalog_sidecar_roundtrip() {
+        let codex_home = tempdir().expect("tempdir");
+        let profile_path = codex_home.path().join("Profiles/openai-profile.json");
+        let profile = test_profile("openai");
+        let models = vec![test_model_info("gpt-5.4")];
+
+        let sidecar_path =
+            write_profile_model_catalog_sidecar(profile_path.as_path(), &profile, &models)
+                .expect("write sidecar");
+        assert_eq!(
+            sidecar_path,
+            codex_home
+                .path()
+                .join("Profiles/openai-profile.models.json")
+        );
+
+        let loaded = read_profile_model_catalog_sidecar(profile_path.as_path(), &profile)
+            .expect("read sidecar")
+            .expect("present sidecar");
+        assert_eq!(loaded.0.models.len(), 1);
+        assert_eq!(loaded.0.models[0].slug, "gpt-5.4");
+        assert_eq!(loaded.1.len(), 1);
+        assert_eq!(loaded.1[0].model, "gpt-5.4");
+    }
+
+    #[test]
+    fn build_custom_model_provider_info_uses_spec_defaults() {
+        let mut profile = test_profile("mistral");
+        profile.name = "Mistral Personal".to_string();
+        profile.experimental_bearer_token = Some(" secret ".to_string());
+        let spec = account_provider_spec("mistral").expect("provider spec");
+
+        let provider = build_custom_model_provider_info(&profile, spec).expect("provider");
+        assert_eq!(provider.name, "Mistral Personal");
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://api.mistral.ai/v1")
+        );
+        assert_eq!(
+            provider.experimental_bearer_token.as_deref(),
+            Some("secret")
+        );
+        assert_eq!(provider.wire_api, WireApi::ChatCompletions);
+        assert!(!provider.requires_openai_auth);
+    }
+
+    #[test]
+    fn build_custom_model_provider_info_rejects_missing_required_base_url() {
+        let profile = test_profile("custom");
+        let spec = account_provider_spec("custom").expect("provider spec");
+
+        let err = build_custom_model_provider_info(&profile, spec).expect_err("missing base url");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 }
