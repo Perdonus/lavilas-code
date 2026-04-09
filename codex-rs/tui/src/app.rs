@@ -6,6 +6,7 @@ use crate::account_profiles::account_provider_spec;
 use crate::account_profiles::create_or_update_stored_profile;
 use crate::account_profiles::load_stored_profile;
 use crate::account_profiles::provider_display_name;
+use crate::account_profiles::save_stored_profile;
 use crate::account_profiles::stored_profile_has_saved_key;
 use crate::account_profiles::stored_profile_path;
 use crate::app_backtrack::BacktrackState;
@@ -145,6 +146,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -190,6 +192,22 @@ struct PendingLocalProfileCreate {
     provider: String,
     suggested_profile_name: Option<String>,
 }
+
+#[derive(Clone, Debug)]
+enum PendingModelPresetInputRequest {
+    Add {
+        model: String,
+        suggested_name: String,
+    },
+    Rename {
+        preset_id: String,
+        model: String,
+        suggested_name: String,
+    },
+}
+
+const CUSTOM_COMMAND_PREFIX_QUESTION_ID: &str = "custom_command_prefix";
+const MODEL_PRESET_NAME_QUESTION_ID: &str = "model_preset_name";
 
 fn app_server_request_id_to_mcp_request_id(
     request_id: &codex_app_server_protocol::RequestId,
@@ -965,6 +983,8 @@ pub(crate) struct App {
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
     pending_local_profile_creates: HashMap<String, PendingLocalProfileCreate>,
+    pending_custom_command_prefix_requests: HashSet<String>,
+    pending_model_preset_inputs: HashMap<String, PendingModelPresetInputRequest>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
@@ -1220,30 +1240,56 @@ impl App {
             .is_ru()
     }
 
+    fn model_matches_provider_preset(requested_model: &str, preset: &ModelPreset) -> bool {
+        if preset.model == requested_model {
+            return true;
+        }
+
+        let requested_tail = requested_model
+            .rsplit('/')
+            .next()
+            .unwrap_or(requested_model);
+        let preset_tail = preset
+            .model
+            .rsplit('/')
+            .next()
+            .unwrap_or(preset.model.as_str());
+        requested_tail.eq_ignore_ascii_case(preset_tail)
+    }
+
+    fn select_provider_model<'a>(
+        requested_model: &str,
+        models: &'a [ModelPreset],
+    ) -> Option<&'a ModelPreset> {
+        models
+            .iter()
+            .find(|preset| Self::model_matches_provider_preset(requested_model, preset))
+            .or_else(|| models.iter().find(|preset| preset.is_default))
+            .or_else(|| models.first())
+    }
+
     async fn reload_active_profile_runtime(
         &mut self,
         app_server: &mut AppServerSession,
-    ) -> Result<()> {
+    ) -> Result<Vec<ModelPreset>> {
         app_server.reload_user_config().await?;
         let refreshed_models = match app_server.list_models().await {
-            Ok(models) if !models.is_empty() => Some(models),
-            Ok(_) => None,
+            Ok(models) => models,
             Err(err) => {
                 tracing::warn!(
                     error = %err,
                     "failed to refresh model catalog after reloading active profile"
                 );
-                None
+                Vec::new()
             }
         };
         self.refresh_in_memory_config_from_disk().await?;
-        if let Some(models) = refreshed_models {
-            self.model_catalog = self.model_catalog_from_available_models(models, &self.config);
-        }
+        self.model_catalog =
+            self.model_catalog_from_available_models(refreshed_models.clone(), &self.config);
         let model_catalog = self.model_catalog.clone();
         self.chat_widget
             .sync_runtime_profile_config(&self.config, model_catalog);
-        Ok(())
+        Ok(refreshed_models)
     }
 
     async fn persist_and_activate_profile(
@@ -1252,6 +1298,7 @@ impl App {
         profile_key: &str,
         stored: &StoredAccountProfile,
     ) -> Result<()> {
+        let mut stored_profile = stored.clone();
         let config_profile = stored
             .config_profile
             .clone()
@@ -1368,24 +1415,13 @@ impl App {
             ]);
         }
 
-        if let Some(model_catalog_path) = stored.model_catalog_json.as_ref() {
-            edits.push(ConfigEdit::SetPath {
-                segments: vec![
-                    "profiles".to_string(),
-                    config_profile.clone(),
-                    "model_catalog_json".to_string(),
-                ],
-                value: value(model_catalog_path.display().to_string()),
-            });
-        } else {
-            edits.push(ConfigEdit::ClearPath {
-                segments: vec![
-                    "profiles".to_string(),
-                    config_profile.clone(),
-                    "model_catalog_json".to_string(),
-                ],
-            });
-        }
+        edits.push(ConfigEdit::ClearPath {
+            segments: vec![
+                "profiles".to_string(),
+                config_profile.clone(),
+                "model_catalog_json".to_string(),
+            ],
+        });
 
         if provider_spec.builtin_model_provider_id.is_none() {
             match stored.experimental_bearer_token.as_ref() {
@@ -1414,19 +1450,52 @@ impl App {
             .map_err(|err| {
                 color_eyre::eyre::eyre!("Не удалось сохранить конфигурацию профиля: {err}")
             })?;
-        self.reload_active_profile_runtime(app_server).await?;
+        let available_models = self.reload_active_profile_runtime(app_server).await?;
+        if let Some(selected_model) =
+            Self::select_provider_model(stored_profile.model.as_str(), &available_models)
+        {
+            let selected_model_slug = selected_model.model.clone();
+            let selected_effort = Some(selected_model.default_reasoning_effort);
+            if stored_profile.model != selected_model_slug
+                || self.config.model.as_deref() != Some(selected_model_slug.as_str())
+                || self.config.model_reasoning_effort != selected_effort
+            {
+                ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(Some(config_profile.as_str()))
+                    .set_model(Some(selected_model_slug.as_str()), selected_effort)
+                    .apply()
+                    .await
+                    .map_err(|err| {
+                        color_eyre::eyre::eyre!(
+                            "Не удалось сохранить модель активного профиля: {err}"
+                        )
+                    })?;
+                stored_profile.model = selected_model_slug;
+                save_stored_profile(
+                    self.config.codex_home.as_path(),
+                    profile_key,
+                    &stored_profile,
+                )
+                .map_err(|err| {
+                    color_eyre::eyre::eyre!(
+                        "Не удалось обновить сохранённый профиль `{profile_key}`: {err}"
+                    )
+                })?;
+                let _ = self.reload_active_profile_runtime(app_server).await?;
+            }
+        }
 
         let is_ru = self.ui_language_is_ru();
-        let provider_name = provider_display_name(stored.provider.as_str(), is_ru);
-        let hint = stored.model_catalog_json.as_ref().map(|path| {
+        let provider_name = provider_display_name(stored_profile.provider.as_str(), is_ru);
+        let hint = stored_profile.model_catalog_json.as_ref().map(|path| {
             if is_ru {
                 format!(
-                    "Активный профиль: {config_profile}. Каталог моделей: {}.",
+                    "Активный профиль: {config_profile}. Локальный слепок каталога: {}.",
                     path.display()
                 )
             } else {
                 format!(
-                    "Active profile: {config_profile}. Model catalog: {}.",
+                    "Active profile: {config_profile}. Local catalog snapshot: {}.",
                     path.display()
                 )
             }
@@ -1572,6 +1641,194 @@ impl App {
         self.persist_and_activate_profile(app_server, &profile_key, &stored)
             .await?;
         Ok(true)
+    }
+
+    fn open_custom_command_prefix_prompt(&mut self) {
+        let request_id = format!("custom-command-prefix::{}", Uuid::now_v7());
+        self.pending_custom_command_prefix_requests
+            .insert(request_id.clone());
+        self.chat_widget
+            .open_custom_command_prefix_prompt(request_id.as_str());
+    }
+
+    fn handle_custom_command_prefix_answer(
+        &mut self,
+        request_id: &str,
+        response: &RequestUserInputResponse,
+    ) -> Result<bool> {
+        if !self
+            .pending_custom_command_prefix_requests
+            .remove(request_id)
+        {
+            return Ok(false);
+        }
+
+        let Some(prefix_text) =
+            Self::extract_local_user_input_text(response, CUSTOM_COMMAND_PREFIX_QUESTION_ID)
+        else {
+            self.chat_widget
+                .add_error_message(if self.ui_language_is_ru() {
+                    "Не удалось прочитать введённый префикс команд.".to_string()
+                } else {
+                    "Failed to read the entered command prefix.".to_string()
+                });
+            return Ok(true);
+        };
+
+        let mut chars = prefix_text.trim().chars();
+        let Some(prefix) = chars.next() else {
+            self.chat_widget
+                .add_error_message(if self.ui_language_is_ru() {
+                    "Префикс команд не может быть пустым.".to_string()
+                } else {
+                    "Command prefix cannot be empty.".to_string()
+                });
+            return Ok(true);
+        };
+        if chars.next().is_some() || !prefix.is_ascii() || prefix.is_ascii_whitespace() {
+            self.chat_widget
+                .add_error_message(if self.ui_language_is_ru() {
+                    "Префикс команд должен быть одним ASCII-символом без пробела.".to_string()
+                } else {
+                    "Command prefix must be a single non-space ASCII character.".to_string()
+                });
+            return Ok(true);
+        }
+
+        self.chat_widget.apply_command_prefix(prefix);
+        Ok(true)
+    }
+
+    fn open_current_provider_model_preset_name_prompt(
+        &mut self,
+        preset_id: Option<String>,
+        model: String,
+        suggested_name: String,
+    ) {
+        let request_id = format!("model-preset-name::{}", Uuid::now_v7());
+        let pending = match preset_id {
+            Some(preset_id) => PendingModelPresetInputRequest::Rename {
+                preset_id,
+                model: model.clone(),
+                suggested_name: suggested_name.clone(),
+            },
+            None => PendingModelPresetInputRequest::Add {
+                model: model.clone(),
+                suggested_name: suggested_name.clone(),
+            },
+        };
+        self.pending_model_preset_inputs
+            .insert(request_id.clone(), pending);
+        self.chat_widget
+            .open_current_provider_model_preset_name_prompt(
+                request_id.as_str(),
+                suggested_name.as_str(),
+                model.as_str(),
+            );
+    }
+
+    fn handle_model_preset_input_answer(
+        &mut self,
+        request_id: &str,
+        response: &RequestUserInputResponse,
+    ) -> Result<bool> {
+        let Some(pending) = self.pending_model_preset_inputs.remove(request_id) else {
+            return Ok(false);
+        };
+
+        let typed_name =
+            Self::extract_local_user_input_text(response, MODEL_PRESET_NAME_QUESTION_ID);
+        match pending {
+            PendingModelPresetInputRequest::Add {
+                model,
+                suggested_name,
+            } => {
+                let name = typed_name.unwrap_or(suggested_name);
+                self.chat_widget.upsert_current_provider_model_preset(
+                    None,
+                    name.as_str(),
+                    model.as_str(),
+                );
+            }
+            PendingModelPresetInputRequest::Rename {
+                preset_id,
+                model,
+                suggested_name,
+            } => {
+                let name = typed_name.unwrap_or(suggested_name);
+                self.chat_widget.upsert_current_provider_model_preset(
+                    Some(preset_id.as_str()),
+                    name.as_str(),
+                    model.as_str(),
+                );
+            }
+        }
+        Ok(true)
+    }
+
+    fn delete_stored_profile(&mut self, profile_key: &str) {
+        let is_ru = self.ui_language_is_ru();
+        let profile_path = stored_profile_path(self.config.codex_home.as_path(), profile_key);
+        let stored_profile = load_stored_profile(profile_path.as_path()).ok();
+        let derived_catalog_path =
+            profile_path.with_file_name(format!("{profile_key}.models.json"));
+        let mut removed_any = false;
+
+        for path in std::iter::once(profile_path.clone())
+            .chain(
+                stored_profile
+                    .as_ref()
+                    .and_then(|profile| profile.model_catalog_json.clone())
+                    .into_iter(),
+            )
+            .chain(std::iter::once(derived_catalog_path))
+        {
+            match std::fs::remove_file(path.as_path()) {
+                Ok(()) => removed_any = true,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    self.chat_widget.add_error_message(if is_ru {
+                        format!("Не удалось удалить `{}`: {err}", path.display())
+                    } else {
+                        format!("Failed to delete `{}`: {err}", path.display())
+                    });
+                    return;
+                }
+            }
+        }
+
+        if removed_any {
+            let active_hint = if self.config.active_profile.as_deref() == Some(profile_key) {
+                Some(if is_ru {
+                    "Удалён только сохранённый профиль. Текущая сессия останется активной до переключения аккаунта."
+                        .to_string()
+                } else {
+                    "Only the saved profile was removed. The current session stays active until you switch accounts."
+                        .to_string()
+                })
+            } else {
+                None
+            };
+            self.chat_widget.add_info_message(
+                if is_ru {
+                    format!("Профиль `{profile_key}` удалён.")
+                } else {
+                    format!("Profile `{profile_key}` deleted.")
+                },
+                active_hint,
+            );
+        } else {
+            self.chat_widget.add_info_message(
+                if is_ru {
+                    format!("Профиль `{profile_key}` уже отсутствует.")
+                } else {
+                    format!("Profile `{profile_key}` is already missing.")
+                },
+                None,
+            );
+        }
+
+        self.chat_widget.open_profiles_manager_popup();
     }
 
     async fn rebuild_config_for_resume_or_fallback(
@@ -4211,6 +4468,8 @@ impl App {
             config,
             active_profile,
             pending_local_profile_creates: HashMap::new(),
+            pending_custom_command_prefix_requests: HashSet::new(),
+            pending_model_preset_inputs: HashMap::new(),
             cli_kv_overrides,
             harness_overrides,
             runtime_approval_policy_override: None,
@@ -4725,10 +4984,12 @@ impl App {
             }
             AppEvent::CodexOp(op) => match op {
                 Op::UserInputAnswer { id, response } => {
-                    if !self
+                    let handled = self
                         .handle_local_profile_create_answer(app_server, &id, &response)
                         .await?
-                    {
+                        || self.handle_custom_command_prefix_answer(&id, &response)?
+                        || self.handle_model_preset_input_answer(&id, &response)?;
+                    if !handled {
                         self.submit_active_thread_op(
                             app_server,
                             AppCommand::user_input_answer(id, response),
@@ -4950,6 +5211,10 @@ impl App {
             AppEvent::OpenProfilesManager => {
                 self.chat_widget.open_profiles_manager_popup();
             }
+            AppEvent::OpenStoredProfileActions { profile_key } => {
+                self.chat_widget
+                    .open_stored_profile_actions_popup(profile_key.as_str());
+            }
             AppEvent::OpenAddAccountProviderPicker => {
                 self.chat_widget.open_add_account_provider_popup();
             }
@@ -4963,6 +5228,9 @@ impl App {
                 self.activate_stored_profile(app_server, &profile_key)
                     .await?;
             }
+            AppEvent::DeleteStoredProfile { profile_key } => {
+                self.delete_stored_profile(profile_key.as_str());
+            }
             AppEvent::OpenLanguagePicker => {
                 self.chat_widget.open_language_picker_popup();
             }
@@ -4972,6 +5240,9 @@ impl App {
             AppEvent::OpenCommandPrefixPicker => {
                 self.chat_widget.open_command_prefix_picker_popup();
             }
+            AppEvent::OpenCustomCommandPrefixPrompt => {
+                self.open_custom_command_prefix_prompt();
+            }
             AppEvent::SetCommandPrefix { prefix } => {
                 self.chat_widget.apply_command_prefix(prefix);
             }
@@ -4980,6 +5251,52 @@ impl App {
             }
             AppEvent::ToggleCommandVisibility { command_key } => {
                 self.chat_widget.toggle_command_visibility(&command_key);
+            }
+            AppEvent::OpenModelPresetsSettings => {
+                self.chat_widget.open_model_presets_settings_popup();
+            }
+            AppEvent::ToggleModelPresetsEnabled => {
+                let enabled =
+                    !load_ui_preferences(self.config.codex_home.as_path()).model_presets_enabled;
+                self.chat_widget.set_model_presets_enabled(enabled);
+            }
+            AppEvent::OpenCurrentProviderModelPresetEditor => {
+                self.chat_widget
+                    .open_current_provider_model_preset_editor_popup();
+            }
+            AppEvent::OpenCurrentProviderModelPresetActions { preset_id } => {
+                self.chat_widget
+                    .open_current_provider_model_preset_actions_popup(preset_id.as_str());
+            }
+            AppEvent::OpenCurrentProviderModelPresetModelPicker { preset_id } => {
+                self.chat_widget
+                    .open_current_provider_model_preset_model_picker(preset_id.as_deref());
+            }
+            AppEvent::OpenCurrentProviderModelPresetNamePrompt {
+                preset_id,
+                model,
+                suggested_name,
+            } => {
+                self.open_current_provider_model_preset_name_prompt(
+                    preset_id,
+                    model,
+                    suggested_name,
+                );
+            }
+            AppEvent::UpsertCurrentProviderModelPreset {
+                preset_id,
+                name,
+                model,
+            } => {
+                self.chat_widget.upsert_current_provider_model_preset(
+                    preset_id.as_deref(),
+                    name.as_str(),
+                    model.as_str(),
+                );
+            }
+            AppEvent::DeleteCurrentProviderModelPreset { preset_id } => {
+                self.chat_widget
+                    .delete_current_provider_model_preset(preset_id.as_str());
             }
             AppEvent::OpenRealtimeAudioPopup => {
                 self.chat_widget.open_realtime_audio_popup();
@@ -5375,6 +5692,24 @@ impl App {
                             .map(|selected_effort| selected_effort.to_string())
                             .unwrap_or_else(|| "default".to_string());
                         tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
+                        if let Some(profile_key) = profile {
+                            let path =
+                                stored_profile_path(self.config.codex_home.as_path(), profile_key);
+                            if let Ok(mut stored_profile) = load_stored_profile(path.as_path()) {
+                                stored_profile.model = model.clone();
+                                if let Err(err) = save_stored_profile(
+                                    self.config.codex_home.as_path(),
+                                    profile_key,
+                                    &stored_profile,
+                                ) {
+                                    tracing::warn!(
+                                        error = %err,
+                                        profile = profile_key,
+                                        "failed to sync stored profile model after model change"
+                                    );
+                                }
+                            }
+                        }
                         let mut message = format!("Модель изменена: {model}");
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
                             message.push(' ');
@@ -9646,6 +9981,8 @@ guardian_approval = true
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_local_profile_creates: HashMap::new(),
+            pending_custom_command_prefix_requests: HashSet::new(),
+            pending_model_preset_inputs: HashMap::new(),
         }
     }
 
@@ -9701,6 +10038,8 @@ guardian_approval = true
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
                 pending_local_profile_creates: HashMap::new(),
+                pending_custom_command_prefix_requests: HashSet::new(),
+                pending_model_preset_inputs: HashMap::new(),
             },
             rx,
             op_rx,

@@ -1,9 +1,13 @@
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "mistral-vibe-cli";
+pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "mistral-large-latest";
+pub(crate) const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
 pub(crate) const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
 const MISTRAL_COMPATIBILITY_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
 
@@ -38,6 +42,8 @@ pub(crate) struct UiPreferences {
     pub(crate) language: UiLanguage,
     pub(crate) command_prefix: char,
     pub(crate) hidden_commands: Vec<String>,
+    pub(crate) model_presets_enabled: bool,
+    pub(crate) provider_model_presets: BTreeMap<String, Vec<StoredModelPreset>>,
 }
 
 impl Default for UiPreferences {
@@ -46,8 +52,17 @@ impl Default for UiPreferences {
             language: UiLanguage::Ru,
             command_prefix: '/',
             hidden_commands: Vec::new(),
+            model_presets_enabled: true,
+            provider_model_presets: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct StoredModelPreset {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) model: String,
 }
 
 #[derive(Clone, Copy)]
@@ -79,23 +94,27 @@ pub(crate) fn default_profile_model(provider: &str) -> String {
 }
 
 pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
-    if provider.eq_ignore_ascii_case("mistral")
-        && let Some(base) = MISTRAL_COMPATIBILITY_SUFFIXES.iter().find_map(|suffix| {
-            let base = model.strip_suffix(suffix)?;
-            base.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
-                .then_some(MISTRAL_DEFAULT_PROFILE_MODEL)
-        })
-    {
-        return base.to_string();
+    if provider.eq_ignore_ascii_case("mistral") {
+        if model.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
+            || model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
+            || model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL)
+        {
+            return MISTRAL_DEFAULT_PROFILE_MODEL.to_string();
+        }
+
+        if MISTRAL_COMPATIBILITY_SUFFIXES
+            .iter()
+            .find_map(|suffix| model.strip_suffix(suffix))
+            .is_some_and(|base| {
+                base.eq_ignore_ascii_case(MISTRAL_DEFAULT_PROFILE_MODEL)
+                    || base.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
+            })
+        {
+            return MISTRAL_DEFAULT_PROFILE_MODEL.to_string();
+        }
     }
 
-    if provider.eq_ignore_ascii_case("mistral")
-        && model.eq_ignore_ascii_case(MISTRAL_LEGACY_TOOL_MODEL)
-    {
-        MISTRAL_DEFAULT_PROFILE_MODEL.to_string()
-    } else {
-        model.to_string()
-    }
+    model.to_string()
 }
 
 pub(crate) fn repair_profile_model_catalog(path: &Path, provider: &str) -> io::Result<bool> {
@@ -227,11 +246,38 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let model_presets_enabled = value
+        .get("model_presets")
+        .and_then(|model_presets| model_presets.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let provider_model_presets = value
+        .get("model_presets")
+        .and_then(|model_presets| model_presets.get("providers"))
+        .and_then(serde_json::Value::as_object)
+        .map(|providers| {
+            providers
+                .iter()
+                .map(|(provider_key, presets_value)| {
+                    let presets =
+                        serde_json::from_value::<Vec<StoredModelPreset>>(presets_value.clone())
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(normalize_stored_model_preset)
+                            .collect::<Vec<_>>();
+                    (provider_key.clone(), presets)
+                })
+                .filter(|(_, presets)| !presets.is_empty())
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
 
     UiPreferences {
         language,
         command_prefix,
         hidden_commands,
+        model_presets_enabled,
+        provider_model_presets,
     }
 }
 
@@ -265,6 +311,65 @@ pub(crate) fn save_hidden_commands(
         "hidden_commands",
         serde_json::Value::Array(hidden_commands),
     )
+}
+
+pub(crate) fn save_model_presets_enabled(codex_home: &Path, enabled: bool) -> io::Result<()> {
+    let mut json = load_settings_json(codex_home);
+    if !json.is_object() {
+        json = serde_json::json!({});
+    }
+    if json.get("model_presets").is_none() {
+        json["model_presets"] = serde_json::json!({});
+    }
+    json["model_presets"]["enabled"] = serde_json::Value::Bool(enabled);
+    save_settings_json(codex_home, &json)
+}
+
+pub(crate) fn save_provider_model_presets(
+    codex_home: &Path,
+    provider_key: &str,
+    presets: &[StoredModelPreset],
+) -> io::Result<()> {
+    let mut json = load_settings_json(codex_home);
+    if !json.is_object() {
+        json = serde_json::json!({});
+    }
+    if json.get("model_presets").is_none() {
+        json["model_presets"] = serde_json::json!({});
+    }
+    if json["model_presets"].get("providers").is_none() {
+        json["model_presets"]["providers"] = serde_json::json!({});
+    }
+
+    let normalized = presets
+        .iter()
+        .cloned()
+        .filter_map(normalize_stored_model_preset)
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        if let Some(providers) = json["model_presets"]["providers"].as_object_mut() {
+            providers.remove(provider_key);
+        }
+    } else {
+        json["model_presets"]["providers"][provider_key] =
+            serde_json::to_value(normalized).unwrap_or_else(|_| serde_json::json!([]));
+    }
+    save_settings_json(codex_home, &json)
+}
+
+fn normalize_stored_model_preset(preset: StoredModelPreset) -> Option<StoredModelPreset> {
+    let id = preset.id.trim();
+    let name = preset.name.trim();
+    let model = preset.model.trim();
+    if id.is_empty() || name.is_empty() || model.is_empty() {
+        return None;
+    }
+
+    Some(StoredModelPreset {
+        id: id.to_string(),
+        name: name.to_string(),
+        model: model.to_string(),
+    })
 }
 
 fn persist_setting(codex_home: &Path, key: &str, value: serde_json::Value) -> io::Result<()> {
@@ -364,14 +469,14 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "mistral" => vec![
             ProfileCatalogSeed {
                 model: MISTRAL_DEFAULT_PROFILE_MODEL,
-                description: "Подготовленный профиль Mistral для tool-use, MCP и CLI без фейкового alias-а модели.",
+                description: "Основной профиль Mistral с реальным slug модели для повседневной работы.",
                 default_reasoning_level: "medium",
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
             ProfileCatalogSeed {
-                model: "mistral-large-latest",
-                description: "Тяжёлый Mistral-профиль для сложного кода и анализа.",
+                model: "codestral-latest",
+                description: "Тяжёлый Mistral-профиль для сложного кода и крупных правок.",
                 default_reasoning_level: "high",
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,

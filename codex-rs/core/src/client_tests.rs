@@ -19,6 +19,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::atomic::Ordering;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
@@ -168,7 +169,8 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
 
 #[test]
 fn effective_wire_api_keeps_openai_responses_provider() {
-    let provider = create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::Responses);
+    let provider =
+        create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::Responses);
 
     assert_eq!(effective_wire_api(&provider), WireApi::Responses);
 }
@@ -188,10 +190,45 @@ fn normalize_request_model_maps_legacy_mistral_tool_alias() {
 
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-with-tools").as_ref(),
-        "mistral-vibe-cli"
+        "mistral-large-latest"
     );
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-fast").as_ref(),
-        "mistral-vibe-cli"
+        "mistral-large-latest"
     );
+}
+
+#[test]
+fn reconfigure_updates_runtime_provider_and_resets_transport_fallback_state() {
+    let client = test_model_client(SessionSource::Cli);
+    client
+        .state
+        .disable_websockets
+        .store(true, Ordering::Relaxed);
+
+    let mistral_provider =
+        create_oss_provider_with_base_url("https://api.mistral.ai/v1", WireApi::Responses);
+    client.reconfigure(
+        /*auth_manager*/ None,
+        mistral_provider,
+        SessionSource::SubAgent(SubAgentSource::Other("runtime-reload".to_string())),
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+    );
+
+    let runtime_config = client.runtime_config();
+    assert_eq!(
+        effective_wire_api(&runtime_config.provider),
+        WireApi::ChatCompletions
+    );
+    let headers = client.build_subagent_headers();
+    assert_eq!(
+        headers
+            .get(X_OPENAI_SUBAGENT_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("runtime-reload")
+    );
+    assert!(!client.state.disable_websockets.load(Ordering::Relaxed));
 }

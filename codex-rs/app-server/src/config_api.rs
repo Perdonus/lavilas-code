@@ -52,12 +52,13 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
 
 #[async_trait]
 pub(crate) trait UserConfigReloader: Send + Sync {
-    async fn reload_user_config(&self);
+    async fn reload_user_config(&self, config: &Config);
 }
 
 #[async_trait]
 impl UserConfigReloader for ThreadManager {
-    async fn reload_user_config(&self) {
+    async fn reload_user_config(&self, config: &Config) {
+        self.reload_models_for_config(config).await;
         let thread_ids = self.list_thread_ids().await;
         for thread_id in thread_ids {
             let Ok(thread) = self.get_thread(thread_id).await else {
@@ -232,7 +233,8 @@ impl ConfigApi {
             .map_err(map_error)?;
         self.emit_plugin_toggle_events(pending_changes);
         if reload_user_config {
-            self.user_config_reloader.reload_user_config().await;
+            let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+            self.user_config_reloader.reload_user_config(&config).await;
         }
         Ok(response)
     }
@@ -293,8 +295,8 @@ impl ConfigApi {
             );
         }
 
-        self.load_latest_config(/*fallback_cwd*/ None).await?;
-        self.user_config_reloader.reload_user_config().await;
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        self.user_config_reloader.reload_user_config(&config).await;
 
         Ok(ExperimentalFeatureEnablementSetResponse { enablement })
     }
@@ -533,7 +535,7 @@ mod tests {
 
     #[async_trait]
     impl UserConfigReloader for RecordingUserConfigReloader {
-        async fn reload_user_config(&self) {
+        async fn reload_user_config(&self, _config: &Config) {
             self.call_count.fetch_add(1, Ordering::Relaxed);
         }
     }
