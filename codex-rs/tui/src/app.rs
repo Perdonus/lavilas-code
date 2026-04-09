@@ -1,14 +1,19 @@
 use crate::account_profiles::API_KEY_QUESTION_ID;
+use crate::account_profiles::AccountProviderSpec;
 use crate::account_profiles::BASE_URL_QUESTION_ID;
 use crate::account_profiles::PROFILE_NAME_QUESTION_ID;
 use crate::account_profiles::StoredAccountProfile;
 use crate::account_profiles::account_provider_spec;
+use crate::account_profiles::build_custom_model_provider_info;
 use crate::account_profiles::create_or_update_stored_profile;
 use crate::account_profiles::load_stored_profile;
+use crate::account_profiles::profile_model_catalog_sidecar_path;
 use crate::account_profiles::provider_display_name;
+use crate::account_profiles::read_profile_model_catalog_sidecar;
 use crate::account_profiles::save_stored_profile;
 use crate::account_profiles::stored_profile_has_saved_key;
 use crate::account_profiles::stored_profile_path;
+use crate::account_profiles::write_profile_model_catalog_sidecar;
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
@@ -65,6 +70,9 @@ use crate::ui_preferences::load_ui_preferences;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
+use codex_api::ModelsClient;
+use codex_api::ReqwestTransport;
+use codex_api::api_bridge::CoreAuthProvider;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
@@ -106,6 +114,7 @@ use codex_core::message_history;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
+use codex_login::default_client::build_reqwest_client;
 use codex_model_provider_info::canonicalize_provider_model_slug;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -117,6 +126,7 @@ use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ModelAvailabilityNux;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -164,6 +174,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use toml::Value as TomlValue;
 use toml_edit::value;
 use uuid::Uuid;
@@ -1269,6 +1280,80 @@ impl App {
             .or_else(|| models.first())
     }
 
+    async fn fetch_live_profile_catalog_models(
+        &self,
+        stored: &StoredAccountProfile,
+        provider_spec: AccountProviderSpec,
+    ) -> Result<Option<Vec<ModelInfo>>> {
+        if provider_spec.builtin_model_provider_id.is_some() {
+            return Ok(None);
+        }
+        let provider = build_custom_model_provider_info(stored, provider_spec)
+            .wrap_err("failed to build custom provider info for stored profile")?;
+
+        let api_provider = provider
+            .to_api_provider(/*auth_mode*/ None)
+            .wrap_err("failed to build API provider for custom profile")?;
+        let auth = CoreAuthProvider {
+            token: provider
+                .api_key()
+                .wrap_err("failed to resolve custom provider API key")?
+                .or(provider.experimental_bearer_token.clone()),
+            account_id: None,
+        };
+        let client = ModelsClient::new(
+            ReqwestTransport::new(build_reqwest_client()),
+            api_provider,
+            auth,
+        );
+        let (models, _) = timeout(
+            Duration::from_secs(5),
+            client.list_models(CODEX_CLI_VERSION, http::HeaderMap::new()),
+        )
+        .await
+        .wrap_err("timed out while fetching custom provider models")?
+        .wrap_err("custom provider model list request failed")?;
+        Ok(Some(models))
+    }
+
+    async fn resolve_profile_catalog_models(
+        &self,
+        profile_key: &str,
+        stored: &StoredAccountProfile,
+        provider_spec: AccountProviderSpec,
+    ) -> Result<(PathBuf, Vec<ModelPreset>)> {
+        let profile_path = stored_profile_path(self.config.codex_home.as_path(), profile_key);
+        let catalog_path = profile_model_catalog_sidecar_path(profile_path.as_path(), stored)
+            .unwrap_or_else(|| {
+                self.config
+                    .codex_home
+                    .join("Profiles")
+                    .join(format!("{profile_key}.models.json"))
+            });
+
+        if let Some(live_models) = self
+            .fetch_live_profile_catalog_models(stored, provider_spec)
+            .await?
+        {
+            write_profile_model_catalog_sidecar(profile_path.as_path(), stored, &live_models)
+                .wrap_err("failed to persist live provider model catalog")?;
+            let mut live_presets: Vec<ModelPreset> =
+                live_models.into_iter().map(ModelPreset::from).collect();
+            ModelPreset::mark_default_by_picker_visibility(&mut live_presets);
+            return Ok((catalog_path, live_presets));
+        }
+
+        let fallback_models = read_profile_model_catalog_sidecar(profile_path.as_path(), stored)
+            .unwrap_or_default()
+            .map(|(_, presets)| {
+                let mut presets = presets;
+                ModelPreset::mark_default_by_picker_visibility(&mut presets);
+                presets
+            })
+            .unwrap_or_default();
+        Ok((catalog_path, fallback_models))
+    }
+
     async fn reload_active_profile_runtime(
         &mut self,
         app_server: &mut AppServerSession,
@@ -1322,6 +1407,76 @@ impl App {
             return Ok(());
         }
 
+        let (catalog_path, catalog_models) = match self
+            .resolve_profile_catalog_models(profile_key, &stored_profile, provider_spec)
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    profile_key,
+                    provider = %stored_profile.provider,
+                    "failed to resolve provider model catalog for stored profile"
+                );
+                let profile_path =
+                    stored_profile_path(self.config.codex_home.as_path(), profile_key);
+                let fallback_catalog_path =
+                    profile_model_catalog_sidecar_path(profile_path.as_path(), &stored_profile)
+                        .unwrap_or_else(|| {
+                            self.config
+                                .codex_home
+                                .join("Profiles")
+                                .join(format!("{profile_key}.models.json"))
+                        });
+                let fallback_catalog_models =
+                    read_profile_model_catalog_sidecar(profile_path.as_path(), &stored_profile)
+                        .unwrap_or_default()
+                        .map(|(_, presets)| {
+                            let mut presets = presets;
+                            ModelPreset::mark_default_by_picker_visibility(&mut presets);
+                            presets
+                        })
+                        .unwrap_or_default();
+                (fallback_catalog_path, fallback_catalog_models)
+            }
+        };
+        if provider_spec.builtin_model_provider_id.is_none() && catalog_models.is_empty() {
+            let message = if self.ui_language_is_ru() {
+                format!(
+                    "Не удалось получить каталог моделей для `{profile_key}`. Проверьте API-ключ, base URL и доступность `{}`.",
+                    catalog_path.display()
+                )
+            } else {
+                format!(
+                    "Failed to resolve a model catalog for `{profile_key}`. Check the API key, base URL, and `{}`.",
+                    catalog_path.display()
+                )
+            };
+            self.chat_widget.add_error_message(message);
+            return Ok(());
+        }
+        let selected_model_slug =
+            Self::select_provider_model(stored_profile.model.as_str(), catalog_models.as_slice())
+                .map(|preset| preset.model.clone())
+                .unwrap_or_else(|| stored_profile.model.clone());
+        let stored_profile_changed = stored_profile.model != selected_model_slug
+            || stored_profile.model_catalog_json.as_ref() != Some(&catalog_path);
+        if stored_profile_changed {
+            stored_profile.model = selected_model_slug.clone();
+            stored_profile.model_catalog_json = Some(catalog_path.clone());
+            save_stored_profile(
+                self.config.codex_home.as_path(),
+                profile_key,
+                &stored_profile,
+            )
+            .map_err(|err| {
+                color_eyre::eyre::eyre!(
+                    "Не удалось обновить сохранённый профиль `{profile_key}`: {err}"
+                )
+            })?;
+        }
+
         let mut edits = vec![
             ConfigEdit::SetPath {
                 segments: vec!["profile".to_string()],
@@ -1341,7 +1496,10 @@ impl App {
                     config_profile.clone(),
                     "model".to_string(),
                 ],
-                value: value(stored.model.clone()),
+                value: value(selected_model_slug.clone()),
+            },
+            ConfigEdit::ClearPath {
+                segments: vec!["model_catalog_json".to_string()],
             },
         ];
 
@@ -1413,16 +1571,24 @@ impl App {
                         "auth".to_string(),
                     ],
                 },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "profiles".to_string(),
+                        config_profile.clone(),
+                        "model_catalog_json".to_string(),
+                    ],
+                    value: value(catalog_path.display().to_string()),
+                },
             ]);
+        } else {
+            edits.push(ConfigEdit::ClearPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    config_profile.clone(),
+                    "model_catalog_json".to_string(),
+                ],
+            });
         }
-
-        edits.push(ConfigEdit::ClearPath {
-            segments: vec![
-                "profiles".to_string(),
-                config_profile.clone(),
-                "model_catalog_json".to_string(),
-            ],
-        });
 
         if provider_spec.builtin_model_provider_id.is_none() {
             match stored.experimental_bearer_token.as_ref() {
@@ -1453,7 +1619,7 @@ impl App {
             })?;
         let available_models = self.reload_active_profile_runtime(app_server).await?;
         if let Some(selected_model) =
-            Self::select_provider_model(stored_profile.model.as_str(), &available_models)
+            Self::select_provider_model(selected_model_slug.as_str(), &available_models)
         {
             let selected_model_slug = selected_model.model.clone();
             let selected_effort = Some(selected_model.default_reasoning_effort);
