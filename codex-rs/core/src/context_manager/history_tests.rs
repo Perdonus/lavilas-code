@@ -72,6 +72,29 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     h
 }
 
+#[test]
+fn record_items_drops_oversized_opaque_items() {
+    let oversized = "x".repeat(crate::client_common::MAX_OPAQUE_RESPONSE_ITEM_CHARS + 1);
+    let mut history = ContextManager::new();
+    let kept = assistant_msg("kept");
+    let items = vec![
+        ResponseItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec![],
+            content: None,
+            encrypted_content: Some(oversized.clone()),
+        },
+        ResponseItem::Compaction {
+            encrypted_content: oversized,
+        },
+        kept.clone(),
+    ];
+
+    history.record_items(items.iter(), TruncationPolicy::Tokens(10_000));
+
+    assert_eq!(history.raw_items(), &[kept]);
+}
+
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,

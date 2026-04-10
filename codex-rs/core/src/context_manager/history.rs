@@ -1,3 +1,4 @@
+use crate::client_common::sanitize_response_item_for_provider_history;
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
@@ -105,8 +106,9 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = self.process_item(item_ref, policy);
-            self.items.push(processed);
+            if let Some(processed) = self.process_item(item_ref, policy) {
+                self.items.push(processed);
+            }
         }
     }
 
@@ -360,9 +362,9 @@ impl ContextManager {
         normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
     }
 
-    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
+    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> Option<ResponseItem> {
         let policy_with_serialization_budget = policy * 1.2;
-        match item {
+        let processed = match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
@@ -393,7 +395,9 @@ impl ContextManager {
             | ResponseItem::Compaction { .. }
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
-        }
+        };
+
+        sanitize_response_item_for_provider_history(processed)
     }
 
     /// Walk backward from a rollback cut and trim contiguous pre-turn context-update items.

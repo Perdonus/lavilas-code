@@ -198,3 +198,40 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
         ]
     );
 }
+
+#[test]
+fn prompt_formatted_input_drops_oversized_opaque_items() {
+    let oversized = "x".repeat(MAX_OPAQUE_RESPONSE_ITEM_CHARS + 1);
+    let kept_message = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "kept".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+    let prompt = Prompt {
+        input: vec![
+            ResponseItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec![],
+                content: None,
+                encrypted_content: Some(oversized.clone()),
+            },
+            ResponseItem::Compaction {
+                encrypted_content: oversized,
+            },
+            kept_message.clone(),
+        ],
+        tools: vec![],
+        parallel_tool_calls: true,
+        base_instructions: BaseInstructions {
+            text: "instructions".to_string(),
+        },
+        personality: None,
+        output_schema: None,
+    };
+
+    assert_eq!(prompt.get_formatted_input(), vec![kept_message]);
+}

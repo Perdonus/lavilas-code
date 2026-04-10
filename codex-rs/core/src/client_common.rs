@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
@@ -21,6 +22,11 @@ pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 pub const REVIEW_EXIT_SUCCESS_TMPL: &str = include_str!("../templates/review/exit_success.xml");
 pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
     include_str!("../templates/review/exit_interrupted.xml");
+
+// OpenAI Responses rejects `input[*].encrypted_content` above this length.
+// Oversized opaque items are not safely truncatable, so we drop them before
+// they can poison subsequent turns.
+pub(crate) const MAX_OPAQUE_RESPONSE_ITEM_CHARS: usize = 1_048_576;
 
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
@@ -46,7 +52,7 @@ pub struct Prompt {
 
 impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        let mut input = self.input.clone();
+        let mut input = sanitize_response_items_for_provider_history(self.input.clone());
 
         // when using the *Freeform* apply_patch tool specifically, tool outputs
         // should be structured text, not json. Do NOT reserialize when using
@@ -62,6 +68,44 @@ impl Prompt {
 
         input
     }
+}
+
+pub(crate) fn sanitize_response_item_for_provider_history(
+    item: ResponseItem,
+) -> Option<ResponseItem> {
+    match &item {
+        ResponseItem::Reasoning {
+            encrypted_content: Some(encrypted_content),
+            ..
+        } if encrypted_content.len() > MAX_OPAQUE_RESPONSE_ITEM_CHARS => {
+            warn!(
+                encrypted_chars = encrypted_content.len(),
+                limit = MAX_OPAQUE_RESPONSE_ITEM_CHARS,
+                "dropping oversized reasoning item from replayable history"
+            );
+            None
+        }
+        ResponseItem::Compaction { encrypted_content }
+            if encrypted_content.len() > MAX_OPAQUE_RESPONSE_ITEM_CHARS =>
+        {
+            warn!(
+                encrypted_chars = encrypted_content.len(),
+                limit = MAX_OPAQUE_RESPONSE_ITEM_CHARS,
+                "dropping oversized compaction item from replayable history"
+            );
+            None
+        }
+        _ => Some(item),
+    }
+}
+
+pub(crate) fn sanitize_response_items_for_provider_history(
+    items: Vec<ResponseItem>,
+) -> Vec<ResponseItem> {
+    items
+        .into_iter()
+        .filter_map(sanitize_response_item_for_provider_history)
+        .collect()
 }
 
 fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
