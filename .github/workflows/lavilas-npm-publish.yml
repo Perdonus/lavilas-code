@@ -355,6 +355,26 @@ jobs:
             fi
           done
 
+      - name: Wait for platform packages to propagate on npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs=()
+          for dir in "$RUNNER_TEMP"/npm-artifacts/*; do
+            [[ -d "$dir" ]] || continue
+            pkg_json="$dir/package.json"
+            name="$(node -p "require(process.argv[1]).name" "$pkg_json")"
+            version="$(node -p "require(process.argv[1]).version" "$pkg_json")"
+            refs+=("${name}@${version}")
+          done
+
+          if [[ ${#refs[@]} -eq 0 ]]; then
+            echo "No staged platform packages found" >&2
+            exit 1
+          fi
+
+          bash .github/scripts/wait_for_npm_package.sh --timeout 900 "${refs[@]}"
+
       - name: Publish base package
         shell: bash
         env:
@@ -378,3 +398,13 @@ jobs:
           }
 
           publish_if_needed "$RUNNER_TEMP/pkg-codex"
+
+      - name: Smoke test npm install (linux x64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/npm-smoke"
+          rm -rf "$prefix"
+          npm install -g --prefix "$prefix" "@lavilas/codex@${{ steps.version.outputs.release_version }}"
+          "$prefix/bin/codex" --version
+          "$prefix/bin/lavilas" --version
