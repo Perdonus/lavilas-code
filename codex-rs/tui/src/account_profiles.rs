@@ -547,11 +547,11 @@ fn repair_sidecar_model_metadata(
             changed = true;
         }
         if model.default_verbosity.is_none() && bundled.default_verbosity.is_some() {
-            model.default_verbosity = bundled.default_verbosity;
+            model.default_verbosity = bundled.default_verbosity.clone();
             changed = true;
         }
         if model.apply_patch_tool_type.is_none() && bundled.apply_patch_tool_type.is_some() {
-            model.apply_patch_tool_type = bundled.apply_patch_tool_type;
+            model.apply_patch_tool_type = bundled.apply_patch_tool_type.clone();
             changed = true;
         }
         if !model.supports_parallel_tool_calls && bundled.supports_parallel_tool_calls {
