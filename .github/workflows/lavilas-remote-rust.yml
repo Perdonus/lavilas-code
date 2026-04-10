@@ -34,6 +34,7 @@ jobs:
       - name: Targeted app-server test
         env:
           CARGO_TEST_FILTER: ${{ inputs.cargo_test_filter }}
+          CODEX_SKIP_VENDORED_BWRAP: "1"
         run: |
           DEFAULT_CARGO_TEST_FILTER="thread_list_includes_original_codex_custom_sources_by_default"
           EFFECTIVE_CARGO_TEST_FILTER="${CARGO_TEST_FILTER:-$DEFAULT_CARGO_TEST_FILTER}"
