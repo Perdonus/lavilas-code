@@ -44,7 +44,7 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
 +
 +git_repository(
 +    name = "simdutf",
-+    build_file = "@v8//:bazel/BUILD.simdutf",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = ["simdutf.cpp"],\n    hdrs = glob([\n        "include/**/*.h",\n        "*.h",\n    ]),\n    includes = [\n        ".",\n        "include",\n    ],\n    visibility = ["//visibility:public"],\n)\n',
 +    commit = "06258b2c046d233fa53957cced61bc279fadfb41",
 +    remote = "https://github.com/simdutf/simdutf.git",
 +)
@@ -266,24 +266,3 @@ new file mode 100644
 + 
 + # Unused on Bazel builds, where this is not defined/known; Copybara replaces
 + # usages with an empty list.
-
-diff --git a/orig/v8-14.6.202.11/bazel/BUILD.simdutf b/mod/v8-14.6.202.11/bazel/BUILD.simdutf
-new file mode 100644
---- /dev/null
-+++ b/mod/v8-14.6.202.11/bazel/BUILD.simdutf
-@@ -0,0 +1,14 @@
-+load("@rules_cc//cc:defs.bzl", "cc_library")
-+
-+cc_library(
-+    name = "simdutf",
-+    srcs = ["simdutf.cpp"],
-+    hdrs = glob([
-+        "include/**/*.h",
-+        "*.h",
-+    ]),
-+    includes = [
-+        ".",
-+        "include",
-+    ],
-+    visibility = ["//visibility:public"],
-+)
