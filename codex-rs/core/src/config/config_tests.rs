@@ -4291,8 +4291,8 @@ fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
 }
 
 #[test]
-fn managed_profile_snapshot_catalog_is_not_loaded_as_authoritative_catalog() -> std::io::Result<()>
-{
+fn managed_profile_snapshot_catalog_is_loaded_as_authoritative_catalog_for_active_profile()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let profiles_dir = codex_home.path().join("Profiles");
     std::fs::create_dir_all(&profiles_dir)?;
@@ -4331,7 +4331,31 @@ fn managed_profile_snapshot_catalog_is_not_loaded_as_authoritative_catalog() -> 
         codex_home.path().to_path_buf(),
     )?;
 
-    assert_eq!(config.model_catalog, None);
+    assert_eq!(config.model_catalog, Some(catalog));
+    Ok(())
+}
+
+#[test]
+fn profile_model_load_preserves_mistral_variant_slug() -> std::io::Result<()> {
+    let cfg = ConfigToml {
+        profile: Some("mistral-profile".to_string()),
+        profiles: HashMap::from([(
+            "mistral-profile".to_string(),
+            ConfigProfile {
+                model: Some("mistral-vibe-cli-with-tools".to_string()),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        std::env::temp_dir(),
+    )?;
+
+    assert_eq!(config.model.as_deref(), Some("mistral-vibe-cli-with-tools"));
     Ok(())
 }
 

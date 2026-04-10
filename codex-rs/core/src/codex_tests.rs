@@ -660,6 +660,65 @@ model = "test-model"
     assert_eq!(config.model.as_deref(), Some("test-model"));
 }
 
+#[tokio::test]
+async fn reload_user_config_layer_reconfigures_models_manager_for_profile_catalog() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+
+    let profiles_dir = codex_home.join("Profiles");
+    std::fs::create_dir_all(&profiles_dir).expect("create profiles dir");
+    let catalog_path = profiles_dir.join("test-profile.models.json");
+    let mut catalog = bundled_models_response().expect("bundled models");
+    catalog.models = catalog.models.into_iter().take(1).collect();
+    catalog.models[0].slug = "test-model".to_string();
+    catalog.models[0].display_name = "Test Model".to_string();
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_string(&catalog).expect("serialize catalog"),
+    )
+    .expect("write profile catalog");
+
+    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &config_toml_path,
+        format!(
+            r#"profile = "test-profile"
+
+[model_providers.test-provider]
+name = "Test Provider"
+base_url = "https://example.com/v1"
+experimental_bearer_token = "test-token"
+wire_api = "responses"
+
+[profiles.test-profile]
+model_provider = "test-provider"
+model = "test-model"
+model_catalog_json = "{}"
+"#,
+            catalog_path.display()
+        ),
+    )
+    .expect("write user config");
+
+    session.reload_user_config_layer().await;
+
+    let config = session.get_config().await;
+    assert_eq!(config.model_provider_id, "test-provider");
+    assert_eq!(config.model.as_deref(), Some("test-model"));
+    assert_eq!(config.model_catalog, Some(catalog.clone()));
+
+    let available = session
+        .services
+        .models_manager
+        .list_models(codex_models_manager::manager::RefreshStrategy::Offline)
+        .await;
+    assert!(
+        available.iter().any(|preset| preset.model == "test-model"),
+        "expected reconfigured models manager to expose the profile catalog, got: {available:?}"
+    );
+}
+
 #[test]
 fn filter_connectors_for_input_skips_duplicate_slug_mentions() {
     let connectors = vec![

@@ -2679,6 +2679,14 @@ impl Session {
             }
         };
 
+        self.services
+            .models_manager
+            .reconfigure(
+                new_config.model_catalog.clone(),
+                new_config.model_provider.clone(),
+            )
+            .await;
+
         let refresh_strategy = match &previous_configuration.session_source {
             SessionSource::SubAgent(_) => codex_models_manager::manager::RefreshStrategy::Offline,
             _ => codex_models_manager::manager::RefreshStrategy::OnlineIfUncached,

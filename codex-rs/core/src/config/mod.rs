@@ -66,7 +66,6 @@ use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
-use codex_model_provider_info::canonicalize_provider_model_slug;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -858,38 +857,6 @@ fn load_model_catalog(
     model_catalog_json
         .map(|path| load_catalog_json(&path))
         .transpose()
-}
-
-fn managed_profile_snapshot_catalog_path(
-    codex_home: &Path,
-    active_profile_name: Option<&str>,
-) -> Option<PathBuf> {
-    let profile_name = active_profile_name?.trim();
-    if profile_name.is_empty() {
-        return None;
-    }
-
-    Some(
-        codex_home
-            .join("Profiles")
-            .join(format!("{profile_name}.models.json")),
-    )
-}
-
-fn should_ignore_managed_profile_catalog(
-    model_catalog_json: Option<&AbsolutePathBuf>,
-    codex_home: &Path,
-    active_profile_name: Option<&str>,
-) -> bool {
-    let Some(model_catalog_json) = model_catalog_json else {
-        return false;
-    };
-    let Some(managed_path) = managed_profile_snapshot_catalog_path(codex_home, active_profile_name)
-    else {
-        return false;
-    };
-
-    model_catalog_json.as_path() == managed_path.as_path()
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -2478,10 +2445,7 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
-        let model = model
-            .or(config_profile.model)
-            .or(cfg.model)
-            .map(|model| canonicalize_provider_model_slug(&model).unwrap_or(model));
+        let model = model.or(config_profile.model).or(cfg.model);
         let service_tier = service_tier_override
             .unwrap_or_else(|| config_profile.service_tier.or(cfg.service_tier));
         let service_tier = match service_tier {
@@ -2565,24 +2529,14 @@ impl Config {
             .or(config_profile.zsh_path.map(Into::into))
             .or(cfg.zsh_path.map(Into::into));
 
-        let review_model = override_review_model
-            .or(cfg.review_model)
-            .map(|model| canonicalize_provider_model_slug(&model).unwrap_or(model));
+        let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
         let configured_model_catalog_json = config_profile
             .model_catalog_json
             .clone()
             .or(cfg.model_catalog_json.clone());
-        let model_catalog = if should_ignore_managed_profile_catalog(
-            configured_model_catalog_json.as_ref(),
-            &codex_home,
-            active_profile_name.as_deref(),
-        ) {
-            None
-        } else {
-            load_model_catalog(configured_model_catalog_json)?
-        };
+        let model_catalog = load_model_catalog(configured_model_catalog_json)?;
 
         let log_dir = cfg
             .log_dir

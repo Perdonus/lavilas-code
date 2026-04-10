@@ -282,7 +282,7 @@ async fn get_model_info_tracks_fallback_usage() {
 }
 
 #[tokio::test]
-async fn build_available_models_canonicalizes_legacy_mistral_variant_slugs() {
+async fn build_available_models_preserves_mistral_variant_slugs() {
     let codex_home = tempdir().expect("temp dir");
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
@@ -292,15 +292,18 @@ async fn build_available_models_canonicalizes_legacy_mistral_variant_slugs() {
         CollaborationModesConfig::default(),
     );
 
-    let presets = manager.build_available_models(vec![remote_model(
-        "mistral-vibe-cli-with-tools",
-        "Mistral Vibe",
-        1,
-    )]);
+    let presets = manager.build_available_models(
+        vec![remote_model(
+            "mistral-vibe-cli-with-tools",
+            "Mistral Vibe",
+            1,
+        )],
+        /*chatgpt_mode*/ false,
+    );
 
     assert_eq!(presets.len(), 1);
-    assert_eq!(presets[0].model, "mistral-vibe-cli");
-    assert_eq!(presets[0].id, "mistral-vibe-cli");
+    assert_eq!(presets[0].model, "mistral-vibe-cli-with-tools");
+    assert_eq!(presets[0].id, "mistral-vibe-cli-with-tools");
 }
 
 #[tokio::test]
@@ -1009,7 +1012,10 @@ fn build_available_models_picks_default_after_hiding_hidden_models() {
     let mut expected_visible = ModelPreset::from(visible_model.clone());
     expected_visible.is_default = true;
 
-    let available = manager.build_available_models(vec![hidden_model, visible_model]);
+    let available = manager.build_available_models(
+        vec![hidden_model, visible_model],
+        /*chatgpt_mode*/ false,
+    );
 
     assert_eq!(available, vec![expected_hidden, expected_visible]);
 }

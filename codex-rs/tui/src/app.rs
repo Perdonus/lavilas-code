@@ -1543,20 +1543,7 @@ impl App {
     }
 
     fn model_matches_provider_preset(requested_model: &str, preset: &ModelPreset) -> bool {
-        if preset.model == requested_model {
-            return true;
-        }
-
-        let requested_tail = requested_model
-            .rsplit('/')
-            .next()
-            .unwrap_or(requested_model);
-        let preset_tail = preset
-            .model
-            .rsplit('/')
-            .next()
-            .unwrap_or(preset.model.as_str());
-        requested_tail.eq_ignore_ascii_case(preset_tail)
+        candidate_model_slug_matches(requested_model, preset.model.as_str())
     }
 
     fn select_provider_model<'a>(
@@ -7758,6 +7745,30 @@ mod tests {
             .expect("legacy Gemini alias should match live preset");
 
         assert_eq!(selected.model, "gemini-2.5-flash");
+    }
+
+    #[test]
+    fn select_provider_model_matches_legacy_mistral_base_alias_against_latest_variant() {
+        let presets = vec![ModelPreset {
+            id: "mistral-vibe-cli-latest".to_string(),
+            model: "mistral-vibe-cli-latest".to_string(),
+            display_name: "mistral-vibe-cli-latest".to_string(),
+            description: String::new(),
+            default_reasoning_effort: ReasoningEffortConfig::Medium,
+            supported_reasoning_efforts: Vec::new(),
+            supports_personality: false,
+            is_default: true,
+            upgrade: None,
+            show_in_picker: true,
+            availability_nux: None,
+            supported_in_api: true,
+            input_modalities: codex_protocol::openai_models::default_input_modalities(),
+        }];
+
+        let selected = App::select_provider_model("mistral-vibe-cli", &presets)
+            .expect("legacy Mistral base alias should match the latest preset");
+
+        assert_eq!(selected.model, "mistral-vibe-cli-latest");
     }
 
     #[test]
