@@ -870,7 +870,6 @@ pub(crate) fn build_create_profile_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_preferences::MISTRAL_CANONICAL_PROFILE_MODEL;
     use codex_protocol::config_types::ReasoningSummary;
     use codex_protocol::openai_models::ConfigShellToolType;
     use codex_protocol::openai_models::ModelVisibility;
@@ -931,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn load_stored_profile_repairs_legacy_mistral_model_and_sidecar() {
+    fn load_stored_profile_preserves_legacy_mistral_model_and_sidecar() {
         let codex_home = tempdir().expect("tempdir");
         let profiles = profiles_dir(codex_home.path());
         std::fs::create_dir_all(&profiles).expect("profiles dir");
@@ -965,14 +964,14 @@ mod tests {
         .expect("write sidecar");
 
         let loaded = load_stored_profile(&profile_path).expect("load repaired profile");
-        assert_eq!(loaded.model, MISTRAL_CANONICAL_PROFILE_MODEL);
+        assert_eq!(loaded.model, "mistral-vibe-cli");
         assert!(
-            !std::fs::read_to_string(&profile_path)
+            std::fs::read_to_string(&profile_path)
                 .expect("profile contents")
                 .contains("\"mistral-vibe-cli\"")
         );
         assert!(
-            !std::fs::read_to_string(&sidecar_path)
+            std::fs::read_to_string(&sidecar_path)
                 .expect("sidecar contents")
                 .contains("\"mistral-vibe-cli\"")
         );

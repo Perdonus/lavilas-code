@@ -523,6 +523,38 @@ fn parse_provider_model_catalog_with_provider(
     provider: Option<&ModelProviderInfo>,
 ) -> Result<Vec<ModelInfo>> {
     if let Ok(ModelsResponse { models }) = serde_json::from_slice::<ModelsResponse>(body) {
+        if let Some(provider) = provider {
+            let mut seen = HashSet::new();
+            let mut sanitized = Vec::new();
+            for mut model in models {
+                let original_slug = model.slug.trim().to_string();
+                if original_slug.is_empty() {
+                    continue;
+                }
+                let normalized_slug = normalize_profile_model(
+                    if provider.uses_gemini_api() {
+                        "gemini"
+                    } else if provider.uses_mistral_api() {
+                        "mistral"
+                    } else {
+                        provider.name.as_str()
+                    },
+                    original_slug.as_str(),
+                );
+                if normalized_slug.is_empty()
+                    || !provider_catalog_slug_allowed(Some(provider), normalized_slug.as_str())
+                    || !seen.insert(normalized_slug.clone())
+                {
+                    continue;
+                }
+                if model.display_name.trim().is_empty() || model.display_name == original_slug {
+                    model.display_name = normalized_slug.clone();
+                }
+                model.slug = normalized_slug;
+                sanitized.push(model);
+            }
+            return Ok(sanitized);
+        }
         return Ok(models);
     }
 
@@ -7967,6 +7999,40 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].slug, "mistral-large-latest");
         assert_eq!(models[0].display_name, "mistral-large-latest");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_provider_model_catalog_sanitizes_models_response_for_gemini_provider() -> Result<()> {
+        let provider = ModelProviderInfo {
+            name: "Gemini".to_string(),
+            base_url: Some("https://generativelanguage.googleapis.com/v1beta/openai".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::ChatCompletions,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+        let body = serde_json::to_vec(&ModelsResponse {
+            models: vec![
+                fallback_provider_model_info("models/gemma-4-31b-it"),
+                fallback_provider_model_info("models/gemini-flash-latest"),
+            ],
+        })?;
+        let models = parse_provider_model_catalog_with_provider(&body, Some(&provider))?;
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "gemini-2.5-flash");
+        assert_eq!(models[0].display_name, "models/gemini-flash-latest");
         Ok(())
     }
 

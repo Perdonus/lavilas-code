@@ -124,26 +124,6 @@ pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
         }
     }
 
-    if provider.eq_ignore_ascii_case("mistral") {
-        let trimmed = model.trim();
-        let (prefix, terminal_segment) = trimmed
-            .rsplit_once('/')
-            .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
-        let normalized_tail = match terminal_segment.to_ascii_lowercase().as_str() {
-            MISTRAL_LEGACY_BASE_MODEL
-            | MISTRAL_LEGACY_LATEST_MODEL
-            | MISTRAL_LEGACY_TOOL_PROFILE_MODEL => Some(MISTRAL_CANONICAL_PROFILE_MODEL),
-            MISTRAL_LEGACY_FAST_MODEL => Some(MISTRAL_FAST_PROFILE_MODEL),
-            _ => None,
-        };
-        if let Some(normalized_tail) = normalized_tail {
-            return prefix.map_or_else(
-                || normalized_tail.to_string(),
-                |prefix| format!("{prefix}/{normalized_tail}"),
-            );
-        }
-    }
-
     model.to_string()
 }
 
@@ -730,9 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_catalog_helper_repairs_legacy_mistral_sidecar() {
-        use super::MISTRAL_CANONICAL_PROFILE_MODEL;
-        use super::MISTRAL_FAST_PROFILE_MODEL;
+    fn profile_catalog_helper_preserves_legacy_mistral_sidecar() {
         use super::MISTRAL_LEGACY_BASE_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path = profile_model_catalog_path(codex_home.path(), "mistral-profile");
@@ -753,15 +731,10 @@ mod tests {
             .expect("repair catalog");
 
         let contents = std::fs::read_to_string(&catalog_path).expect("catalog contents");
-        assert!(contents.contains(MISTRAL_CANONICAL_PROFILE_MODEL));
-        assert!(!contents.contains(MISTRAL_LEGACY_BASE_MODEL));
+        assert!(contents.contains(MISTRAL_LEGACY_BASE_MODEL));
         assert_eq!(
             normalize_profile_model("mistral", "mistral-vibe-cli"),
-            MISTRAL_CANONICAL_PROFILE_MODEL
-        );
-        assert_eq!(
-            normalize_profile_model("mistral", "mistral-vibe-cli-fast"),
-            MISTRAL_FAST_PROFILE_MODEL
+            MISTRAL_LEGACY_BASE_MODEL
         );
     }
 

@@ -144,12 +144,6 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
-const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
-const MISTRAL_LEGACY_LATEST_MODEL: &str = "mistral-vibe-cli-latest";
-const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
-const MISTRAL_LEGACY_FAST_MODEL: &str = "mistral-vibe-cli-fast";
-const MISTRAL_DEFAULT_MODEL: &str = "devstral-latest";
-const MISTRAL_FAST_MODEL: &str = "devstral-small-latest";
 const GOOGLE_THOUGHT_SIGNATURE_PREFIX: &str = "google-thought-signature:";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
@@ -165,29 +159,6 @@ fn provider_uses_gemini_api(provider: &ModelProviderInfo) -> bool {
 
 fn effective_wire_api(provider: &ModelProviderInfo) -> WireApi {
     provider.effective_wire_api()
-}
-
-fn normalize_mistral_model_alias(model: &str) -> Option<String> {
-    let trimmed = model.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let (prefix, tail) = trimmed
-        .rsplit_once('/')
-        .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
-    let normalized_tail = match tail.to_ascii_lowercase().as_str() {
-        MISTRAL_LEGACY_BASE_MODEL | MISTRAL_LEGACY_LATEST_MODEL | MISTRAL_LEGACY_TOOL_MODEL => {
-            Some(MISTRAL_DEFAULT_MODEL)
-        }
-        MISTRAL_LEGACY_FAST_MODEL => Some(MISTRAL_FAST_MODEL),
-        _ => None,
-    }?;
-
-    Some(match prefix {
-        Some(prefix) => format!("{prefix}/{normalized_tail}"),
-        None => normalized_tail.to_string(),
-    })
 }
 
 fn normalize_request_model_for_provider<'a>(
@@ -208,12 +179,6 @@ fn normalize_request_model_for_provider<'a>(
         if normalized != model {
             return Cow::Owned(normalized.to_string());
         }
-    }
-
-    if provider_uses_mistral_api(provider)
-        && let Some(normalized) = normalize_mistral_model_alias(model)
-    {
-        return Cow::Owned(normalized);
     }
 
     Cow::Borrowed(model)

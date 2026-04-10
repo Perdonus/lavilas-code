@@ -47,12 +47,6 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
 const PROVIDER_MODEL_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
-const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
-const MISTRAL_LEGACY_LATEST_MODEL: &str = "mistral-vibe-cli-latest";
-const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
-const MISTRAL_LEGACY_FAST_MODEL: &str = "mistral-vibe-cli-fast";
-const MISTRAL_DEFAULT_MODEL: &str = "devstral-latest";
-const MISTRAL_FAST_MODEL: &str = "devstral-small-latest";
 
 #[derive(Debug, Deserialize)]
 struct OpenAiCompatibleModelsEnvelope {
@@ -151,29 +145,6 @@ fn find_bundled_provider_model_metadata(
         .cloned()
 }
 
-fn normalize_mistral_legacy_model_slug(model: &str) -> Option<String> {
-    let trimmed = model.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let (prefix, tail) = trimmed
-        .rsplit_once('/')
-        .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
-    let normalized_tail = match tail.to_ascii_lowercase().as_str() {
-        MISTRAL_LEGACY_BASE_MODEL | MISTRAL_LEGACY_LATEST_MODEL | MISTRAL_LEGACY_TOOL_MODEL => {
-            Some(MISTRAL_DEFAULT_MODEL)
-        }
-        MISTRAL_LEGACY_FAST_MODEL => Some(MISTRAL_FAST_MODEL),
-        _ => None,
-    }?;
-
-    Some(match prefix {
-        Some(prefix) => format!("{prefix}/{normalized_tail}"),
-        None => normalized_tail.to_string(),
-    })
-}
-
 fn provider_uses_gemini_api(provider: &ModelProviderInfo) -> bool {
     provider.uses_gemini_api()
 }
@@ -199,12 +170,6 @@ fn normalize_provider_catalog_slug(provider: &ModelProviderInfo, slug: &str) -> 
                 return normalized.to_ascii_lowercase();
             }
         }
-    }
-
-    if provider_uses_mistral_api(provider)
-        && let Some(normalized) = normalize_mistral_legacy_model_slug(trimmed)
-    {
-        return normalized;
     }
 
     trimmed.to_string()
@@ -764,18 +729,14 @@ impl ModelsManager {
         None
     }
 
-    fn normalize_legacy_model_slug(model: &str) -> Option<String> {
-        normalize_mistral_legacy_model_slug(model)
-    }
-
     fn construct_model_info_from_candidates(
         model: &str,
         candidates: &[ModelInfo],
         config: &ModelsManagerConfig,
     ) -> ModelInfo {
-        let canonical_model =
-            Self::normalize_legacy_model_slug(model).unwrap_or_else(|| model.to_string());
-        let is_legacy_mistral_tool_alias = canonical_model != model;
+        let canonical_model = model.to_string();
+        let is_legacy_mistral_tool_alias = model_info::canonicalize_provider_model_slug(model)
+            .is_some_and(|canonical| canonical != model);
 
         // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
         // retry for namespaced slugs like `custom/gpt-5.3-codex`.
@@ -905,7 +866,7 @@ impl ModelsManager {
         body: &[u8],
     ) -> CoreResult<Vec<ModelInfo>> {
         if let Ok(ModelsResponse { models }) = serde_json::from_slice::<ModelsResponse>(body) {
-            return Ok(models);
+            return Ok(Self::sanitize_provider_catalog_models(models, provider));
         }
 
         let slugs = if let Ok(envelope) =
@@ -942,6 +903,37 @@ impl ModelsManager {
             .collect())
     }
 
+    fn sanitize_provider_catalog_models(
+        models: Vec<ModelInfo>,
+        provider: &ModelProviderInfo,
+    ) -> Vec<ModelInfo> {
+        let mut seen_slugs = HashSet::new();
+        let mut sanitized = Vec::new();
+
+        for mut model in models {
+            let original_slug = model.slug.trim().to_string();
+            if original_slug.is_empty() {
+                continue;
+            }
+
+            let normalized_slug = normalize_provider_catalog_slug(provider, original_slug.as_str());
+            if normalized_slug.is_empty()
+                || !provider_catalog_slug_allowed(provider, normalized_slug.as_str())
+                || !seen_slugs.insert(normalized_slug.clone())
+            {
+                continue;
+            }
+
+            if model.display_name.trim().is_empty() || model.display_name == original_slug {
+                model.display_name = normalized_slug.clone();
+            }
+            model.slug = normalized_slug;
+            sanitized.push(model);
+        }
+
+        sanitized
+    }
+
     async fn get_etag(&self) -> Option<String> {
         self.etag.read().await.clone()
     }
@@ -960,7 +952,7 @@ impl ModelsManager {
         provider: &ModelProviderInfo,
     ) -> Vec<ModelInfo> {
         model_catalog
-            .map(|catalog| catalog.models)
+            .map(|catalog| Self::sanitize_provider_catalog_models(catalog.models, provider))
             .unwrap_or_else(|| {
                 if provider.is_openai() {
                     Self::load_remote_models_from_file().unwrap_or_default()
@@ -1004,12 +996,7 @@ impl ModelsManager {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let mut seen_slugs = HashSet::new();
-        remote_models.retain_mut(|model| {
-            if let Some(canonical_slug) = Self::normalize_legacy_model_slug(&model.slug) {
-                model.slug = canonical_slug;
-            }
-            seen_slugs.insert(model.slug.clone())
-        });
+        remote_models.retain_mut(|model| seen_slugs.insert(model.slug.clone()));
 
         let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);

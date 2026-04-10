@@ -256,25 +256,25 @@ fn effective_wire_api_prioritizes_mistral_base_url_over_legacy_openai_flags() {
 }
 
 #[test]
-fn normalize_request_model_maps_all_legacy_mistral_aliases() {
+fn normalize_request_model_preserves_mistral_aliases() {
     let provider =
         create_oss_provider_with_base_url("https://api.mistral.ai/v1", WireApi::Responses);
 
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli").as_ref(),
-        "devstral-latest"
+        "mistral-vibe-cli"
     );
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-with-tools").as_ref(),
-        "devstral-latest"
+        "mistral-vibe-cli-with-tools"
     );
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-fast").as_ref(),
-        "devstral-small-latest"
+        "mistral-vibe-cli-fast"
     );
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-latest").as_ref(),
-        "devstral-latest"
+        "mistral-vibe-cli-latest"
     );
 }
 

@@ -282,7 +282,7 @@ async fn get_model_info_tracks_fallback_usage() {
 }
 
 #[tokio::test]
-async fn build_available_models_normalizes_legacy_mistral_variants() {
+async fn build_available_models_preserves_legacy_mistral_variants() {
     let codex_home = tempdir().expect("temp dir");
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
@@ -302,8 +302,8 @@ async fn build_available_models_normalizes_legacy_mistral_variants() {
     );
 
     assert_eq!(presets.len(), 1);
-    assert_eq!(presets[0].model, "devstral-latest");
-    assert_eq!(presets[0].id, "devstral-latest");
+    assert_eq!(presets[0].model, "mistral-vibe-cli-with-tools");
+    assert_eq!(presets[0].id, "mistral-vibe-cli-with-tools");
 }
 
 #[tokio::test]
@@ -363,7 +363,7 @@ async fn get_model_info_matches_namespaced_suffix() {
 async fn get_model_info_matches_provider_variant_suffixes() {
     let codex_home = tempdir().expect("temp dir");
     let config = ModelsManagerConfig::default();
-    let remote = remote_model("devstral-latest", "Devstral", /*priority*/ 0);
+    let remote = remote_model("mistral-vibe-cli", "Mistral Vibe", /*priority*/ 0);
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
@@ -377,8 +377,8 @@ async fn get_model_info_matches_provider_variant_suffixes() {
 
     let model_info = manager.get_model_info(&variant_slug, &config).await;
 
-    assert_eq!(model_info.slug, "devstral-latest");
-    assert_eq!(model_info.display_name, "Devstral");
+    assert_eq!(model_info.slug, "mistral-vibe-cli-with-tools");
+    assert_eq!(model_info.display_name, "Mistral Vibe");
     assert!(!model_info.used_fallback_model_metadata);
     assert!(model_info.supports_parallel_tool_calls);
 }
@@ -424,11 +424,43 @@ async fn get_model_info_uses_compatibility_metadata_for_provider_style_slug() {
 
     let model_info = manager.get_model_info(&compatibility_slug, &config).await;
 
-    assert_eq!(model_info.slug, "devstral-latest");
-    assert_eq!(model_info.display_name, "Devstral");
+    assert_eq!(model_info.slug, "mistral-vibe-cli-with-tools");
+    assert_eq!(model_info.display_name, "Mistral Vibe CLI");
     assert!(model_info.supports_parallel_tool_calls);
     assert!(model_info.supports_search_tool);
     assert!(!model_info.used_fallback_model_metadata);
+}
+
+#[tokio::test]
+async fn custom_gemini_catalog_normalizes_aliases_and_filters_non_gemini_models() {
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let provider = codex_model_provider_info::create_oss_provider_with_base_url(
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        WireApi::ChatCompletions,
+    );
+    let manager = ModelsManager::new_with_provider(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        Some(ModelsResponse {
+            models: vec![
+                remote_model("models/gemma-4-31b-it", "Gemma", /*priority*/ 0),
+                remote_model(
+                    "models/gemini-flash-latest",
+                    "Gemini Flash",
+                    /*priority*/ 1,
+                ),
+            ],
+        }),
+        CollaborationModesConfig::default(),
+        provider,
+    );
+
+    let presets = manager.list_models(RefreshStrategy::Offline).await;
+
+    assert_eq!(presets.len(), 1);
+    assert_eq!(presets[0].model, "gemini-2.5-flash");
+    assert_eq!(presets[0].display_name, "Gemini Flash");
 }
 
 #[tokio::test]
