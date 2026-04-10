@@ -192,7 +192,7 @@ fn chat_completions_instructions_role(provider: &ModelProviderInfo) -> &'static 
     }
 }
 
-fn normalize_chat_completions_role(provider: &ModelProviderInfo, role: &str) -> &str {
+fn normalize_chat_completions_role<'a>(provider: &ModelProviderInfo, role: &'a str) -> &'a str {
     if role.eq_ignore_ascii_case("developer") || role.eq_ignore_ascii_case("system") {
         chat_completions_instructions_role(provider)
     } else {
