@@ -61,6 +61,18 @@ fn canonicalize_provider_model_slug_repairs_mistral_tool_variant() {
 }
 
 #[test]
+fn normalize_provider_model_alias_slug_repairs_gemini_legacy_aliases() {
+    assert_eq!(
+        normalize_provider_model_alias_slug("gemini-flash-latest"),
+        Some("gemini-2.5-flash".to_string())
+    );
+    assert_eq!(
+        normalize_provider_model_alias_slug("models/gemini-pro-latest"),
+        Some("models/gemini-2.5-pro".to_string())
+    );
+}
+
+#[test]
 fn compatibility_model_info_keeps_tool_support_for_canonical_mistral_vibe_cli() {
     let model = compatibility_model_info_from_slug("mistral-vibe-cli")
         .expect("canonical Mistral Vibe CLI should produce compatibility metadata");

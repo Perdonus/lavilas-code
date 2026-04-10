@@ -123,6 +123,7 @@ use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::model_info::canonicalize_provider_model_slug;
 use codex_models_manager::model_info::compatibility_model_info_from_slug;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_models_manager::model_info::normalize_provider_model_alias_slug;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
@@ -262,15 +263,28 @@ struct OpenAiCompatibleModelObject {
 }
 
 fn candidate_model_slug_matches(requested_slug: &str, candidate_slug: &str) -> bool {
-    if candidate_slug.eq_ignore_ascii_case(requested_slug) {
+    let requested_normalized = normalize_provider_model_alias_slug(requested_slug)
+        .or_else(|| canonicalize_provider_model_slug(requested_slug))
+        .unwrap_or_else(|| requested_slug.trim().to_string());
+    let candidate_normalized = normalize_provider_model_alias_slug(candidate_slug)
+        .or_else(|| canonicalize_provider_model_slug(candidate_slug))
+        .unwrap_or_else(|| candidate_slug.trim().to_string());
+
+    if candidate_normalized.eq_ignore_ascii_case(requested_normalized.as_str()) {
         return true;
     }
-    if requested_slug.starts_with(candidate_slug) {
+    if requested_normalized.starts_with(candidate_normalized.as_str()) {
         return true;
     }
 
-    let requested_tail = requested_slug.rsplit('/').next().unwrap_or(requested_slug);
-    let candidate_tail = candidate_slug.rsplit('/').next().unwrap_or(candidate_slug);
+    let requested_tail = requested_normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(requested_normalized.as_str());
+    let candidate_tail = candidate_normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(candidate_normalized.as_str());
     if candidate_tail.eq_ignore_ascii_case(requested_tail) {
         return true;
     }
@@ -345,7 +359,8 @@ fn enrich_provider_catalog_model(
 ) -> ModelInfo {
     let requested_slug = requested_slug.trim();
     let presented_slug = requested_slug.to_string();
-    let metadata_slug = canonicalize_provider_model_slug(requested_slug)
+    let metadata_slug = normalize_provider_model_alias_slug(requested_slug)
+        .or_else(|| canonicalize_provider_model_slug(requested_slug))
         .unwrap_or_else(|| requested_slug.to_string());
     let display_name_override = (presented_slug != metadata_slug).then_some(presented_slug.clone());
     let mut model = find_bundled_provider_model_metadata(metadata_slug.as_str(), bundled_models)
@@ -411,14 +426,10 @@ fn fallback_reasoning_description(effort: ReasoningEffortConfig) -> &'static str
         ReasoningEffortConfig::Minimal | ReasoningEffortConfig::Low => {
             "Fast responses with lighter reasoning"
         }
-        ReasoningEffortConfig::Medium => {
-            "Balances speed and reasoning depth for everyday tasks"
-        }
+        ReasoningEffortConfig::Medium => "Balances speed and reasoning depth for everyday tasks",
         ReasoningEffortConfig::High => "Greater reasoning depth for complex problems",
         ReasoningEffortConfig::XHigh => "Extra high reasoning depth for complex problems",
-        ReasoningEffortConfig::None => {
-            "Balances speed and reasoning depth for everyday tasks"
-        }
+        ReasoningEffortConfig::None => "Balances speed and reasoning depth for everyday tasks",
     }
 }
 
@@ -7726,6 +7737,30 @@ mod tests {
     }
 
     #[test]
+    fn select_provider_model_matches_gemini_legacy_alias_against_live_catalog() {
+        let presets = vec![ModelPreset {
+            id: "gemini-2.5-flash".to_string(),
+            model: "gemini-2.5-flash".to_string(),
+            display_name: "gemini-2.5-flash".to_string(),
+            description: String::new(),
+            default_reasoning_effort: ReasoningEffortConfig::Medium,
+            supported_reasoning_efforts: Vec::new(),
+            supports_personality: false,
+            is_default: true,
+            upgrade: None,
+            show_in_picker: true,
+            availability_nux: None,
+            supported_in_api: true,
+            input_modalities: codex_protocol::openai_models::default_input_modalities(),
+        }];
+
+        let selected = App::select_provider_model("gemini-flash-latest", &presets)
+            .expect("legacy Gemini alias should match live preset");
+
+        assert_eq!(selected.model, "gemini-2.5-flash");
+    }
+
+    #[test]
     fn custom_openai_base_url_keeps_reasoning_controls_enabled() {
         let provider = ModelProviderInfo {
             name: "OpenAI API".to_string(),
@@ -7792,7 +7827,10 @@ mod tests {
         );
 
         assert!(sanitized[0].supported_reasoning_efforts.is_empty());
-        assert_eq!(sanitized[0].default_reasoning_effort, ReasoningEffortConfig::High);
+        assert_eq!(
+            sanitized[0].default_reasoning_effort,
+            ReasoningEffortConfig::High
+        );
     }
 
     #[test]
@@ -7835,7 +7873,10 @@ mod tests {
         );
 
         assert!(provider_supports_reasoning_controls(&provider));
-        assert_eq!(sanitized[0].default_reasoning_effort, ReasoningEffortConfig::Medium);
+        assert_eq!(
+            sanitized[0].default_reasoning_effort,
+            ReasoningEffortConfig::Medium
+        );
         assert_eq!(sanitized[0].supported_reasoning_efforts.len(), 3);
     }
 
@@ -7878,11 +7919,16 @@ mod tests {
             &provider,
         );
 
-        assert!(sanitized[0]
-            .supported_reasoning_efforts
-            .iter()
-            .any(|option| option.effort == ReasoningEffortConfig::XHigh));
-        assert_eq!(sanitized[0].default_reasoning_effort, ReasoningEffortConfig::Medium);
+        assert!(
+            sanitized[0]
+                .supported_reasoning_efforts
+                .iter()
+                .any(|option| option.effort == ReasoningEffortConfig::XHigh)
+        );
+        assert_eq!(
+            sanitized[0].default_reasoning_effort,
+            ReasoningEffortConfig::Medium
+        );
     }
 
     #[test]

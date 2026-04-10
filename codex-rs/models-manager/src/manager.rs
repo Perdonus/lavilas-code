@@ -78,15 +78,28 @@ struct OpenAiCompatibleModelObject {
 }
 
 fn candidate_model_slug_matches(requested_slug: &str, candidate_slug: &str) -> bool {
-    if candidate_slug.eq_ignore_ascii_case(requested_slug) {
+    let requested_normalized = model_info::normalize_provider_model_alias_slug(requested_slug)
+        .or_else(|| model_info::canonicalize_provider_model_slug(requested_slug))
+        .unwrap_or_else(|| requested_slug.trim().to_string());
+    let candidate_normalized = model_info::normalize_provider_model_alias_slug(candidate_slug)
+        .or_else(|| model_info::canonicalize_provider_model_slug(candidate_slug))
+        .unwrap_or_else(|| candidate_slug.trim().to_string());
+
+    if candidate_normalized.eq_ignore_ascii_case(requested_normalized.as_str()) {
         return true;
     }
-    if requested_slug.starts_with(candidate_slug) {
+    if requested_normalized.starts_with(candidate_normalized.as_str()) {
         return true;
     }
 
-    let requested_tail = requested_slug.rsplit('/').next().unwrap_or(requested_slug);
-    let candidate_tail = candidate_slug.rsplit('/').next().unwrap_or(candidate_slug);
+    let requested_tail = requested_normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(requested_normalized.as_str());
+    let candidate_tail = candidate_normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(candidate_normalized.as_str());
     if candidate_tail.eq_ignore_ascii_case(requested_tail) {
         return true;
     }
@@ -172,11 +185,13 @@ fn enrich_provider_catalog_model(
 ) -> ModelInfo {
     let (presented_slug, metadata_slug) = if provider_uses_mistral_api(provider) {
         let presented_slug = requested_slug.to_string();
-        let metadata_slug = model_info::canonicalize_provider_model_slug(requested_slug)
+        let metadata_slug = model_info::normalize_provider_model_alias_slug(requested_slug)
+            .or_else(|| model_info::canonicalize_provider_model_slug(requested_slug))
             .unwrap_or_else(|| presented_slug.clone());
         (presented_slug, metadata_slug)
     } else {
-        let canonical_slug = model_info::canonicalize_provider_model_slug(requested_slug)
+        let canonical_slug = model_info::normalize_provider_model_alias_slug(requested_slug)
+            .or_else(|| model_info::canonicalize_provider_model_slug(requested_slug))
             .unwrap_or_else(|| requested_slug.to_string());
         (canonical_slug.clone(), canonical_slug)
     };

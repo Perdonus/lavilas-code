@@ -20,6 +20,10 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 const COMPATIBILITY_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
+const GEMINI_LEGACY_FLASH_MODEL: &str = "gemini-flash-latest";
+const GEMINI_LEGACY_PRO_MODEL: &str = "gemini-pro-latest";
+const GEMINI_CANONICAL_FLASH_MODEL: &str = "gemini-2.5-flash";
+const GEMINI_CANONICAL_PRO_MODEL: &str = "gemini-2.5-pro";
 const MISTRAL_LEGACY_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
 const MISTRAL_CANONICAL_MODEL: &str = "mistral-vibe-cli";
 const COMPATIBILITY_PROVIDER_HINTS: [&str; 11] = [
@@ -82,8 +86,9 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
 /// provider slugs so they do not fall into the user-visible fallback warning
 /// path when the provider model catalog is unavailable.
 pub fn compatibility_model_info_from_slug(slug: &str) -> Option<ModelInfo> {
-    let normalized_slug =
-        canonicalize_provider_model_slug(slug).unwrap_or_else(|| slug.to_string());
+    let normalized_slug = normalize_provider_model_alias_slug(slug)
+        .or_else(|| canonicalize_provider_model_slug(slug))
+        .unwrap_or_else(|| slug.to_string());
     let compatibility_base = compatibility_base_slug(normalized_slug.as_str())?;
     let mut model = generic_model_info_from_slug(
         normalized_slug.as_str(),
@@ -98,6 +103,27 @@ pub fn compatibility_model_info_from_slug(slug: &str) -> Option<ModelInfo> {
 
 pub fn canonicalize_provider_model_slug(slug: &str) -> Option<String> {
     canonicalize_mistral_variant_slug(slug)
+}
+
+pub fn normalize_provider_model_alias_slug(slug: &str) -> Option<String> {
+    let trimmed = slug.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (prefix, tail) = trimmed
+        .rsplit_once('/')
+        .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
+    let normalized_tail = match tail.to_ascii_lowercase().as_str() {
+        GEMINI_LEGACY_FLASH_MODEL => GEMINI_CANONICAL_FLASH_MODEL,
+        GEMINI_LEGACY_PRO_MODEL => GEMINI_CANONICAL_PRO_MODEL,
+        _ => return None,
+    };
+
+    Some(match prefix {
+        Some(prefix) => format!("{prefix}/{normalized_tail}"),
+        None => normalized_tail.to_string(),
+    })
 }
 
 fn generic_model_info_from_slug(slug: &str, used_fallback_model_metadata: bool) -> ModelInfo {

@@ -357,6 +357,10 @@ impl Features {
 
     /// Apply a table of key -> bool toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
+        let canonical_keys = m
+            .keys()
+            .filter_map(|key| feature_for_key(key).map(Feature::key))
+            .collect::<std::collections::BTreeSet<_>>();
         for (k, v) in m {
             match k.as_str() {
                 "web_search_request" => {
@@ -381,7 +385,7 @@ impl Features {
                     if matches!(feat, Feature::TuiAppServer) {
                         continue;
                     }
-                    if k != feat.key() {
+                    if k != feat.key() && !canonical_keys.contains(feat.key()) {
                         self.record_legacy_usage(k.as_str(), feat);
                     }
                     if *v {

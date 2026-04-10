@@ -281,6 +281,10 @@ fn normalize_request_model_strips_gemini_models_prefix() {
         normalize_request_model_for_provider(&provider, "models/gemini-2.5-flash").as_ref(),
         "gemini-2.5-flash"
     );
+    assert_eq!(
+        normalize_request_model_for_provider(&provider, "gemini-flash-latest").as_ref(),
+        "gemini-2.5-flash"
+    );
     assert!(provider.supports_chat_completions_reasoning_effort());
     assert!(provider.supports_reasoning_controls());
 }
@@ -419,9 +423,65 @@ fn build_chat_completions_messages_maps_developer_role_to_system() {
     )
     .expect("chat completions messages");
 
-    assert_eq!(messages.len(), 2);
+    assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].role, "system");
-    assert_eq!(messages[1].role, "system");
+    assert_eq!(
+        messages[0].content,
+        Some(json!("system prompt\n\ndeveloper prompt"))
+    );
+}
+
+#[test]
+fn build_chat_completions_messages_never_emits_system_after_tool() {
+    let messages = build_chat_completions_messages(
+        "",
+        &[
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "run it".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                    "ok".to_string(),
+                ),
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "keep it terse".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ],
+    )
+    .expect("chat completions messages");
+
+    assert_eq!(messages[0].role, "system");
+    assert_eq!(messages[1].role, "user");
+    assert_eq!(messages[2].role, "assistant");
+    assert_eq!(messages[3].role, "tool");
+    assert!(
+        messages
+            .iter()
+            .skip(1)
+            .all(|message| message.role != "system"),
+        "system message must stay ahead of tool messages: {messages:?}"
+    );
 }
 
 #[test]

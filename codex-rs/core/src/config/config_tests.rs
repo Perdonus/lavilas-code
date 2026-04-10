@@ -4290,6 +4290,51 @@ fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
     Ok(())
 }
 
+#[test]
+fn managed_profile_snapshot_catalog_is_not_loaded_as_authoritative_catalog() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let profiles_dir = codex_home.path().join("Profiles");
+    std::fs::create_dir_all(&profiles_dir)?;
+    let catalog_path = profiles_dir.join("gemini-profile.models.json");
+    let mut catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    catalog.models = catalog.models.into_iter().take(1).collect();
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_string(&catalog).expect("serialize catalog"),
+    )?;
+
+    let cfg = ConfigToml {
+        profile: Some("gemini-profile".to_string()),
+        profiles: HashMap::from([(
+            "gemini-profile".to_string(),
+            ConfigProfile {
+                model_provider: Some("gemini-profile-provider".to_string()),
+                model_catalog_json: Some(catalog_path.abs()),
+                ..Default::default()
+            },
+        )]),
+        model_providers: HashMap::from([(
+            "gemini-profile-provider".to_string(),
+            codex_model_provider_info::create_oss_provider_with_base_url(
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+                WireApi::ChatCompletions,
+            ),
+        )]),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(config.model_catalog, None);
+    Ok(())
+}
+
 fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
     let toml = r#"
 model = "o3"

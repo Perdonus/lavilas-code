@@ -860,6 +860,38 @@ fn load_model_catalog(
         .transpose()
 }
 
+fn managed_profile_snapshot_catalog_path(
+    codex_home: &Path,
+    active_profile_name: Option<&str>,
+) -> Option<PathBuf> {
+    let profile_name = active_profile_name?.trim();
+    if profile_name.is_empty() {
+        return None;
+    }
+
+    Some(
+        codex_home
+            .join("Profiles")
+            .join(format!("{profile_name}.models.json")),
+    )
+}
+
+fn should_ignore_managed_profile_catalog(
+    model_catalog_json: Option<&AbsolutePathBuf>,
+    codex_home: &Path,
+    active_profile_name: Option<&str>,
+) -> bool {
+    let Some(model_catalog_json) = model_catalog_json else {
+        return false;
+    };
+    let Some(managed_path) = managed_profile_snapshot_catalog_path(codex_home, active_profile_name)
+    else {
+        return false;
+    };
+
+    model_catalog_json.as_path() == managed_path.as_path()
+}
+
 fn filter_mcp_servers_by_requirements(
     mcp_servers: &mut HashMap<String, McpServerConfig>,
     mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -2538,12 +2570,19 @@ impl Config {
             .map(|model| canonicalize_provider_model_slug(&model).unwrap_or(model));
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
-        let model_catalog = load_model_catalog(
-            config_profile
-                .model_catalog_json
-                .clone()
-                .or(cfg.model_catalog_json.clone()),
-        )?;
+        let configured_model_catalog_json = config_profile
+            .model_catalog_json
+            .clone()
+            .or(cfg.model_catalog_json.clone());
+        let model_catalog = if should_ignore_managed_profile_catalog(
+            configured_model_catalog_json.as_ref(),
+            &codex_home,
+            active_profile_name.as_deref(),
+        ) {
+            None
+        } else {
+            load_model_catalog(configured_model_catalog_json)?
+        };
 
         let log_dir = cfg
             .log_dir

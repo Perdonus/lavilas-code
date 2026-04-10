@@ -360,11 +360,7 @@ async fn get_model_info_matches_namespaced_suffix() {
 async fn get_model_info_matches_provider_variant_suffixes() {
     let codex_home = tempdir().expect("temp dir");
     let config = ModelsManagerConfig::default();
-    let remote = remote_model(
-        "mistral-vibe-cli",
-        "Mistral Vibe CLI",
-        /*priority*/ 0,
-    );
+    let remote = remote_model("mistral-vibe-cli", "Mistral Vibe CLI", /*priority*/ 0);
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),

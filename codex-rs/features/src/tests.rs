@@ -199,6 +199,22 @@ fn enable_fanout_normalization_enables_multi_agent_one_way() {
 }
 
 #[test]
+fn apply_map_skips_legacy_notice_when_canonical_key_is_present() {
+    let mut features = Features::with_defaults();
+    let entries = BTreeMap::from([
+        ("collab".to_string(), true),
+        ("multi_agent".to_string(), true),
+    ]);
+
+    features.apply_map(&entries);
+
+    assert!(
+        features.legacy_feature_usages().next().is_none(),
+        "legacy usage notice should be suppressed when canonical key is also present"
+    );
+}
+
+#[test]
 fn apps_require_feature_flag_and_chatgpt_auth() {
     let mut features = Features::with_defaults();
     assert!(!features.apps_enabled_for_auth(/*auth*/ None));

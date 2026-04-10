@@ -124,6 +124,7 @@ use codex_login::provider_auth::auth_manager_for_provider;
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_models_manager::model_info::normalize_provider_model_alias_slug;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_response_debug_context::extract_response_debug_context;
@@ -165,12 +166,23 @@ fn normalize_request_model_for_provider<'a>(
     provider: &ModelProviderInfo,
     model: &'a str,
 ) -> Cow<'a, str> {
-    if provider_uses_gemini_api(provider) && model.starts_with("models/") {
-        return Cow::Borrowed(model.trim_start_matches("models/"));
+    if provider_uses_gemini_api(provider) {
+        let normalized = model.trim_start_matches("models/");
+        if let Some(normalized_alias) = normalize_provider_model_alias_slug(normalized) {
+            return Cow::Owned(
+                normalized_alias
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(normalized_alias.as_str())
+                    .to_string(),
+            );
+        }
+        if normalized != model {
+            return Cow::Owned(normalized.to_string());
+        }
     }
 
-    if provider_uses_mistral_api(provider)
-        && model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
+    if provider_uses_mistral_api(provider) && model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
     {
         return Cow::Borrowed(MISTRAL_DEFAULT_MODEL);
     }
@@ -2390,11 +2402,9 @@ fn build_chat_completions_messages(
     input: &[ResponseItem],
 ) -> Result<Vec<ChatCompletionsMessage>> {
     let mut messages = Vec::new();
+    let mut leading_system_segments = Vec::new();
     if !instructions.trim().is_empty() {
-        messages.push(ChatCompletionsMessage::text(
-            "system",
-            instructions.to_string(),
-        ));
+        leading_system_segments.push(instructions.to_string());
     }
 
     let mut tool_names_by_call_id: HashMap<String, String> = HashMap::new();
@@ -2403,10 +2413,12 @@ fn build_chat_completions_messages(
             ResponseItem::Message { role, content, .. } => {
                 let text = content_items_to_chat_text(content);
                 if !text.is_empty() {
-                    messages.push(ChatCompletionsMessage::text(
-                        normalize_chat_completions_role(role),
-                        text,
-                    ));
+                    let normalized_role = normalize_chat_completions_role(role);
+                    if normalized_role.eq_ignore_ascii_case("system") {
+                        leading_system_segments.push(text);
+                    } else {
+                        messages.push(ChatCompletionsMessage::text(normalized_role, text));
+                    }
                 }
             }
             ResponseItem::FunctionCall {
@@ -2511,6 +2523,13 @@ fn build_chat_completions_messages(
             | ResponseItem::Compaction { .. }
             | ResponseItem::Other => {}
         }
+    }
+
+    if !leading_system_segments.is_empty() {
+        messages.insert(
+            0,
+            ChatCompletionsMessage::text("system", leading_system_segments.join("\n\n")),
+        );
     }
 
     Ok(messages)

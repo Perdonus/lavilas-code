@@ -1,3 +1,4 @@
+use codex_models_manager::model_info::normalize_provider_model_alias_slug;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -95,14 +96,23 @@ pub(crate) fn default_profile_model(provider: &str) -> String {
 }
 
 pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
-    if provider.eq_ignore_ascii_case("gemini")
-        && model
+    if provider.eq_ignore_ascii_case("gemini") {
+        if let Some(normalized) = normalize_provider_model_alias_slug(model) {
+            return normalized
+                .rsplit('/')
+                .next()
+                .unwrap_or(normalized.as_str())
+                .to_string();
+        }
+
+        if model
             .get(..7)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("models/"))
-    {
-        let normalized = model[7..].trim();
-        if !normalized.is_empty() {
-            return normalized.to_ascii_lowercase();
+        {
+            let normalized = model[7..].trim();
+            if !normalized.is_empty() {
+                return normalized.to_ascii_lowercase();
+            }
         }
     }
 
@@ -713,6 +723,10 @@ mod tests {
         assert_eq!(
             normalize_profile_model("gemini", "models/gemini-2.5-pro"),
             "gemini-2.5-pro"
+        );
+        assert_eq!(
+            normalize_profile_model("gemini", "gemini-flash-latest"),
+            "gemini-2.5-flash"
         );
     }
 
