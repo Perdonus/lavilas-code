@@ -332,68 +332,36 @@ fn find_bundled_sidecar_model_metadata(
         .cloned()
 }
 
-fn generic_provider_reasoning_levels(
-    provider: &str,
-    model_slug: &str,
-) -> Option<Vec<ReasoningEffortPreset>> {
-    if provider.eq_ignore_ascii_case("mistral") {
-        return Some(vec![
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::None,
-                description: "Отключает отдельный бюджет размышлений ради более прямого ответа"
-                    .to_string(),
-            },
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::High,
-                description: "Глубже разбирает сложные и неоднозначные задачи".to_string(),
-            },
-        ]);
+const LEGACY_SYNTHETIC_REASONING_DESCRIPTIONS: [&str; 4] = [
+    "Отключает отдельный бюджет размышлений ради более прямого ответа",
+    "Быстрее отвечает и тратит меньше бюджета размышлений",
+    "Сбалансированный режим для повседневной разработки",
+    "Глубже разбирает сложные и неоднозначные задачи",
+];
+
+fn inferred_openai_reasoning_levels(provider: &str) -> Option<Vec<ReasoningEffortPreset>> {
+    if !(provider.eq_ignore_ascii_case("openai") || provider.eq_ignore_ascii_case("codex_oauth")) {
+        return None;
     }
 
-    if provider.eq_ignore_ascii_case("gemini") {
-        return Some(vec![
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::Low,
-                description: "Быстрее отвечает и тратит меньше бюджета размышлений".to_string(),
-            },
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::Medium,
-                description: "Сбалансированный режим для повседневной разработки".to_string(),
-            },
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::High,
-                description: "Глубже разбирает сложные и неоднозначные задачи".to_string(),
-            },
-        ]);
-    }
-
-    let normalized_slug = model_slug.to_ascii_lowercase();
-    if provider.eq_ignore_ascii_case("openai")
-        || provider.eq_ignore_ascii_case("codex_oauth")
-        || normalized_slug.contains("gpt-5")
-        || normalized_slug.contains("codex")
-    {
-        return Some(vec![
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::Low,
-                description: "Быстрее отвечает и тратит меньше бюджета размышлений".to_string(),
-            },
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::Medium,
-                description: "Сбалансированный режим для повседневной разработки".to_string(),
-            },
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::High,
-                description: "Глубже разбирает сложные и неоднозначные задачи".to_string(),
-            },
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::XHigh,
-                description: "Максимальный бюджет размышлений для тяжёлых случаев".to_string(),
-            },
-        ]);
-    }
-
-    None
+    Some(vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Быстрее отвечает и тратит меньше бюджета размышлений".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "Сбалансированный режим для повседневной разработки".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Глубже разбирает сложные и неоднозначные задачи".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::XHigh,
+            description: "Максимальный бюджет размышлений для тяжёлых случаев".to_string(),
+        },
+    ])
 }
 
 fn reasoning_effort_order(effort: ReasoningEffort) -> usize {
@@ -495,6 +463,50 @@ fn normalize_reasoning_default(model: &mut ModelInfo) -> bool {
     true
 }
 
+fn is_legacy_synthetic_reasoning_description(description: &str) -> bool {
+    LEGACY_SYNTHETIC_REASONING_DESCRIPTIONS
+        .iter()
+        .any(|candidate| candidate == &description)
+}
+
+fn strip_legacy_synthetic_reasoning_metadata(
+    provider: &str,
+    model: &mut ModelInfo,
+    bundled_metadata_present: bool,
+) -> bool {
+    if bundled_metadata_present
+        || provider.eq_ignore_ascii_case("openai")
+        || provider.eq_ignore_ascii_case("codex_oauth")
+        || model.supported_reasoning_levels.is_empty()
+        || !model
+            .supported_reasoning_levels
+            .iter()
+            .all(|option| is_legacy_synthetic_reasoning_description(option.description.as_str()))
+    {
+        return false;
+    }
+
+    model.supported_reasoning_levels.clear();
+    model.default_reasoning_level = None;
+    true
+}
+
+fn strip_non_openai_default_reasoning_without_supported_levels(
+    provider: &str,
+    model: &mut ModelInfo,
+) -> bool {
+    if provider.eq_ignore_ascii_case("openai")
+        || provider.eq_ignore_ascii_case("codex_oauth")
+        || !model.supported_reasoning_levels.is_empty()
+        || model.default_reasoning_level.is_none()
+    {
+        return false;
+    }
+
+    model.default_reasoning_level = None;
+    true
+}
+
 fn repair_sidecar_model_metadata(
     provider: &str,
     model: &mut ModelInfo,
@@ -516,8 +528,8 @@ fn repair_sidecar_model_metadata(
         changed = true;
     }
 
-    if let Some(bundled) = find_bundled_sidecar_model_metadata(model.slug.as_str(), bundled_models)
-    {
+    let bundled = find_bundled_sidecar_model_metadata(model.slug.as_str(), bundled_models);
+    if let Some(bundled) = bundled.as_ref() {
         changed |= merge_reasoning_levels(
             &mut model.supported_reasoning_levels,
             &bundled.supported_reasoning_levels,
@@ -556,7 +568,10 @@ fn repair_sidecar_model_metadata(
         }
     }
 
-    if let Some(levels) = generic_provider_reasoning_levels(provider, model.slug.as_str()) {
+    changed |= strip_legacy_synthetic_reasoning_metadata(provider, model, bundled.is_some());
+    changed |= strip_non_openai_default_reasoning_without_supported_levels(provider, model);
+
+    if let Some(levels) = inferred_openai_reasoning_levels(provider) {
         changed |= merge_reasoning_levels(&mut model.supported_reasoning_levels, &levels);
     }
 
@@ -1131,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn read_profile_model_catalog_sidecar_repairs_gemini_slug_and_reasoning_levels() {
+    fn read_profile_model_catalog_sidecar_clears_empty_gemini_reasoning_default() {
         let codex_home = tempdir().expect("tempdir");
         let profile_path = codex_home.path().join("Profiles/gemini-profile.json");
         let profile = test_profile("gemini");
@@ -1140,7 +1155,7 @@ mod tests {
         let mut model = test_model_info("models/gemini-2.5-pro");
         model.display_name = "models/gemini-2.5-pro".to_string();
         model.supported_reasoning_levels.clear();
-        model.default_reasoning_level = None;
+        model.default_reasoning_level = Some(ReasoningEffort::Medium);
         write_profile_model_catalog_sidecar(profile_path.as_path(), &profile, &[model])
             .expect("write sidecar");
 
@@ -1149,21 +1164,43 @@ mod tests {
             .expect("present sidecar");
         assert_eq!(loaded.0.models[0].slug, "gemini-2.5-pro");
         assert_eq!(loaded.1[0].model, "gemini-2.5-pro");
-        assert_eq!(
-            loaded.0.models[0].default_reasoning_level,
-            Some(ReasoningEffort::Medium)
-        );
-        assert!(
-            loaded.1[0]
-                .supported_reasoning_efforts
-                .iter()
-                .any(|option| option.effort == ReasoningEffort::High)
-        );
+        assert_eq!(loaded.0.models[0].default_reasoning_level, None);
+        assert!(loaded.1[0].supported_reasoning_efforts.is_empty());
         assert!(
             !std::fs::read_to_string(profile_path.with_file_name("gemini-profile.models.json"))
                 .expect("sidecar contents")
                 .contains("models/gemini-2.5-pro")
         );
+    }
+
+    #[test]
+    fn read_profile_model_catalog_sidecar_strips_legacy_mistral_reasoning_levels() {
+        let codex_home = tempdir().expect("tempdir");
+        let profile_path = codex_home.path().join("Profiles/mistral-profile.json");
+        let profile = test_profile("mistral");
+        std::fs::create_dir_all(profile_path.parent().expect("profiles dir")).expect("mkdirs");
+
+        let mut model = test_model_info("devstral-latest");
+        model.supported_reasoning_levels = vec![
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::None,
+                description: "Отключает отдельный бюджет размышлений ради более прямого ответа"
+                    .to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "Глубже разбирает сложные и неоднозначные задачи".to_string(),
+            },
+        ];
+        model.default_reasoning_level = Some(ReasoningEffort::High);
+        write_profile_model_catalog_sidecar(profile_path.as_path(), &profile, &[model])
+            .expect("write sidecar");
+
+        let loaded = read_profile_model_catalog_sidecar(profile_path.as_path(), &profile)
+            .expect("read sidecar")
+            .expect("present sidecar");
+        assert_eq!(loaded.0.models[0].default_reasoning_level, None);
+        assert!(loaded.1[0].supported_reasoning_efforts.is_empty());
     }
 
     #[test]

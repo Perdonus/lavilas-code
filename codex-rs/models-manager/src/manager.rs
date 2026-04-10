@@ -306,6 +306,17 @@ fn fallback_provider_model_info(slug: &str) -> ModelInfo {
     model
 }
 
+fn strip_provider_reasoning_default_without_supported_levels(
+    provider: &ModelProviderInfo,
+    model: &mut ModelInfo,
+) {
+    if provider.uses_openai_responses_api() || !model.supported_reasoning_levels.is_empty() {
+        return;
+    }
+
+    model.default_reasoning_level = None;
+}
+
 fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
     provider.uses_mistral_api()
 }
@@ -349,6 +360,7 @@ fn enrich_provider_catalog_model(
     model.visibility = codex_protocol::openai_models::ModelVisibility::List;
     model.supported_in_api = true;
     model.priority = i32::try_from(index).unwrap_or(i32::MAX);
+    strip_provider_reasoning_default_without_supported_levels(provider, &mut model);
     model
 }
 
@@ -921,6 +933,7 @@ impl ModelsManager {
                 model.display_name = normalized_slug.clone();
             }
             model.slug = normalized_slug;
+            strip_provider_reasoning_default_without_supported_levels(provider, &mut model);
             sanitized.push(model);
         }
 

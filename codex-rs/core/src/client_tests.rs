@@ -338,7 +338,7 @@ fn build_chat_completions_request_includes_reasoning_effort_for_gemini() {
 }
 
 #[test]
-fn build_chat_completions_request_keeps_reasoning_effort_for_gemini_without_metadata() {
+fn build_chat_completions_request_omits_reasoning_effort_for_gemini_without_metadata() {
     let client = test_model_client_with_provider(gemini_provider());
     let prompt = super::Prompt {
         base_instructions: BaseInstructions {
@@ -370,10 +370,7 @@ fn build_chat_completions_request_keeps_reasoning_effort_for_gemini_without_meta
         )
         .expect("chat completions request");
 
-    assert_eq!(
-        request.reasoning_effort,
-        Some(codex_protocol::openai_models::ReasoningEffort::High)
-    );
+    assert_eq!(request.reasoning_effort, None);
 }
 
 #[test]

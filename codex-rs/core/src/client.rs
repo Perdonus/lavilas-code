@@ -747,25 +747,20 @@ impl ModelClient {
             .iter()
             .map(|preset| preset.effort)
             .collect::<Vec<_>>();
+        if supported_efforts.is_empty() {
+            return None;
+        }
         let default_supported = model_info
             .default_reasoning_level
             .filter(|effort| supported_efforts.contains(effort));
-        let effort = if supported_efforts.is_empty() {
-            if provider_uses_mistral_api(provider) {
-                None
-            } else {
-                requested_effort
-            }
-        } else {
-            requested_effort
-                .filter(|effort| supported_efforts.contains(effort))
-                .or(default_supported)
-                .or_else(|| {
-                    supported_efforts
-                        .get(supported_efforts.len().saturating_sub(1) / 2)
-                        .copied()
-                })
-        };
+        let effort = requested_effort
+            .filter(|effort| supported_efforts.contains(effort))
+            .or(default_supported)
+            .or_else(|| {
+                supported_efforts
+                    .get(supported_efforts.len().saturating_sub(1) / 2)
+                    .copied()
+            });
 
         if provider_uses_mistral_api(provider) {
             return match effort {

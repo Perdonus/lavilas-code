@@ -475,7 +475,22 @@ fn fallback_provider_model_info(slug: &str) -> ModelInfo {
     model
 }
 
+fn strip_provider_reasoning_default_without_supported_levels(
+    provider: Option<&ModelProviderInfo>,
+    model: &mut ModelInfo,
+) {
+    let Some(provider) = provider else {
+        return;
+    };
+    if provider.uses_openai_responses_api() || !model.supported_reasoning_levels.is_empty() {
+        return;
+    }
+
+    model.default_reasoning_level = None;
+}
+
 fn enrich_provider_catalog_model(
+    provider: Option<&ModelProviderInfo>,
     requested_slug: &str,
     index: usize,
     bundled_models: &[ModelInfo],
@@ -506,6 +521,7 @@ fn enrich_provider_catalog_model(
     model.visibility = ModelVisibility::List;
     model.supported_in_api = true;
     model.priority = i32::try_from(index).unwrap_or(i32::MAX);
+    strip_provider_reasoning_default_without_supported_levels(provider, &mut model);
     model
 }
 
@@ -546,6 +562,10 @@ fn parse_provider_model_catalog_with_provider(
                     model.display_name = normalized_slug.clone();
                 }
                 model.slug = normalized_slug;
+                strip_provider_reasoning_default_without_supported_levels(
+                    Some(provider),
+                    &mut model,
+                );
                 sanitized.push(model);
             }
             return Ok(sanitized);
@@ -575,7 +595,9 @@ fn parse_provider_model_catalog_with_provider(
     Ok(slugs
         .into_iter()
         .enumerate()
-        .map(|(index, slug)| enrich_provider_catalog_model(slug.as_str(), index, &bundled_models))
+        .map(|(index, slug)| {
+            enrich_provider_catalog_model(provider, slug.as_str(), index, &bundled_models)
+        })
         .collect())
 }
 
@@ -599,11 +621,12 @@ fn fallback_reasoning_options(
     provider: &ModelProviderInfo,
     model_slug: &str,
 ) -> Vec<ReasoningEffortPreset> {
-    if !provider_supports_reasoning_controls(provider) {
+    if !provider.uses_openai_responses_api() {
         return Vec::new();
     }
 
-    if provider.uses_mistral_api() {
+    let normalized_slug = model_slug.to_ascii_lowercase();
+    if !(normalized_slug.contains("gpt-5") || normalized_slug.contains("codex")) {
         return Vec::new();
     }
 
@@ -612,11 +635,7 @@ fn fallback_reasoning_options(
         ReasoningEffortConfig::Medium,
         ReasoningEffortConfig::High,
     ];
-    if provider.uses_openai_responses_api()
-        && (model_slug.contains("gpt-5") || model_slug.contains("codex"))
-    {
-        efforts.push(ReasoningEffortConfig::XHigh);
-    }
+    efforts.push(ReasoningEffortConfig::XHigh);
 
     efforts
         .into_iter()
@@ -715,6 +734,10 @@ fn sanitize_provider_reasoning_presets(
     for model in &mut models {
         if supports_reasoning_controls {
             let fallback_options = fallback_reasoning_options(provider, model.model.as_str());
+            if model.supported_reasoning_efforts.is_empty() && fallback_options.is_empty() {
+                model.default_reasoning_effort = ReasoningEffortConfig::None;
+                continue;
+            }
             if model.supported_reasoning_efforts.is_empty() {
                 model.supported_reasoning_efforts = fallback_options;
             } else {
@@ -1894,6 +1917,55 @@ impl App {
         Ok((catalog_path, fallback_models))
     }
 
+    fn active_profile_sidecar_models(&self) -> Option<Vec<ModelPreset>> {
+        let active_profile = self.config.active_profile.as_deref()?;
+        let profiles_dir = self.config.codex_home.join("Profiles");
+        let entries = std::fs::read_dir(profiles_dir).ok()?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if file_name == "settings.json" || file_name.ends_with(".models.json") {
+                continue;
+            }
+
+            let Some(profile_key) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let Ok(stored_profile) = load_stored_profile(path.as_path()) else {
+                continue;
+            };
+            let configured_profile = stored_profile
+                .config_profile
+                .as_deref()
+                .unwrap_or(profile_key);
+            if configured_profile != active_profile {
+                continue;
+            }
+
+            let provider_spec = account_provider_spec(stored_profile.provider.as_str())?;
+            if provider_spec.builtin_model_provider_id.is_some() {
+                return None;
+            }
+
+            return read_profile_model_catalog_sidecar(path.as_path(), &stored_profile)
+                .ok()
+                .flatten()
+                .map(|(_, mut presets)| {
+                    ModelPreset::mark_default_by_picker_visibility(&mut presets);
+                    presets
+                });
+        }
+
+        None
+    }
+
     async fn reload_active_profile_runtime(
         &mut self,
         app_server: &mut AppServerSession,
@@ -1913,16 +1985,16 @@ impl App {
         };
         self.refresh_in_memory_config_from_disk().await?;
         let disk_models = self
-            .config
-            .model_catalog
-            .as_ref()
-            .map(|catalog| {
-                catalog
-                    .models
-                    .clone()
-                    .into_iter()
-                    .map(ModelPreset::from)
-                    .collect::<Vec<_>>()
+            .active_profile_sidecar_models()
+            .or_else(|| {
+                self.config.model_catalog.as_ref().map(|catalog| {
+                    catalog
+                        .models
+                        .clone()
+                        .into_iter()
+                        .map(ModelPreset::from)
+                        .collect::<Vec<_>>()
+                })
             })
             .filter(|models| !models.is_empty());
         let mut runtime_models = if let Some(models) = disk_models {
@@ -8060,6 +8132,7 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].slug, "gemini-2.5-flash");
         assert_eq!(models[0].display_name, "models/gemini-flash-latest");
+        assert_eq!(models[0].default_reasoning_level, None);
         Ok(())
     }
 
@@ -8261,9 +8334,9 @@ mod tests {
         assert!(provider_supports_reasoning_controls(&provider));
         assert_eq!(
             sanitized[0].default_reasoning_effort,
-            ReasoningEffortConfig::Medium
+            ReasoningEffortConfig::None
         );
-        assert_eq!(sanitized[0].supported_reasoning_efforts.len(), 3);
+        assert!(sanitized[0].supported_reasoning_efforts.is_empty());
     }
 
     #[test]

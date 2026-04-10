@@ -464,6 +464,39 @@ async fn custom_gemini_catalog_normalizes_aliases_and_filters_non_gemini_models(
 }
 
 #[tokio::test]
+async fn custom_gemini_catalog_clears_default_reasoning_without_supported_levels() {
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let provider = codex_model_provider_info::create_oss_provider_with_base_url(
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        WireApi::ChatCompletions,
+    );
+    let mut model = remote_model(
+        "models/gemini-2.5-flash",
+        "Gemini Flash",
+        /*priority*/ 0,
+    );
+    model.supported_reasoning_levels.clear();
+    model.default_reasoning_level = Some(ReasoningEffort::Medium);
+    let manager = ModelsManager::new_with_provider(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        Some(ModelsResponse {
+            models: vec![model],
+        }),
+        CollaborationModesConfig::default(),
+        provider,
+    );
+
+    let presets = manager.list_models(RefreshStrategy::Offline).await;
+
+    assert_eq!(presets.len(), 1);
+    assert_eq!(presets[0].model, "gemini-2.5-flash");
+    assert_eq!(presets[0].default_reasoning_effort, ReasoningEffort::None);
+    assert!(presets[0].supported_reasoning_efforts.is_empty());
+}
+
+#[tokio::test]
 async fn refresh_available_models_sorts_by_priority() {
     let server = MockServer::start().await;
     let remote_models = vec![
