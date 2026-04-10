@@ -640,6 +640,8 @@ async fn refresh_available_models_preserves_remote_mistral_slug() {
         .find(|model| model.model == "mistral-large-latest")
         .expect("remote Mistral slug should be listed");
     assert_eq!(mistral.display_name, "Mistral Large");
+    assert_eq!(mistral.default_reasoning_effort, ReasoningEffort::None);
+    assert!(mistral.supported_reasoning_efforts.is_empty());
 }
 
 #[tokio::test]

@@ -303,13 +303,6 @@ fn fallback_provider_model_info(slug: &str) -> ModelInfo {
     }
     model.visibility = codex_protocol::openai_models::ModelVisibility::List;
     model.supported_in_api = true;
-    if model.default_reasoning_level.is_none()
-        || model.default_reasoning_level
-            == Some(codex_protocol::openai_models::ReasoningEffort::None)
-    {
-        model.default_reasoning_level =
-            Some(codex_protocol::openai_models::ReasoningEffort::Medium);
-    }
     model
 }
 

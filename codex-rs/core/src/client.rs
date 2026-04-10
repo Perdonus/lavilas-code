@@ -184,9 +184,17 @@ fn normalize_request_model_for_provider<'a>(
     Cow::Borrowed(model)
 }
 
-fn normalize_chat_completions_role(role: &str) -> &str {
-    if role.eq_ignore_ascii_case("developer") {
+fn chat_completions_instructions_role(provider: &ModelProviderInfo) -> &'static str {
+    if provider_uses_gemini_api(provider) || provider_uses_mistral_api(provider) {
+        "user"
+    } else {
         "system"
+    }
+}
+
+fn normalize_chat_completions_role(provider: &ModelProviderInfo, role: &str) -> &str {
+    if role.eq_ignore_ascii_case("developer") || role.eq_ignore_ascii_case("system") {
+        chat_completions_instructions_role(provider)
     } else {
         role
     }
@@ -733,7 +741,32 @@ impl ModelClient {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
     ) -> Option<ReasoningEffortConfig> {
-        let effort = effort.or(model_info.default_reasoning_level);
+        let requested_effort = effort.or(model_info.default_reasoning_level);
+        let supported_efforts = model_info
+            .supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>();
+        let default_supported = model_info
+            .default_reasoning_level
+            .filter(|effort| supported_efforts.contains(effort));
+        let effort = if supported_efforts.is_empty() {
+            if provider_uses_mistral_api(provider) {
+                None
+            } else {
+                requested_effort
+            }
+        } else {
+            requested_effort
+                .filter(|effort| supported_efforts.contains(effort))
+                .or(default_supported)
+                .or_else(|| {
+                    supported_efforts
+                        .get(supported_efforts.len().saturating_sub(1) / 2)
+                        .copied()
+                })
+        };
+
         if provider_uses_mistral_api(provider) {
             return match effort {
                 Some(ReasoningEffortConfig::High | ReasoningEffortConfig::XHigh) => {
@@ -2467,9 +2500,10 @@ fn build_chat_completions_messages(
     input: &[ResponseItem],
 ) -> Result<Vec<ChatCompletionsMessage>> {
     let mut messages = Vec::new();
-    let mut leading_system_segments = Vec::new();
+    let instructions_role = chat_completions_instructions_role(provider);
+    let mut leading_instruction_segments = Vec::new();
     if !instructions.trim().is_empty() {
-        leading_system_segments.push(instructions.to_string());
+        leading_instruction_segments.push(instructions.to_string());
     }
 
     let mut tool_names_by_call_id: HashMap<String, String> = HashMap::new();
@@ -2478,9 +2512,9 @@ fn build_chat_completions_messages(
             ResponseItem::Message { role, content, .. } => {
                 let text = content_items_to_chat_text(content);
                 if !text.is_empty() {
-                    let normalized_role = normalize_chat_completions_role(role);
-                    if normalized_role.eq_ignore_ascii_case("system") {
-                        leading_system_segments.push(text);
+                    let normalized_role = normalize_chat_completions_role(provider, role);
+                    if normalized_role.eq_ignore_ascii_case(instructions_role) {
+                        leading_instruction_segments.push(text);
                     } else {
                         messages.push(ChatCompletionsMessage::text(normalized_role, text));
                     }
@@ -2605,10 +2639,13 @@ fn build_chat_completions_messages(
         }
     }
 
-    if !leading_system_segments.is_empty() {
+    if !leading_instruction_segments.is_empty() {
         messages.insert(
             0,
-            ChatCompletionsMessage::text("system", leading_system_segments.join("\n\n")),
+            ChatCompletionsMessage::text(
+                instructions_role,
+                leading_instruction_segments.join("\n\n"),
+            ),
         );
     }
 

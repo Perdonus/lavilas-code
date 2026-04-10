@@ -22,6 +22,7 @@ use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
@@ -337,6 +338,45 @@ fn build_chat_completions_request_includes_reasoning_effort_for_gemini() {
 }
 
 #[test]
+fn build_chat_completions_request_keeps_reasoning_effort_for_gemini_without_metadata() {
+    let client = test_model_client_with_provider(gemini_provider());
+    let prompt = super::Prompt {
+        base_instructions: BaseInstructions {
+            text: "".to_string(),
+        },
+        input: vec![super::ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![super::ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+        tools: vec![],
+        parallel_tool_calls: false,
+        personality: None,
+        output_schema: None,
+    };
+    let mut model_info = test_model_info();
+    model_info.default_reasoning_level = None;
+    model_info.supported_reasoning_levels.clear();
+    let request = client
+        .new_session()
+        .build_chat_completions_request(
+            &prompt,
+            &model_info,
+            Some(codex_protocol::openai_models::ReasoningEffort::High),
+        )
+        .expect("chat completions request");
+
+    assert_eq!(
+        request.reasoning_effort,
+        Some(codex_protocol::openai_models::ReasoningEffort::High)
+    );
+}
+
+#[test]
 fn build_chat_completions_request_maps_reasoning_effort_for_mistral() {
     let client = test_model_client_with_provider(mistral_provider());
     let prompt = super::Prompt {
@@ -349,7 +389,12 @@ fn build_chat_completions_request_maps_reasoning_effort_for_mistral() {
         personality: None,
         output_schema: None,
     };
-    let model_info = test_model_info();
+    let mut model_info = test_model_info();
+    model_info.default_reasoning_level = Some(codex_protocol::openai_models::ReasoningEffort::High);
+    model_info.supported_reasoning_levels = vec![ReasoningEffortPreset {
+        effort: codex_protocol::openai_models::ReasoningEffort::High,
+        description: "high".to_string(),
+    }];
     let request = client
         .new_session()
         .build_chat_completions_request(
@@ -366,7 +411,7 @@ fn build_chat_completions_request_maps_reasoning_effort_for_mistral() {
 }
 
 #[test]
-fn build_chat_completions_request_maps_lower_reasoning_effort_to_none_for_mistral() {
+fn build_chat_completions_request_omits_reasoning_effort_for_mistral_without_metadata() {
     let client = test_model_client_with_provider(mistral_provider());
     let prompt = super::Prompt {
         base_instructions: BaseInstructions {
@@ -384,14 +429,11 @@ fn build_chat_completions_request_maps_lower_reasoning_effort_to_none_for_mistra
         .build_chat_completions_request(
             &prompt,
             &model_info,
-            Some(codex_protocol::openai_models::ReasoningEffort::Low),
+            Some(codex_protocol::openai_models::ReasoningEffort::High),
         )
         .expect("chat completions request");
 
-    assert_eq!(
-        request.reasoning_effort,
-        Some(codex_protocol::openai_models::ReasoningEffort::None)
-    );
+    assert_eq!(request.reasoning_effort, None);
 }
 
 #[test]
@@ -475,6 +517,84 @@ fn build_chat_completions_messages_maps_developer_role_to_system() {
     assert_eq!(
         messages[0].content,
         Some(json!("system prompt\n\ndeveloper prompt"))
+    );
+}
+
+#[test]
+fn build_chat_completions_messages_maps_developer_role_to_user_for_mistral() {
+    let provider = mistral_provider();
+    let messages = build_chat_completions_messages(
+        &provider,
+        "system prompt",
+        &[ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "developer prompt".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+    )
+    .expect("chat completions messages");
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "user");
+    assert_eq!(
+        messages[0].content,
+        Some(json!("system prompt\n\ndeveloper prompt"))
+    );
+}
+
+#[test]
+fn build_chat_completions_messages_uses_user_instructions_for_mistral_tool_history() {
+    let provider = mistral_provider();
+    let messages = build_chat_completions_messages(
+        &provider,
+        "",
+        &[
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "run it".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                    "ok".to_string(),
+                ),
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "keep it terse".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ],
+    )
+    .expect("chat completions messages");
+
+    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[1].role, "user");
+    assert_eq!(messages[2].role, "assistant");
+    assert_eq!(messages[3].role, "tool");
+    assert!(
+        messages.iter().all(|message| message.role != "system"),
+        "Mistral/Gemini-compatible requests should avoid system-role replays: {messages:?}"
     );
 }
 

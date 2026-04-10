@@ -8722,6 +8722,23 @@ impl ChatWidget {
         }
     }
 
+    fn selected_reasoning_effort_for_preset(preset: &ModelPreset) -> Option<ReasoningEffortConfig> {
+        if preset
+            .supported_reasoning_efforts
+            .iter()
+            .any(|option| option.effort == preset.default_reasoning_effort)
+        {
+            return Some(preset.default_reasoning_effort);
+        }
+
+        if let Some(first) = preset.supported_reasoning_efforts.first() {
+            return Some(first.effort);
+        }
+
+        (!matches!(preset.default_reasoning_effort, ReasoningEffortConfig::None))
+            .then_some(preset.default_reasoning_effort)
+    }
+
     fn reasoning_effort_choices_for_preset(preset: &ModelPreset) -> Vec<ReasoningEffortConfig> {
         let choices: Vec<ReasoningEffortConfig> = preset
             .supported_reasoning_efforts
@@ -8729,10 +8746,9 @@ impl ChatWidget {
             .map(|option| option.effort)
             .collect();
         if choices.is_empty() {
-            vec![match preset.default_reasoning_effort {
-                ReasoningEffortConfig::None => ReasoningEffortConfig::Medium,
-                effort => effort,
-            }]
+            Self::selected_reasoning_effort_for_preset(preset)
+                .into_iter()
+                .collect()
         } else {
             choices
         }
@@ -8743,8 +8759,37 @@ impl ChatWidget {
     }
 
     fn current_provider_supports_reasoning_controls(&self) -> bool {
-        let provider = &self.config.model_provider;
-        provider.supports_reasoning_controls() || provider.uses_openai_responses_api()
+        self.model_catalog
+            .try_list_models()
+            .ok()
+            .is_some_and(|models| {
+                models
+                    .iter()
+                    .any(|preset| Self::reasoning_picker_choice_count(preset) > 1)
+            })
+    }
+
+    fn clamp_reasoning_effort_for_model(
+        model_catalog: &ModelCatalog,
+        model: &str,
+        requested: Option<ReasoningEffortConfig>,
+    ) -> Option<ReasoningEffortConfig> {
+        let Some(preset) = model_catalog
+            .try_list_models()
+            .ok()
+            .and_then(|models| models.into_iter().find(|preset| preset.model == model))
+        else {
+            return requested;
+        };
+
+        let supported = Self::reasoning_effort_choices_for_preset(&preset);
+        if supported.is_empty() {
+            return Self::selected_reasoning_effort_for_preset(&preset);
+        }
+
+        requested
+            .filter(|effort| supported.contains(effort))
+            .or_else(|| Self::selected_reasoning_effort_for_preset(&preset))
     }
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
@@ -8793,13 +8838,25 @@ impl ChatWidget {
                     let item_label = stored_preset.name.clone();
                     let model_label = Self::model_picker_label(&preset);
                     let model = preset.model.clone();
-                    let preset_for_action = preset.clone();
+                    let selected_effort = Self::selected_reasoning_effort_for_preset(&preset);
+                    let should_prompt_plan_mode_scope = self
+                        .should_prompt_plan_mode_reasoning_scope(model.as_str(), selected_effort);
                     let search_value = format!("{item_label} {model_label} {model}");
-                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                        tx.send(AppEvent::OpenReasoningPopup {
-                            model: preset_for_action.clone(),
-                        });
-                    })];
+                    let actions: Vec<SelectionAction> =
+                        if Self::reasoning_picker_choice_count(&preset) <= 1 {
+                            Self::model_selection_actions(
+                                model.clone(),
+                                selected_effort,
+                                should_prompt_plan_mode_scope,
+                            )
+                        } else {
+                            let preset_for_action = preset.clone();
+                            vec![Box::new(move |tx| {
+                                tx.send(AppEvent::OpenReasoningPopup {
+                                    model: preset_for_action.clone(),
+                                });
+                            })]
+                        };
                     SelectionItem {
                         name: item_label,
                         selected_description: Some(model_label),
@@ -8962,7 +9019,6 @@ impl ChatWidget {
                 "Find a model or preset".to_string()
             }),
             initial_selected_idx,
-            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
             ..Default::default()
         };
 
@@ -9243,10 +9299,14 @@ impl ChatWidget {
         let params = SelectionViewParams {
             view_id: Some(ALL_MODELS_VIEW_ID),
             footer_hint: Some(
-                if is_ru {
+                if self.current_provider_supports_reasoning_controls() && is_ru {
                     "Enter открывает выбор размышлений для модели, Esc закрывает окно."
-                } else {
+                } else if self.current_provider_supports_reasoning_controls() {
                     "Press Enter to choose a reasoning budget, or Esc to dismiss."
+                } else if is_ru {
+                    "Enter сразу применяет модель, Esc закрывает окно."
+                } else {
+                    "Press Enter to apply the model, or Esc to dismiss."
                 }
                 .into(),
             ),
@@ -9259,7 +9319,6 @@ impl ChatWidget {
                 "Find a model in the catalog".to_string()
             }),
             initial_selected_idx,
-            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenModelPopup))),
             ..Default::default()
         };
 
@@ -9638,15 +9697,34 @@ impl ChatWidget {
                 display: effort,
             });
         }
-        if choices.is_empty() {
+        if choices.is_empty()
+            && let Some(default_effort) = Self::selected_reasoning_effort_for_preset(&preset)
+        {
             choices.push(EffortChoice {
                 stored: Some(default_effort),
                 display: default_effort,
             });
         }
 
+        if choices.is_empty() {
+            let selected_model = preset.model;
+            if self.should_prompt_plan_mode_reasoning_scope(&selected_model, None) {
+                self.app_event_tx
+                    .send(AppEvent::OpenPlanReasoningScopePrompt {
+                        model: selected_model,
+                        effort: None,
+                    });
+            } else {
+                self.apply_model_and_effort(selected_model, None);
+            }
+            return;
+        }
+
         if choices.len() == 1 {
-            let selected_effort = choices.first().and_then(|choice| choice.stored);
+            let selected_effort = choices
+                .first()
+                .and_then(|choice| choice.stored)
+                .or_else(|| Self::selected_reasoning_effort_for_preset(&preset));
             let selected_model = preset.model;
             if self.should_prompt_plan_mode_reasoning_scope(&selected_model, selected_effort) {
                 self.app_event_tx
@@ -11925,13 +12003,20 @@ impl ChatWidget {
             .model
             .clone()
             .unwrap_or_else(|| self.current_collaboration_mode.model().to_string());
-        self.config = config.clone();
+        let next_reasoning_effort = Self::clamp_reasoning_effort_for_model(
+            model_catalog.as_ref(),
+            next_model.as_str(),
+            config.model_reasoning_effort,
+        );
+        let mut next_config = config.clone();
+        next_config.model_reasoning_effort = next_reasoning_effort;
+        self.config = next_config;
         self.model_catalog = model_catalog;
         self.current_collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
             settings: Settings {
                 model: next_model,
-                reasoning_effort: config.model_reasoning_effort,
+                reasoning_effort: next_reasoning_effort,
                 developer_instructions,
             },
         };

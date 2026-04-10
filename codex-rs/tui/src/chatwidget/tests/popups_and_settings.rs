@@ -1801,6 +1801,97 @@ async fn all_models_picker_closes_when_reasoning_popup_is_skipped() {
 }
 
 #[tokio::test]
+async fn reasoning_popup_without_supported_levels_applies_model_without_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let preset = ModelPreset {
+        id: "provider-model-without-reasoning".to_string(),
+        model: "provider-model-without-reasoning".to_string(),
+        display_name: "provider-model-without-reasoning".to_string(),
+        description: String::new(),
+        default_reasoning_effort: ReasoningEffortConfig::None,
+        supported_reasoning_efforts: Vec::new(),
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+
+    chat.open_reasoning_popup(preset.clone());
+
+    assert!(
+        chat.no_modal_or_popup_active(),
+        "expected reasoning popup to be skipped when the model exposes no reasoning controls"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateModel(model) if model == preset.model.as_str())),
+        "expected model to be applied automatically; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(None))),
+        "expected no reasoning effort to be persisted; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn model_popup_escape_dismisses_window() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(
+        chat.no_modal_or_popup_active(),
+        "expected model popup to close on Esc"
+    );
+}
+
+#[tokio::test]
+async fn all_models_popup_escape_dismisses_window() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let preset = ModelPreset {
+        id: "model-for-escape".to_string(),
+        model: "model-for-escape".to_string(),
+        display_name: "model-for-escape".to_string(),
+        description: String::new(),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+
+    chat.open_all_models_popup(vec![preset]);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(
+        chat.no_modal_or_popup_active(),
+        "expected full model catalog to close on Esc"
+    );
+}
+
+#[tokio::test]
 async fn feedback_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

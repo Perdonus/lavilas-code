@@ -472,11 +472,6 @@ fn fallback_provider_model_info(slug: &str) -> ModelInfo {
     }
     model.visibility = ModelVisibility::List;
     model.supported_in_api = true;
-    if model.default_reasoning_level.is_none()
-        || model.default_reasoning_level == Some(ReasoningEffortConfig::None)
-    {
-        model.default_reasoning_level = Some(ReasoningEffortConfig::Medium);
-    }
     model
 }
 
@@ -609,18 +604,7 @@ fn fallback_reasoning_options(
     }
 
     if provider.uses_mistral_api() {
-        return vec![
-            ReasoningEffortPreset {
-                effort: ReasoningEffortConfig::None,
-                description: "Disable the extra reasoning budget for a more direct response"
-                    .to_string(),
-            },
-            ReasoningEffortPreset {
-                effort: ReasoningEffortConfig::High,
-                description: fallback_reasoning_description(ReasoningEffortConfig::High)
-                    .to_string(),
-            },
-        ];
+        return Vec::new();
     }
 
     let mut efforts = vec![
@@ -705,6 +689,23 @@ fn normalize_reasoning_default(preset: &mut ModelPreset) {
     };
 }
 
+fn selected_reasoning_effort_for_preset(preset: &ModelPreset) -> Option<ReasoningEffortConfig> {
+    if preset
+        .supported_reasoning_efforts
+        .iter()
+        .any(|option| option.effort == preset.default_reasoning_effort)
+    {
+        return Some(preset.default_reasoning_effort);
+    }
+
+    if let Some(first) = preset.supported_reasoning_efforts.first() {
+        return Some(first.effort);
+    }
+
+    (!matches!(preset.default_reasoning_effort, ReasoningEffortConfig::None))
+        .then_some(preset.default_reasoning_effort)
+}
+
 fn sanitize_provider_reasoning_presets(
     mut models: Vec<ModelPreset>,
     provider: &ModelProviderInfo,
@@ -728,10 +729,6 @@ fn sanitize_provider_reasoning_presets(
 
         if !model.supported_reasoning_efforts.is_empty() {
             normalize_reasoning_default(model);
-            continue;
-        }
-        if matches!(model.default_reasoning_effort, ReasoningEffortConfig::None) {
-            model.default_reasoning_effort = ReasoningEffortConfig::Medium;
         }
     }
 
@@ -1901,6 +1898,8 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
     ) -> Result<Vec<ModelPreset>> {
+        let previous_provider_id = self.config.model_provider_id.clone();
+        let previous_models = self.model_catalog.try_list_models().unwrap_or_default();
         app_server.reload_user_config().await?;
         let refreshed_models = match app_server.list_models().await {
             Ok(models) => models,
@@ -1913,12 +1912,42 @@ impl App {
             }
         };
         self.refresh_in_memory_config_from_disk().await?;
+        let disk_models = self
+            .config
+            .model_catalog
+            .as_ref()
+            .map(|catalog| {
+                catalog
+                    .models
+                    .clone()
+                    .into_iter()
+                    .map(ModelPreset::from)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|models| !models.is_empty());
+        let mut runtime_models = if let Some(models) = disk_models {
+            models
+        } else if !refreshed_models.is_empty() {
+            refreshed_models.clone()
+        } else if self.config.model_provider_id == previous_provider_id {
+            previous_models
+        } else {
+            Vec::new()
+        };
+        if let Some(requested_model) = self.config.model.as_deref()
+            && let Some(selected_model) =
+                Self::select_provider_model(requested_model, runtime_models.as_slice())
+        {
+            self.config.model = Some(selected_model.model.clone());
+        }
         self.model_catalog =
-            self.model_catalog_from_available_models(refreshed_models.clone(), &self.config);
+            self.model_catalog_from_available_models(runtime_models.clone(), &self.config);
         let model_catalog = self.model_catalog.clone();
         self.chat_widget
             .sync_runtime_profile_config(&self.config, model_catalog);
-        Ok(refreshed_models)
+        self.config.model = Some(self.chat_widget.current_model().to_string());
+        self.config.model_reasoning_effort = self.chat_widget.current_reasoning_effort();
+        Ok(runtime_models)
     }
 
     async fn persist_and_activate_profile(
@@ -2165,7 +2194,7 @@ impl App {
             Self::select_provider_model(selected_model_slug.as_str(), &available_models)
         {
             let selected_model_slug = selected_model.model.clone();
-            let selected_effort = Some(selected_model.default_reasoning_effort);
+            let selected_effort = selected_reasoning_effort_for_preset(selected_model);
             if stored_profile.model != selected_model_slug
                 || self.config.model.as_deref() != Some(selected_model_slug.as_str())
                 || self.config.model_reasoning_effort != selected_effort
@@ -2221,7 +2250,6 @@ impl App {
                 hint,
             );
         }
-        self.chat_widget.open_profiles_manager_popup();
         Ok(())
     }
 
@@ -5898,6 +5926,7 @@ impl App {
                 self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
+                self.config.model = Some(model.clone());
                 self.chat_widget.set_model(&model);
             }
             AppEvent::UpdateCollaborationMode(mask) => {
@@ -7942,10 +7971,7 @@ mod tests {
         assert_eq!(models[0].slug, "mistral-vibe-cli");
         assert_eq!(models[0].display_name, "mistral-vibe-cli");
         assert_eq!(models[0].visibility, ModelVisibility::List);
-        assert_eq!(
-            models[0].default_reasoning_level,
-            Some(ReasoningEffortConfig::Medium)
-        );
+        assert_eq!(models[0].default_reasoning_level, None);
         Ok(())
     }
 
@@ -7999,6 +8025,7 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].slug, "mistral-large-latest");
         assert_eq!(models[0].display_name, "mistral-large-latest");
+        assert_eq!(models[0].default_reasoning_level, None);
         Ok(())
     }
 
@@ -8150,7 +8177,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_completions_provider_presets_restore_reasoning_choices_for_mistral() {
+    fn chat_completions_provider_presets_do_not_invent_reasoning_choices_for_mistral() {
         let provider = ModelProviderInfo {
             name: "Mistral".to_string(),
             base_url: Some("https://api.mistral.ai/v1".to_string()),
@@ -8188,11 +8215,8 @@ mod tests {
             &provider,
         );
 
-        assert_eq!(sanitized[0].supported_reasoning_efforts.len(), 2);
-        assert_eq!(
-            sanitized[0].default_reasoning_effort,
-            ReasoningEffortConfig::None
-        );
+        assert!(sanitized[0].supported_reasoning_efforts.is_empty());
+        assert_eq!(selected_reasoning_effort_for_preset(&sanitized[0]), None);
     }
 
     #[test]
