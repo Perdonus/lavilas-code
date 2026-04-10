@@ -340,9 +340,8 @@ fn generic_provider_reasoning_levels(
         return Some(vec![
             ReasoningEffortPreset {
                 effort: ReasoningEffort::None,
-                description:
-                    "Отключает отдельный бюджет размышлений ради более прямого ответа"
-                        .to_string(),
+                description: "Отключает отдельный бюджет размышлений ради более прямого ответа"
+                    .to_string(),
             },
             ReasoningEffortPreset {
                 effort: ReasoningEffort::High,

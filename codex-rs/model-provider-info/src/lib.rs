@@ -354,8 +354,7 @@ impl ModelProviderInfo {
     }
 
     pub fn uses_mistral_api(&self) -> bool {
-        self.name.eq_ignore_ascii_case("mistral")
-            || self.base_url_host_matches(MISTRAL_API_HOST)
+        self.name.eq_ignore_ascii_case("mistral") || self.base_url_host_matches(MISTRAL_API_HOST)
     }
 
     pub fn uses_gemini_api(&self) -> bool {

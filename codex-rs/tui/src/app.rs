@@ -404,7 +404,9 @@ fn openai_compatible_model_slug(
     if provider.is_some_and(ModelProviderInfo::uses_mistral_api)
         && let Some(capabilities) = capabilities.as_ref()
         && matches!(
-            capabilities.completion_chat.or(capabilities.chat_completion),
+            capabilities
+                .completion_chat
+                .or(capabilities.chat_completion),
             Some(false)
         )
     {
@@ -578,8 +580,8 @@ fn fallback_reasoning_options(
         return vec![
             ReasoningEffortPreset {
                 effort: ReasoningEffortConfig::None,
-                description:
-                    "Disable the extra reasoning budget for a more direct response".to_string(),
+                description: "Disable the extra reasoning budget for a more direct response"
+                    .to_string(),
             },
             ReasoningEffortPreset {
                 effort: ReasoningEffortConfig::High,
@@ -683,8 +685,10 @@ fn sanitize_provider_reasoning_presets(
             if model.supported_reasoning_efforts.is_empty() {
                 model.supported_reasoning_efforts = fallback_options;
             } else {
-                let _ =
-                    merge_reasoning_effort_options(&mut model.supported_reasoning_efforts, fallback_options);
+                let _ = merge_reasoning_effort_options(
+                    &mut model.supported_reasoning_efforts,
+                    fallback_options,
+                );
             }
             normalize_reasoning_default(model);
             continue;
@@ -1751,11 +1755,12 @@ impl App {
 
         if let Some(normalized_requested) = normalize_provider_model_alias_slug(requested_model)
             && let Some(normalized_match) = models.iter().find(|preset| {
-                preset.model.eq_ignore_ascii_case(normalized_requested.as_str())
-                    || normalize_provider_model_alias_slug(preset.model.as_str())
-                        .is_some_and(|candidate| {
-                            candidate.eq_ignore_ascii_case(normalized_requested.as_str())
-                        })
+                preset
+                    .model
+                    .eq_ignore_ascii_case(normalized_requested.as_str())
+                    || normalize_provider_model_alias_slug(preset.model.as_str()).is_some_and(
+                        |candidate| candidate.eq_ignore_ascii_case(normalized_requested.as_str()),
+                    )
             })
         {
             return Some(normalized_match);
@@ -1807,11 +1812,9 @@ impl App {
             .execute(request)
             .await
             .wrap_err("custom provider model list request failed")?;
-        let mut models = parse_provider_model_catalog_with_provider(
-            response.body.as_ref(),
-            Some(&provider),
-        )
-            .wrap_err("failed to parse custom provider model list response")?;
+        let mut models =
+            parse_provider_model_catalog_with_provider(response.body.as_ref(), Some(&provider))
+                .wrap_err("failed to parse custom provider model list response")?;
         for model in &mut models {
             let normalized_slug = normalize_profile_model(stored.provider.as_str(), &model.slug);
             if normalized_slug != model.slug {
@@ -8258,8 +8261,8 @@ mod tests {
                     },
                     ReasoningEffortPreset {
                         effort: ReasoningEffortConfig::Medium,
-                        description:
-                            "Balances speed and reasoning depth for everyday tasks".to_string(),
+                        description: "Balances speed and reasoning depth for everyday tasks"
+                            .to_string(),
                     },
                     ReasoningEffortPreset {
                         effort: ReasoningEffortConfig::High,

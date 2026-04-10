@@ -10,8 +10,8 @@ use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
 use super::build_chat_completions_messages;
 use super::chat_completions_response_to_events;
-use super::encode_google_thought_signature;
 use super::effective_wire_api;
+use super::encode_google_thought_signature;
 use super::normalize_request_model_for_provider;
 use codex_api::api_bridge::CoreAuthProvider;
 use codex_app_server_protocol::AuthMode;
@@ -603,10 +603,7 @@ fn chat_completions_response_preserves_gemini_thought_signature_on_tool_calls() 
         })
         .expect("function call id");
 
-    assert_eq!(
-        function_call,
-        encode_google_thought_signature("sig-123")
-    );
+    assert_eq!(function_call, encode_google_thought_signature("sig-123"));
 }
 
 #[test]

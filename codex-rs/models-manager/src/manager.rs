@@ -259,14 +259,18 @@ fn openai_compatible_model_slug(
     }?;
 
     let normalized_slug = normalize_provider_catalog_slug(provider, slug.as_str());
-    if normalized_slug.is_empty() || !provider_catalog_slug_allowed(provider, normalized_slug.as_str()) {
+    if normalized_slug.is_empty()
+        || !provider_catalog_slug_allowed(provider, normalized_slug.as_str())
+    {
         return None;
     }
 
     if provider_uses_mistral_api(provider)
         && let Some(capabilities) = capabilities.as_ref()
         && matches!(
-            capabilities.completion_chat.or(capabilities.chat_completion),
+            capabilities
+                .completion_chat
+                .or(capabilities.chat_completion),
             Some(false)
         )
     {
@@ -308,7 +312,8 @@ fn collect_openai_compatible_model_slugs(
                 openai_compatible_model_slug(provider, value)
             }
         };
-        let Some(slug) = slug.map(|value| normalize_provider_catalog_slug(provider, value.as_str()))
+        let Some(slug) =
+            slug.map(|value| normalize_provider_catalog_slug(provider, value.as_str()))
         else {
             continue;
         };

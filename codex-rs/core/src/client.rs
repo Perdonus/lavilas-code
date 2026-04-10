@@ -537,7 +537,10 @@ impl ModelClient {
             return Ok(Vec::new());
         }
         let runtime_config = self.runtime_config();
-        if matches!(effective_wire_api(&runtime_config.provider), WireApi::ChatCompletions) {
+        if matches!(
+            effective_wire_api(&runtime_config.provider),
+            WireApi::ChatCompletions
+        ) {
             warn!(
                 "remote compaction is unavailable for chat-completions providers; preserving existing history"
             );
@@ -617,7 +620,10 @@ impl ModelClient {
             return Ok(Vec::new());
         }
         let runtime_config = self.runtime_config();
-        if matches!(effective_wire_api(&runtime_config.provider), WireApi::ChatCompletions) {
+        if matches!(
+            effective_wire_api(&runtime_config.provider),
+            WireApi::ChatCompletions
+        ) {
             warn!(
                 "memory summarize endpoint is unavailable for chat-completions providers; using a local fallback summary"
             );
@@ -643,7 +649,8 @@ impl ModelClient {
             ApiMemoriesClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
 
-        let request_model = normalize_request_model_for_provider(&runtime_config.provider, &model_info.slug);
+        let request_model =
+            normalize_request_model_for_provider(&runtime_config.provider, &model_info.slug);
         let payload = ApiMemorySummarizeInput {
             model: request_model.into_owned(),
             raw_memories,

@@ -159,10 +159,9 @@ fn mistral_provider_supports_reasoning_controls() {
 
 #[test]
 fn gemini_host_detection_uses_parsed_host() {
-    let provider =
-        ModelProviderInfo::create_openai_provider(Some(
-            "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
-        ));
+    let provider = ModelProviderInfo::create_openai_provider(Some(
+        "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
+    ));
 
     assert!(provider.uses_gemini_api());
 }

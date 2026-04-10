@@ -118,10 +118,10 @@ use codex_features::Feature;
 use codex_git_utils::CommitLogEntry;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::get_git_repo_root;
-use codex_models_manager::model_info::canonicalize_provider_model_slug;
-use codex_models_manager::model_info::normalize_provider_model_alias_slug;
 use codex_git_utils::local_git_branches;
 use codex_git_utils::recent_commits;
+use codex_models_manager::model_info::canonicalize_provider_model_slug;
+use codex_models_manager::model_info::normalize_provider_model_alias_slug;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -10122,9 +10122,9 @@ impl ChatWidget {
                 saved_tail
                     .strip_suffix(suffix)
                     .is_some_and(|base| !base.is_empty() && base.eq_ignore_ascii_case(model_tail))
-                    || model_tail
-                        .strip_suffix(suffix)
-                        .is_some_and(|base| !base.is_empty() && base.eq_ignore_ascii_case(saved_tail))
+                    || model_tail.strip_suffix(suffix).is_some_and(|base| {
+                        !base.is_empty() && base.eq_ignore_ascii_case(saved_tail)
+                    })
             })
     }
 

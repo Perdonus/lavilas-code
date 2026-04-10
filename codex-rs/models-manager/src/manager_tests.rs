@@ -629,11 +629,7 @@ async fn refresh_available_models_filters_non_gemini_entries_for_gemini_provider
 
     let codex_home = tempdir().expect("temp dir");
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("unused"));
-    let provider = provider_for_name(
-        server.uri(),
-        "Gemini",
-        WireApi::ChatCompletions,
-    );
+    let provider = provider_for_name(server.uri(), "Gemini", WireApi::ChatCompletions);
     let manager = ModelsManager::with_provider_for_tests(
         codex_home.path().to_path_buf(),
         auth_manager,
@@ -647,11 +643,15 @@ async fn refresh_available_models_filters_non_gemini_entries_for_gemini_provider
 
     let available = manager.list_models(RefreshStrategy::Offline).await;
     assert!(
-        available.iter().all(|model| !model.model.contains("gemma-")),
+        available
+            .iter()
+            .all(|model| !model.model.contains("gemma-")),
         "Gemma entries should be filtered from Gemini provider catalogs"
     );
     assert!(
-        available.iter().any(|model| model.model == "gemini-2.5-flash"),
+        available
+            .iter()
+            .any(|model| model.model == "gemini-2.5-flash"),
         "Gemini catalog should retain Gemini models"
     );
 }
