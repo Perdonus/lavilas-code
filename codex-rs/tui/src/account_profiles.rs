@@ -372,8 +372,11 @@ fn repair_sidecar_model_metadata(
         changed = true;
     }
 
-    if let Some(bundled) = find_bundled_sidecar_model_metadata(model.slug.as_str(), bundled_models) {
-        if model.supported_reasoning_levels.is_empty() && !bundled.supported_reasoning_levels.is_empty() {
+    if let Some(bundled) = find_bundled_sidecar_model_metadata(model.slug.as_str(), bundled_models)
+    {
+        if model.supported_reasoning_levels.is_empty()
+            && !bundled.supported_reasoning_levels.is_empty()
+        {
             model.supported_reasoning_levels = bundled.supported_reasoning_levels.clone();
             changed = true;
         }
@@ -943,10 +946,12 @@ mod tests {
             .expect("read sidecar")
             .expect("present sidecar");
         assert!(loaded.0.models[0].supports_reasoning_summaries);
-        assert!(loaded.1[0]
-            .supported_reasoning_efforts
-            .iter()
-            .any(|option| option.effort == ReasoningEffort::XHigh));
+        assert!(
+            loaded.1[0]
+                .supported_reasoning_efforts
+                .iter()
+                .any(|option| option.effort == ReasoningEffort::XHigh)
+        );
     }
 
     #[test]
@@ -968,11 +973,16 @@ mod tests {
             .expect("present sidecar");
         assert_eq!(loaded.0.models[0].slug, "gemini-2.5-pro");
         assert_eq!(loaded.1[0].model, "gemini-2.5-pro");
-        assert_eq!(loaded.0.models[0].default_reasoning_level, Some(ReasoningEffort::Medium));
-        assert!(loaded.1[0]
-            .supported_reasoning_efforts
-            .iter()
-            .any(|option| option.effort == ReasoningEffort::High));
+        assert_eq!(
+            loaded.0.models[0].default_reasoning_level,
+            Some(ReasoningEffort::Medium)
+        );
+        assert!(
+            loaded.1[0]
+                .supported_reasoning_efforts
+                .iter()
+                .any(|option| option.effort == ReasoningEffort::High)
+        );
         assert!(
             !std::fs::read_to_string(profile_path.with_file_name("gemini-profile.models.json"))
                 .expect("sidecar contents")
