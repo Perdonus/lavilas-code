@@ -65,9 +65,30 @@ diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
  pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
  pip.parse(
 @@ -22,171 +72,3 @@
- )
- use_repo(pip, "v8_python_deps")
- 
+)
+use_repo(pip, "v8_python_deps")
+
+diff --git a/orig/v8-14.6.202.11/bazel/BUILD.simdutf b/mod/v8-14.6.202.11/bazel/BUILD.simdutf
+new file mode 100644
+--- /dev/null
++++ b/mod/v8-14.6.202.11/bazel/BUILD.simdutf
+@@ -0,0 +1,14 @@
++load("@rules_cc//cc:defs.bzl", "cc_library")
++
++cc_library(
++    name = "simdutf",
++    srcs = ["simdutf.cpp"],
++    hdrs = glob([
++        "include/**/*.h",
++        "*.h",
++    ]),
++    includes = [
++        ".",
++        "include",
++    ],
++    visibility = ["//visibility:public"],
++)
+
 -# Define the local LLVM toolchain repository
 -llvm_toolchain_repository = use_repo_rule("//bazel/toolchain:llvm_repository.bzl", "llvm_toolchain_repository")
 -
