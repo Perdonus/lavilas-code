@@ -26,17 +26,22 @@ const GEMINI_CANONICAL_FLASH_MODEL: &str = "gemini-2.5-flash";
 const GEMINI_CANONICAL_PRO_MODEL: &str = "gemini-2.5-pro";
 const MISTRAL_LEGACY_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
 const MISTRAL_CANONICAL_MODEL: &str = "mistral-vibe-cli";
-const COMPATIBILITY_PROVIDER_HINTS: [&str; 11] = [
+const COMPATIBILITY_PROVIDER_HINTS: [&str; 16] = [
     "anthropic",
     "claude",
+    "codestral",
     "deepseek",
+    "devstral",
+    "gemma",
     "gemini",
     "grok",
     "kimi",
     "llama",
+    "magistral",
     "mistral",
     "nova",
     "openrouter",
+    "pixtral",
     "qwen",
 ];
 
@@ -217,9 +222,29 @@ fn slug_has_tool_variant(slug: &str) -> bool {
 }
 
 fn slug_supports_tool_use(slug: &str) -> bool {
-    slug_has_tool_variant(slug)
+    if slug_has_tool_variant(slug)
         || mistral_vibe_cli_terminal_segment(slug)
         || canonicalize_mistral_variant_slug(slug).is_some()
+    {
+        return true;
+    }
+
+    compatibility_base_slug(slug).is_some_and(|base_slug| {
+        let base_slug = base_slug.to_ascii_lowercase();
+        [
+            "claude",
+            "codestral",
+            "codex",
+            "devstral",
+            "gemini",
+            "gpt",
+            "magistral",
+            "mistral",
+            "pixtral",
+        ]
+        .iter()
+        .any(|needle| base_slug.contains(needle))
+    })
 }
 
 fn canonicalize_mistral_variant_slug(slug: &str) -> Option<String> {

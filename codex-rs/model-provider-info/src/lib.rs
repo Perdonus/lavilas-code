@@ -13,6 +13,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::EnvVarError;
 use codex_protocol::error::Result as CodexResult;
 use http::HeaderMap;
+use http::Uri;
 use http::header::HeaderName;
 use http::header::HeaderValue;
 use schemars::JsonSchema;
@@ -158,6 +159,20 @@ pub struct ModelProviderInfo {
 }
 
 impl ModelProviderInfo {
+    fn base_url_host_matches(&self, expected_host: &str) -> bool {
+        self.base_url.as_deref().is_some_and(|base_url| {
+            Uri::try_from(base_url)
+                .ok()
+                .and_then(|uri| uri.host().map(str::to_ascii_lowercase))
+                .is_some_and(|host| {
+                    host == expected_host
+                        || host
+                            .strip_prefix("www.")
+                            .is_some_and(|host| host == expected_host)
+                })
+        })
+    }
+
     pub fn validate(&self) -> std::result::Result<(), String> {
         let Some(auth) = self.auth.as_ref() else {
             return Ok(());
@@ -340,18 +355,12 @@ impl ModelProviderInfo {
 
     pub fn uses_mistral_api(&self) -> bool {
         self.name.eq_ignore_ascii_case("mistral")
-            || self
-                .base_url
-                .as_deref()
-                .is_some_and(|base_url| base_url.contains(MISTRAL_API_HOST))
+            || self.base_url_host_matches(MISTRAL_API_HOST)
     }
 
     pub fn uses_gemini_api(&self) -> bool {
         self.name.eq_ignore_ascii_case(GEMINI_PROVIDER_NAME)
-            || self
-                .base_url
-                .as_deref()
-                .is_some_and(|base_url| base_url.contains(GEMINI_API_HOST))
+            || self.base_url_host_matches(GEMINI_API_HOST)
     }
 
     pub fn uses_openai_responses_api(&self) -> bool {
@@ -368,11 +377,11 @@ impl ModelProviderInfo {
     }
 
     pub fn supports_reasoning_controls(&self) -> bool {
-        self.uses_gemini_api()
+        self.uses_gemini_api() || self.uses_mistral_api()
     }
 
     pub fn supports_chat_completions_reasoning_effort(&self) -> bool {
-        self.uses_gemini_api()
+        self.uses_gemini_api() || self.uses_mistral_api()
     }
 
     pub fn effective_wire_api(&self) -> WireApi {

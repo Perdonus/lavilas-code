@@ -145,7 +145,12 @@ const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
-const MISTRAL_DEFAULT_MODEL: &str = "mistral-vibe-cli-latest";
+const MISTRAL_LEGACY_LATEST_MODEL: &str = "mistral-vibe-cli-latest";
+const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
+const MISTRAL_LEGACY_FAST_MODEL: &str = "mistral-vibe-cli-fast";
+const MISTRAL_DEFAULT_MODEL: &str = "devstral-latest";
+const MISTRAL_FAST_MODEL: &str = "devstral-small-latest";
+const GOOGLE_THOUGHT_SIGNATURE_PREFIX: &str = "google-thought-signature:";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -160,6 +165,29 @@ fn provider_uses_gemini_api(provider: &ModelProviderInfo) -> bool {
 
 fn effective_wire_api(provider: &ModelProviderInfo) -> WireApi {
     provider.effective_wire_api()
+}
+
+fn normalize_mistral_model_alias(model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (prefix, tail) = trimmed
+        .rsplit_once('/')
+        .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
+    let normalized_tail = match tail.to_ascii_lowercase().as_str() {
+        MISTRAL_LEGACY_BASE_MODEL | MISTRAL_LEGACY_LATEST_MODEL | MISTRAL_LEGACY_TOOL_MODEL => {
+            Some(MISTRAL_DEFAULT_MODEL)
+        }
+        MISTRAL_LEGACY_FAST_MODEL => Some(MISTRAL_FAST_MODEL),
+        _ => None,
+    }?;
+
+    Some(match prefix {
+        Some(prefix) => format!("{prefix}/{normalized_tail}"),
+        None => normalized_tail.to_string(),
+    })
 }
 
 fn normalize_request_model_for_provider<'a>(
@@ -182,9 +210,10 @@ fn normalize_request_model_for_provider<'a>(
         }
     }
 
-    if provider_uses_mistral_api(provider) && model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
+    if provider_uses_mistral_api(provider)
+        && let Some(normalized) = normalize_mistral_model_alias(model)
     {
-        return Cow::Borrowed(MISTRAL_DEFAULT_MODEL);
+        return Cow::Owned(normalized);
     }
 
     Cow::Borrowed(model)
@@ -196,6 +225,14 @@ fn normalize_chat_completions_role(role: &str) -> &str {
     } else {
         role
     }
+}
+
+fn encode_google_thought_signature(thought_signature: &str) -> String {
+    format!("{GOOGLE_THOUGHT_SIGNATURE_PREFIX}{thought_signature}")
+}
+
+fn decode_google_thought_signature(id: Option<&String>) -> Option<&str> {
+    id.and_then(|value| value.strip_prefix(GOOGLE_THOUGHT_SIGNATURE_PREFIX))
 }
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
@@ -499,6 +536,13 @@ impl ModelClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
+        let runtime_config = self.runtime_config();
+        if matches!(effective_wire_api(&runtime_config.provider), WireApi::ChatCompletions) {
+            warn!(
+                "remote compaction is unavailable for chat-completions providers; preserving existing history"
+            );
+            return Ok(prompt.input.clone());
+        }
         let client_setup = self.current_client_setup().await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(
@@ -509,7 +553,7 @@ impl ModelClient {
                 PendingUnauthorizedRetry::default(),
             ),
             RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
-            self.runtime_config().auth_env_telemetry,
+            runtime_config.auth_env_telemetry,
         );
         let client =
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
@@ -518,7 +562,6 @@ impl ModelClient {
         let instructions = prompt.base_instructions.text.clone();
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
-        let runtime_config = self.runtime_config();
         let reasoning =
             Self::build_reasoning(&runtime_config.provider, model_info, effort, summary);
         let verbosity = if model_info.support_verbosity {
@@ -573,6 +616,16 @@ impl ModelClient {
         if raw_memories.is_empty() {
             return Ok(Vec::new());
         }
+        let runtime_config = self.runtime_config();
+        if matches!(effective_wire_api(&runtime_config.provider), WireApi::ChatCompletions) {
+            warn!(
+                "memory summarize endpoint is unavailable for chat-completions providers; using a local fallback summary"
+            );
+            return Ok(raw_memories
+                .into_iter()
+                .map(fallback_memory_summarize_output)
+                .collect());
+        }
 
         let client_setup = self.current_client_setup().await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
@@ -584,14 +637,13 @@ impl ModelClient {
                 PendingUnauthorizedRetry::default(),
             ),
             RequestRouteTelemetry::for_endpoint(MEMORIES_SUMMARIZE_ENDPOINT),
-            self.runtime_config().auth_env_telemetry,
+            runtime_config.auth_env_telemetry,
         );
         let client =
             ApiMemoriesClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
 
-        let request_model =
-            normalize_request_model_for_provider(&self.runtime_config().provider, &model_info.slug);
+        let request_model = normalize_request_model_for_provider(&runtime_config.provider, &model_info.slug);
         let payload = ApiMemorySummarizeInput {
             model: request_model.into_owned(),
             raw_memories,
@@ -709,8 +761,24 @@ impl ModelClient {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
     ) -> Option<ReasoningEffortConfig> {
+        let effort = effort.or(model_info.default_reasoning_level);
+        if provider_uses_mistral_api(provider) {
+            return match effort {
+                Some(ReasoningEffortConfig::High | ReasoningEffortConfig::XHigh) => {
+                    Some(ReasoningEffortConfig::High)
+                }
+                Some(
+                    ReasoningEffortConfig::None
+                    | ReasoningEffortConfig::Minimal
+                    | ReasoningEffortConfig::Low
+                    | ReasoningEffortConfig::Medium,
+                ) => Some(ReasoningEffortConfig::None),
+                None => None,
+            };
+        }
+
         if provider.supports_chat_completions_reasoning_effort() {
-            effort.or(model_info.default_reasoning_level)
+            effort
         } else {
             None
         }
@@ -977,7 +1045,11 @@ impl ModelClientSession {
     ) -> Result<ChatCompletionsRequest> {
         let runtime_config = self.client.runtime_config();
         let input = prompt.get_formatted_input();
-        let messages = build_chat_completions_messages(&prompt.base_instructions.text, &input)?;
+        let messages = build_chat_completions_messages(
+            &runtime_config.provider,
+            &prompt.base_instructions.text,
+            &input,
+        )?;
         let tools = create_tools_json_for_chat_completions(&prompt.tools)?;
         let has_tools = !tools.is_empty();
         let request_model =
@@ -2219,7 +2291,12 @@ impl ChatCompletionsMessage {
         }
     }
 
-    fn assistant_tool_call(name: String, call_id: String, arguments: String) -> Self {
+    fn assistant_tool_call(
+        name: String,
+        call_id: String,
+        arguments: String,
+        extra_content: Option<ChatCompletionToolCallExtraContent>,
+    ) -> Self {
         Self {
             role: "assistant".to_string(),
             content: Some(JsonValue::String(String::new())),
@@ -2229,6 +2306,7 @@ impl ChatCompletionsMessage {
                 id: Some(call_id),
                 kind: "function".to_string(),
                 function: ChatCompletionCalledFunction { name, arguments },
+                extra_content,
             }]),
         }
     }
@@ -2251,12 +2329,26 @@ struct ChatCompletionToolCall {
     #[serde(rename = "type")]
     kind: String,
     function: ChatCompletionCalledFunction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extra_content: Option<ChatCompletionToolCallExtraContent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChatCompletionCalledFunction {
     name: String,
     arguments: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ChatCompletionToolCallExtraContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    google: Option<ChatCompletionGoogleExtraContent>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ChatCompletionGoogleExtraContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thought_signature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2398,6 +2490,7 @@ fn chat_completions_tool_value(
 }
 
 fn build_chat_completions_messages(
+    provider: &ModelProviderInfo,
     instructions: &str,
     input: &[ResponseItem],
 ) -> Result<Vec<ChatCompletionsMessage>> {
@@ -2422,6 +2515,7 @@ fn build_chat_completions_messages(
                 }
             }
             ResponseItem::FunctionCall {
+                id,
                 name,
                 namespace,
                 arguments,
@@ -2430,10 +2524,22 @@ fn build_chat_completions_messages(
             } => {
                 let tool_name = chat_completion_tool_name(name, namespace.as_deref());
                 tool_names_by_call_id.insert(call_id.clone(), tool_name.clone());
+                let extra_content = if provider_uses_gemini_api(provider) {
+                    decode_google_thought_signature(id.as_ref()).map(|thought_signature| {
+                        ChatCompletionToolCallExtraContent {
+                            google: Some(ChatCompletionGoogleExtraContent {
+                                thought_signature: Some(thought_signature.to_string()),
+                            }),
+                        }
+                    })
+                } else {
+                    None
+                };
                 messages.push(ChatCompletionsMessage::assistant_tool_call(
                     tool_name,
                     call_id.clone(),
                     arguments.clone(),
+                    extra_content,
                 ));
             }
             ResponseItem::CustomToolCall {
@@ -2447,6 +2553,7 @@ fn build_chat_completions_messages(
                     name.clone(),
                     call_id.clone(),
                     serde_json::to_string(&json!({ "input": input }))?,
+                    None,
                 ));
             }
             ResponseItem::ToolSearchCall {
@@ -2461,6 +2568,7 @@ fn build_chat_completions_messages(
                     tool_name,
                     call_id.clone(),
                     serde_json::to_string(arguments)?,
+                    None,
                 ));
             }
             ResponseItem::LocalShellCall {
@@ -2477,7 +2585,7 @@ fn build_chat_completions_messages(
                     serde_json::to_string(&shell_tool_params_from_local_shell_action(action))?;
                 tool_names_by_call_id.insert(call_id.clone(), tool_name.clone());
                 messages.push(ChatCompletionsMessage::assistant_tool_call(
-                    tool_name, call_id, arguments,
+                    tool_name, call_id, arguments, None,
                 ));
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
@@ -2655,7 +2763,12 @@ fn chat_completions_response_to_events(
 
     for (index, tool_call) in tool_calls.unwrap_or_default().into_iter().enumerate() {
         let item = ResponseItem::FunctionCall {
-            id: None,
+            id: tool_call
+                .extra_content
+                .as_ref()
+                .and_then(|extra| extra.google.as_ref())
+                .and_then(|google| google.thought_signature.as_deref())
+                .map(encode_google_thought_signature),
             name: tool_call.function.name,
             namespace: None,
             arguments: tool_call.function.arguments,
@@ -2715,6 +2828,42 @@ fn chat_message_part_to_text(value: &JsonValue) -> Option<String> {
                         .map(strip_hidden_reasoning_tags)
                 })
         }
+        _ => None,
+    }
+}
+
+fn fallback_memory_summarize_output(raw_memory: ApiRawMemory) -> ApiMemorySummarizeOutput {
+    let raw_memory_text = serde_json::to_string_pretty(&raw_memory.items)
+        .or_else(|_| serde_json::to_string(&raw_memory.items))
+        .unwrap_or_default();
+    let memory_summary = raw_memory
+        .items
+        .iter()
+        .find_map(extract_memory_summary_text)
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| format!("Trace from {}", raw_memory.metadata.source_path));
+
+    ApiMemorySummarizeOutput {
+        raw_memory: raw_memory_text,
+        memory_summary,
+    }
+}
+
+fn extract_memory_summary_text(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::String(text) => Some(strip_hidden_reasoning_tags(text)),
+        JsonValue::Array(values) => values.iter().find_map(extract_memory_summary_text),
+        JsonValue::Object(object) => object
+            .get("text")
+            .and_then(JsonValue::as_str)
+            .map(strip_hidden_reasoning_tags)
+            .or_else(|| {
+                object
+                    .get("summary")
+                    .and_then(JsonValue::as_str)
+                    .map(strip_hidden_reasoning_tags)
+            })
+            .or_else(|| object.get("content").and_then(extract_memory_summary_text)),
         _ => None,
     }
 }

@@ -10,6 +10,7 @@ use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
 use super::build_chat_completions_messages;
 use super::chat_completions_response_to_events;
+use super::encode_google_thought_signature;
 use super::effective_wire_api;
 use super::normalize_request_model_for_provider;
 use codex_api::api_bridge::CoreAuthProvider;
@@ -255,21 +256,25 @@ fn effective_wire_api_prioritizes_mistral_base_url_over_legacy_openai_flags() {
 }
 
 #[test]
-fn normalize_request_model_maps_only_legacy_mistral_base_alias() {
+fn normalize_request_model_maps_all_legacy_mistral_aliases() {
     let provider =
         create_oss_provider_with_base_url("https://api.mistral.ai/v1", WireApi::Responses);
 
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli").as_ref(),
-        "mistral-vibe-cli-latest"
+        "devstral-latest"
     );
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-with-tools").as_ref(),
-        "mistral-vibe-cli-with-tools"
+        "devstral-latest"
     );
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-fast").as_ref(),
-        "mistral-vibe-cli-fast"
+        "devstral-small-latest"
+    );
+    assert_eq!(
+        normalize_request_model_for_provider(&provider, "mistral-vibe-cli-latest").as_ref(),
+        "devstral-latest"
     );
 }
 
@@ -332,7 +337,7 @@ fn build_chat_completions_request_includes_reasoning_effort_for_gemini() {
 }
 
 #[test]
-fn build_chat_completions_request_omits_reasoning_effort_for_mistral() {
+fn build_chat_completions_request_maps_reasoning_effort_for_mistral() {
     let client = test_model_client_with_provider(mistral_provider());
     let prompt = super::Prompt {
         base_instructions: BaseInstructions {
@@ -347,10 +352,46 @@ fn build_chat_completions_request_omits_reasoning_effort_for_mistral() {
     let model_info = test_model_info();
     let request = client
         .new_session()
-        .build_chat_completions_request(&prompt, &model_info, None)
+        .build_chat_completions_request(
+            &prompt,
+            &model_info,
+            Some(codex_protocol::openai_models::ReasoningEffort::XHigh),
+        )
         .expect("chat completions request");
 
-    assert_eq!(request.reasoning_effort, None);
+    assert_eq!(
+        request.reasoning_effort,
+        Some(codex_protocol::openai_models::ReasoningEffort::High)
+    );
+}
+
+#[test]
+fn build_chat_completions_request_maps_lower_reasoning_effort_to_none_for_mistral() {
+    let client = test_model_client_with_provider(mistral_provider());
+    let prompt = super::Prompt {
+        base_instructions: BaseInstructions {
+            text: "".to_string(),
+        },
+        input: vec![],
+        tools: vec![],
+        parallel_tool_calls: false,
+        personality: None,
+        output_schema: None,
+    };
+    let model_info = test_model_info();
+    let request = client
+        .new_session()
+        .build_chat_completions_request(
+            &prompt,
+            &model_info,
+            Some(codex_protocol::openai_models::ReasoningEffort::Low),
+        )
+        .expect("chat completions request");
+
+    assert_eq!(
+        request.reasoning_effort,
+        Some(codex_protocol::openai_models::ReasoningEffort::None)
+    );
 }
 
 #[test]
@@ -386,7 +427,10 @@ fn chat_completions_response_strips_hidden_reasoning_tags() {
 
 #[test]
 fn build_chat_completions_messages_strips_hidden_reasoning_tags_from_replay() {
+    let provider =
+        create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::ChatCompletions);
     let messages = build_chat_completions_messages(
+        &provider,
         "system prompt",
         &[super::ResponseItem::Message {
             id: None,
@@ -409,7 +453,10 @@ fn build_chat_completions_messages_strips_hidden_reasoning_tags_from_replay() {
 
 #[test]
 fn build_chat_completions_messages_maps_developer_role_to_system() {
+    let provider =
+        create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::ChatCompletions);
     let messages = build_chat_completions_messages(
+        &provider,
         "system prompt",
         &[ResponseItem::Message {
             id: None,
@@ -433,7 +480,10 @@ fn build_chat_completions_messages_maps_developer_role_to_system() {
 
 #[test]
 fn build_chat_completions_messages_never_emits_system_after_tool() {
+    let provider =
+        create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::ChatCompletions);
     let messages = build_chat_completions_messages(
+        &provider,
         "",
         &[
             ResponseItem::Message {
@@ -481,6 +531,81 @@ fn build_chat_completions_messages_never_emits_system_after_tool() {
             .skip(1)
             .all(|message| message.role != "system"),
         "system message must stay ahead of tool messages: {messages:?}"
+    );
+}
+
+#[test]
+fn build_chat_completions_messages_preserves_gemini_thought_signature_for_tool_calls() {
+    let provider = gemini_provider();
+    let messages = build_chat_completions_messages(
+        &provider,
+        "",
+        &[ResponseItem::FunctionCall {
+            id: Some(encode_google_thought_signature("sig-123")),
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        }],
+    )
+    .expect("chat completions messages");
+
+    let tool_call = messages[0]
+        .tool_calls
+        .as_ref()
+        .and_then(|calls| calls.first())
+        .expect("tool call");
+    assert_eq!(
+        tool_call
+            .extra_content
+            .as_ref()
+            .and_then(|extra| extra.google.as_ref())
+            .and_then(|google| google.thought_signature.as_deref()),
+        Some("sig-123")
+    );
+}
+
+#[test]
+fn chat_completions_response_preserves_gemini_thought_signature_on_tool_calls() {
+    let response = ChatCompletionsResponse {
+        id: Some("resp-1".to_string()),
+        model: Some("gemini-2.5-flash".to_string()),
+        choices: vec![super::ChatCompletionChoice {
+            message: ChatCompletionsMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![ChatCompletionToolCall {
+                    id: Some("call-1".to_string()),
+                    kind: "function".to_string(),
+                    function: ChatCompletionCalledFunction {
+                        name: "shell".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                    extra_content: Some(ChatCompletionToolCallExtraContent {
+                        google: Some(ChatCompletionGoogleExtraContent {
+                            thought_signature: Some("sig-123".to_string()),
+                        }),
+                    }),
+                }]),
+            },
+        }],
+        usage: None,
+    };
+
+    let events = chat_completions_response_to_events(response).expect("events");
+    let function_call = events
+        .into_iter()
+        .find_map(|event| match event {
+            super::ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { id, .. }) => id,
+            _ => None,
+        })
+        .expect("function call id");
+
+    assert_eq!(
+        function_call,
+        encode_google_thought_signature("sig-123")
     );
 }
 

@@ -7,11 +7,18 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "mistral-vibe-cli-latest";
-pub(crate) const MISTRAL_CANONICAL_PROFILE_MODEL: &str = "mistral-vibe-cli-latest";
+pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "devstral-latest";
+pub(crate) const MISTRAL_CANONICAL_PROFILE_MODEL: &str = "devstral-latest";
 pub(crate) const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
-pub(crate) const MISTRAL_TOOL_PROFILE_MODEL: &str = "mistral-vibe-cli-with-tools";
-pub(crate) const MISTRAL_FAST_PROFILE_MODEL: &str = "mistral-vibe-cli-fast";
+pub(crate) const MISTRAL_LEGACY_LATEST_MODEL: &str = "mistral-vibe-cli-latest";
+pub(crate) const MISTRAL_LEGACY_TOOL_PROFILE_MODEL: &str = "mistral-vibe-cli-with-tools";
+pub(crate) const MISTRAL_LEGACY_FAST_MODEL: &str = "mistral-vibe-cli-fast";
+pub(crate) const MISTRAL_FAST_PROFILE_MODEL: &str = "devstral-small-latest";
+pub(crate) const MISTRAL_REASONING_PROFILE_MODEL: &str = "magistral-medium-latest";
+
+const DEFAULT_REASONING_LEVELS: &[&str] = &["low", "medium", "high"];
+const OPENAI_REASONING_LEVELS: &[&str] = &["low", "medium", "high", "xhigh"];
+const MISTRAL_REASONING_LEVELS: &[&str] = &["none", "high"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiLanguage {
@@ -72,6 +79,7 @@ struct ProfileCatalogSeed {
     model: &'static str,
     description: &'static str,
     default_reasoning_level: &'static str,
+    supported_reasoning_levels: &'static [&'static str],
     supports_parallel_tool_calls: bool,
     supports_image_input: bool,
 }
@@ -116,13 +124,45 @@ pub(crate) fn normalize_profile_model(provider: &str, model: &str) -> String {
         }
     }
 
-    if provider.eq_ignore_ascii_case("mistral")
-        && model.eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
-    {
-        return MISTRAL_CANONICAL_PROFILE_MODEL.to_string();
+    if provider.eq_ignore_ascii_case("mistral") {
+        let trimmed = model.trim();
+        let (prefix, terminal_segment) = trimmed
+            .rsplit_once('/')
+            .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
+        let normalized_tail = match terminal_segment.to_ascii_lowercase().as_str() {
+            MISTRAL_LEGACY_BASE_MODEL
+            | MISTRAL_LEGACY_LATEST_MODEL
+            | MISTRAL_LEGACY_TOOL_PROFILE_MODEL => Some(MISTRAL_CANONICAL_PROFILE_MODEL),
+            MISTRAL_LEGACY_FAST_MODEL => Some(MISTRAL_FAST_PROFILE_MODEL),
+            _ => None,
+        };
+        if let Some(normalized_tail) = normalized_tail {
+            return prefix.map_or_else(
+                || normalized_tail.to_string(),
+                |prefix| format!("{prefix}/{normalized_tail}"),
+            );
+        }
     }
 
     model.to_string()
+}
+
+fn profile_model_slug_allowed(provider: &str, slug: &str) -> bool {
+    let tail = slug
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(slug)
+        .to_ascii_lowercase();
+    if tail.is_empty() {
+        return false;
+    }
+
+    if provider.eq_ignore_ascii_case("gemini") {
+        return tail.starts_with("gemini-");
+    }
+
+    true
 }
 
 pub(crate) fn repair_profile_model_catalog(path: &Path, provider: &str) -> io::Result<bool> {
@@ -185,6 +225,10 @@ pub(crate) fn repair_profile_model_catalog(path: &Path, provider: &str) -> io::R
         else {
             return true;
         };
+        if !profile_model_slug_allowed(provider, slug.as_str()) {
+            changed = true;
+            return false;
+        }
         seen_slugs.insert(slug)
     });
     if models.len() != original_len {
@@ -415,6 +459,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "gpt-5.3-codex",
                 description: "Стартовый профиль Lavilas Codex для основного coding-потока.",
                 default_reasoning_level: "medium",
+                supported_reasoning_levels: OPENAI_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: true,
             },
@@ -422,6 +467,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "gpt-5.4",
                 description: "Более сильный универсальный профиль для сложных задач.",
                 default_reasoning_level: "high",
+                supported_reasoning_levels: OPENAI_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: true,
             },
@@ -431,6 +477,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "openai/gpt-5.3-codex",
                 description: "Совместимый coding-профиль через OpenRouter.",
                 default_reasoning_level: "medium",
+                supported_reasoning_levels: OPENAI_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: true,
             },
@@ -438,6 +485,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "anthropic/claude-sonnet-4",
                 description: "Сильный общий профиль для кода и анализа через OpenRouter.",
                 default_reasoning_level: "high",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: true,
             },
@@ -447,6 +495,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "gemini-2.5-pro",
                 description: "Базовый профиль Gemini для кода и длинного контекста.",
                 default_reasoning_level: "medium",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: true,
             },
@@ -454,6 +503,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "gemini-2.5-flash",
                 description: "Быстрый профиль Gemini для повседневной работы.",
                 default_reasoning_level: "low",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: true,
             },
@@ -463,6 +513,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "claude-sonnet-4-0",
                 description: "Стартовый профиль Anthropic для кода и ревью.",
                 default_reasoning_level: "medium",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: true,
             },
@@ -470,6 +521,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "claude-opus-4-1",
                 description: "Тяжёлый профиль Anthropic для сложных инженерных задач.",
                 default_reasoning_level: "high",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: true,
             },
@@ -477,29 +529,33 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "mistral" => vec![
             ProfileCatalogSeed {
                 model: MISTRAL_CANONICAL_PROFILE_MODEL,
-                description: "Основной профиль Mistral Vibe CLI для повседневной работы.",
-                default_reasoning_level: "medium",
-                supports_parallel_tool_calls: true,
-                supports_image_input: false,
-            },
-            ProfileCatalogSeed {
-                model: MISTRAL_TOOL_PROFILE_MODEL,
-                description: "Профиль Mistral Vibe CLI для вызовов инструментов и агентных ходов.",
+                description: "Основной профиль Mistral для кода, инструментов и агентных проходов.",
                 default_reasoning_level: "high",
+                supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
             ProfileCatalogSeed {
                 model: MISTRAL_FAST_PROFILE_MODEL,
-                description: "Быстрый профиль Mistral Vibe CLI для коротких проходов.",
-                default_reasoning_level: "low",
+                description: "Быстрый профиль Mistral для коротких coding-проходов и частых повторов.",
+                default_reasoning_level: "none",
+                supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
+                supports_parallel_tool_calls: true,
+                supports_image_input: false,
+            },
+            ProfileCatalogSeed {
+                model: MISTRAL_REASONING_PROFILE_MODEL,
+                description: "Reasoning-профиль Mistral для тяжёлых инженерных и аналитических задач.",
+                default_reasoning_level: "high",
+                supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
             ProfileCatalogSeed {
                 model: "codestral-latest",
-                description: "Отдельный Mistral-профиль для тяжёлого кода и крупных правок.",
-                default_reasoning_level: "high",
+                description: "Отдельный Mistral-профиль для кодогенерации и крупных правок.",
+                default_reasoning_level: "none",
+                supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
@@ -509,6 +565,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "llama-3.3-70b-versatile",
                 description: "Стартовый профиль Groq для быстрых coding-задач.",
                 default_reasoning_level: "low",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
@@ -516,6 +573,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "qwen/qwen3-32b",
                 description: "Альтернативный Groq-профиль для более спокойного reasoning.",
                 default_reasoning_level: "medium",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
@@ -525,6 +583,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "qwen2.5-coder:32b",
                 description: "Локальный coding-профиль Ollama с упором на код.",
                 default_reasoning_level: "medium",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: false,
                 supports_image_input: false,
             },
@@ -532,6 +591,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "llama3.1:8b",
                 description: "Лёгкий локальный профиль Ollama для простых проходов.",
                 default_reasoning_level: "low",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: false,
                 supports_image_input: false,
             },
@@ -541,6 +601,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "custom-model-with-tools",
                 description: "Стартовый кастомный профиль с поддержкой tool-use.",
                 default_reasoning_level: "medium",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
             },
@@ -548,6 +609,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
                 model: "custom-model",
                 description: "Стартовый кастомный профиль без расширенного tool-use.",
                 default_reasoning_level: "medium",
+                supported_reasoning_levels: DEFAULT_REASONING_LEVELS,
                 supports_parallel_tool_calls: false,
                 supports_image_input: false,
             },
@@ -566,7 +628,7 @@ fn seed_model_info(seed: ProfileCatalogSeed) -> serde_json::Value {
         "display_name": seed.model,
         "description": seed.description,
         "default_reasoning_level": seed.default_reasoning_level,
-        "supported_reasoning_levels": supported_reasoning_levels(seed.default_reasoning_level),
+        "supported_reasoning_levels": supported_reasoning_levels(seed.supported_reasoning_levels),
         "shell_type": "shell_command",
         "visibility": "list",
         "supported_in_api": true,
@@ -590,28 +652,33 @@ fn seed_model_info(seed: ProfileCatalogSeed) -> serde_json::Value {
     })
 }
 
-fn supported_reasoning_levels(default_reasoning_level: &str) -> Vec<serde_json::Value> {
-    let mut levels = vec![
-        serde_json::json!({
-            "effort": "low",
-            "description": "Быстрее отвечает и тратит меньше бюджета размышлений"
-        }),
-        serde_json::json!({
-            "effort": "medium",
-            "description": "Сбалансированный режим для повседневной разработки"
-        }),
-        serde_json::json!({
-            "effort": "high",
-            "description": "Глубже разбирает сложные и неоднозначные задачи"
-        }),
-    ];
-    if default_reasoning_level == "xhigh" {
-        levels.push(serde_json::json!({
-            "effort": "xhigh",
-            "description": "Максимальный бюджет размышлений для тяжёлых случаев"
-        }));
-    }
+fn supported_reasoning_levels(levels: &[&str]) -> Vec<serde_json::Value> {
     levels
+        .iter()
+        .filter_map(|level| match *level {
+            "none" => Some(serde_json::json!({
+                "effort": "none",
+                "description": "Отключает отдельный бюджет размышлений ради более прямого ответа"
+            })),
+            "low" => Some(serde_json::json!({
+                "effort": "low",
+                "description": "Быстрее отвечает и тратит меньше бюджета размышлений"
+            })),
+            "medium" => Some(serde_json::json!({
+                "effort": "medium",
+                "description": "Сбалансированный режим для повседневной разработки"
+            })),
+            "high" => Some(serde_json::json!({
+                "effort": "high",
+                "description": "Глубже разбирает сложные и неоднозначные задачи"
+            })),
+            "xhigh" => Some(serde_json::json!({
+                "effort": "xhigh",
+                "description": "Максимальный бюджет размышлений для тяжёлых случаев"
+            })),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -665,6 +732,7 @@ mod tests {
     #[test]
     fn profile_catalog_helper_repairs_legacy_mistral_sidecar() {
         use super::MISTRAL_CANONICAL_PROFILE_MODEL;
+        use super::MISTRAL_FAST_PROFILE_MODEL;
         use super::MISTRAL_LEGACY_BASE_MODEL;
         let codex_home = tempdir().expect("tempdir");
         let catalog_path = profile_model_catalog_path(codex_home.path(), "mistral-profile");
@@ -693,7 +761,7 @@ mod tests {
         );
         assert_eq!(
             normalize_profile_model("mistral", "mistral-vibe-cli-fast"),
-            "mistral-vibe-cli-fast"
+            MISTRAL_FAST_PROFILE_MODEL
         );
     }
 

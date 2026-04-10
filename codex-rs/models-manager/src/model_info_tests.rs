@@ -94,3 +94,22 @@ fn compatibility_model_info_repairs_mistral_fast_variant() {
     assert!(model.supports_parallel_tool_calls);
     assert!(model.supports_search_tool);
 }
+
+#[test]
+fn compatibility_model_info_supports_real_mistral_families() {
+    let devstral = compatibility_model_info_from_slug("devstral-latest")
+        .expect("devstral should produce compatibility metadata");
+    assert_eq!(devstral.slug, "devstral-latest");
+    assert_eq!(devstral.display_name, "Devstral");
+    assert!(devstral.supports_parallel_tool_calls);
+    assert!(devstral.supports_search_tool);
+    assert!(!devstral.used_fallback_model_metadata);
+
+    let pixtral = compatibility_model_info_from_slug("pixtral-large-latest")
+        .expect("pixtral should produce compatibility metadata");
+    assert_eq!(pixtral.slug, "pixtral-large-latest");
+    assert_eq!(pixtral.display_name, "Pixtral Large");
+    assert!(pixtral.supports_parallel_tool_calls);
+    assert!(pixtral.supports_search_tool);
+    assert!(!pixtral.used_fallback_model_metadata);
+}

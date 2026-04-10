@@ -118,6 +118,8 @@ use codex_features::Feature;
 use codex_git_utils::CommitLogEntry;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::get_git_repo_root;
+use codex_models_manager::model_info::canonicalize_provider_model_slug;
+use codex_models_manager::model_info::normalize_provider_model_alias_slug;
 use codex_git_utils::local_git_branches;
 use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
@@ -10088,20 +10090,42 @@ impl ChatWidget {
     }
 
     fn preset_matches_model_slug(preset: &StoredModelPreset, model: &ModelPreset) -> bool {
-        if preset.model == model.model {
+        if preset.model.eq_ignore_ascii_case(model.model.as_str()) {
             return true;
         }
-        let saved_tail = preset
-            .model
+
+        let preset_normalized = normalize_provider_model_alias_slug(preset.model.as_str())
+            .or_else(|| canonicalize_provider_model_slug(preset.model.as_str()))
+            .unwrap_or_else(|| preset.model.trim().to_string());
+        let model_normalized = normalize_provider_model_alias_slug(model.model.as_str())
+            .or_else(|| canonicalize_provider_model_slug(model.model.as_str()))
+            .unwrap_or_else(|| model.model.trim().to_string());
+        if preset_normalized.eq_ignore_ascii_case(model_normalized.as_str()) {
+            return true;
+        }
+
+        let saved_tail = preset_normalized
             .rsplit('/')
             .next()
-            .unwrap_or(preset.model.as_str());
-        let model_tail = model
-            .model
+            .unwrap_or(preset_normalized.as_str());
+        let model_tail = model_normalized
             .rsplit('/')
             .next()
-            .unwrap_or(model.model.as_str());
-        saved_tail.eq_ignore_ascii_case(model_tail)
+            .unwrap_or(model_normalized.as_str());
+        if saved_tail.eq_ignore_ascii_case(model_tail) {
+            return true;
+        }
+
+        ["-with-tools", "-tools", "-latest", "-fast"]
+            .iter()
+            .any(|suffix| {
+                saved_tail
+                    .strip_suffix(suffix)
+                    .is_some_and(|base| !base.is_empty() && base.eq_ignore_ascii_case(model_tail))
+                    || model_tail
+                        .strip_suffix(suffix)
+                        .is_some_and(|base| !base.is_empty() && base.eq_ignore_ascii_case(saved_tail))
+            })
     }
 
     fn derive_provider_model_presets(&self, models: &[ModelPreset]) -> Vec<StoredModelPreset> {

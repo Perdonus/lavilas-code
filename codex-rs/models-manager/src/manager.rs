@@ -48,7 +48,11 @@ const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
 const PROVIDER_MODEL_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
 const MISTRAL_LEGACY_BASE_MODEL: &str = "mistral-vibe-cli";
-const MISTRAL_DEFAULT_MODEL: &str = "mistral-vibe-cli-latest";
+const MISTRAL_LEGACY_LATEST_MODEL: &str = "mistral-vibe-cli-latest";
+const MISTRAL_LEGACY_TOOL_MODEL: &str = "mistral-vibe-cli-with-tools";
+const MISTRAL_LEGACY_FAST_MODEL: &str = "mistral-vibe-cli-fast";
+const MISTRAL_DEFAULT_MODEL: &str = "devstral-latest";
+const MISTRAL_FAST_MODEL: &str = "devstral-small-latest";
 
 #[derive(Debug, Deserialize)]
 struct OpenAiCompatibleModelsEnvelope {
@@ -75,6 +79,28 @@ struct OpenAiCompatibleModelObject {
     model: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    #[serde(default, rename = "baseModelId")]
+    base_model_id: Option<String>,
+    #[serde(default, rename = "base_model_id")]
+    base_model_id_snake: Option<String>,
+    #[serde(default, rename = "supportedGenerationMethods")]
+    supported_generation_methods: Vec<String>,
+    #[serde(default, rename = "supported_generation_methods")]
+    supported_generation_methods_snake: Vec<String>,
+    #[serde(default)]
+    capabilities: Option<OpenAiCompatibleModelCapabilities>,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    archived: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OpenAiCompatibleModelCapabilities {
+    #[serde(default)]
+    completion_chat: Option<bool>,
+    #[serde(default)]
+    chat_completion: Option<bool>,
 }
 
 fn candidate_model_slug_matches(requested_slug: &str, candidate_slug: &str) -> bool {
@@ -125,7 +151,151 @@ fn find_bundled_provider_model_metadata(
         .cloned()
 }
 
+fn normalize_mistral_legacy_model_slug(model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (prefix, tail) = trimmed
+        .rsplit_once('/')
+        .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
+    let normalized_tail = match tail.to_ascii_lowercase().as_str() {
+        MISTRAL_LEGACY_BASE_MODEL | MISTRAL_LEGACY_LATEST_MODEL | MISTRAL_LEGACY_TOOL_MODEL => {
+            Some(MISTRAL_DEFAULT_MODEL)
+        }
+        MISTRAL_LEGACY_FAST_MODEL => Some(MISTRAL_FAST_MODEL),
+        _ => None,
+    }?;
+
+    Some(match prefix {
+        Some(prefix) => format!("{prefix}/{normalized_tail}"),
+        None => normalized_tail.to_string(),
+    })
+}
+
+fn provider_uses_gemini_api(provider: &ModelProviderInfo) -> bool {
+    provider.uses_gemini_api()
+}
+
+fn normalize_provider_catalog_slug(provider: &ModelProviderInfo, slug: &str) -> String {
+    let trimmed = slug.trim();
+
+    if provider_uses_gemini_api(provider) {
+        if let Some(normalized) = model_info::normalize_provider_model_alias_slug(trimmed) {
+            return normalized
+                .rsplit('/')
+                .next()
+                .unwrap_or(normalized.as_str())
+                .to_string();
+        }
+
+        if trimmed
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("models/"))
+        {
+            let normalized = trimmed[7..].trim();
+            if !normalized.is_empty() {
+                return normalized.to_ascii_lowercase();
+            }
+        }
+    }
+
+    if provider_uses_mistral_api(provider)
+        && let Some(normalized) = normalize_mistral_legacy_model_slug(trimmed)
+    {
+        return normalized;
+    }
+
+    trimmed.to_string()
+}
+
+fn provider_catalog_slug_allowed(provider: &ModelProviderInfo, slug: &str) -> bool {
+    let normalized = normalize_provider_catalog_slug(provider, slug);
+    let tail = normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized.as_str())
+        .to_ascii_lowercase();
+
+    if provider_uses_gemini_api(provider) {
+        return tail.starts_with("gemini-");
+    }
+
+    true
+}
+
+fn openai_compatible_model_slug(
+    provider: &ModelProviderInfo,
+    value: OpenAiCompatibleModelObject,
+) -> Option<String> {
+    let OpenAiCompatibleModelObject {
+        id,
+        slug,
+        model,
+        name,
+        base_model_id,
+        base_model_id_snake,
+        supported_generation_methods,
+        supported_generation_methods_snake,
+        capabilities,
+        kind: _kind,
+        archived,
+    } = value;
+
+    if archived == Some(true) {
+        return None;
+    }
+
+    let slug = if provider_uses_gemini_api(provider) {
+        base_model_id
+            .or(base_model_id_snake)
+            .or(id)
+            .or(slug)
+            .or(model)
+            .or(name)
+    } else {
+        id.or(slug).or(model).or(name)
+    }?;
+
+    let normalized_slug = normalize_provider_catalog_slug(provider, slug.as_str());
+    if normalized_slug.is_empty() || !provider_catalog_slug_allowed(provider, normalized_slug.as_str()) {
+        return None;
+    }
+
+    if provider_uses_mistral_api(provider)
+        && let Some(capabilities) = capabilities.as_ref()
+        && matches!(
+            capabilities.completion_chat.or(capabilities.chat_completion),
+            Some(false)
+        )
+    {
+        return None;
+    }
+
+    if provider_uses_gemini_api(provider) {
+        let supported_generation_methods = supported_generation_methods
+            .into_iter()
+            .chain(supported_generation_methods_snake)
+            .map(|method| method.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        if !supported_generation_methods.is_empty()
+            && !supported_generation_methods.iter().any(|method| {
+                method == "generatecontent"
+                    || method == "generatemessage"
+                    || method == "chat"
+                    || method == "chatcompletions"
+            })
+        {
+            return None;
+        }
+    }
+
+    Some(normalized_slug)
+}
+
 fn collect_openai_compatible_model_slugs(
+    provider: &ModelProviderInfo,
     entries: impl IntoIterator<Item = OpenAiCompatibleModelEntry>,
 ) -> Vec<String> {
     let mut seen = HashSet::new();
@@ -135,13 +305,17 @@ fn collect_openai_compatible_model_slugs(
         let slug = match entry {
             OpenAiCompatibleModelEntry::String(value) => Some(value),
             OpenAiCompatibleModelEntry::Object(value) => {
-                value.id.or(value.slug).or(value.model).or(value.name)
+                openai_compatible_model_slug(provider, value)
             }
         };
-        let Some(slug) = slug.map(|value| value.trim().to_string()) else {
+        let Some(slug) = slug.map(|value| normalize_provider_catalog_slug(provider, value.as_str()))
+        else {
             continue;
         };
-        if slug.is_empty() || !seen.insert(slug.clone()) {
+        if slug.is_empty()
+            || !provider_catalog_slug_allowed(provider, slug.as_str())
+            || !seen.insert(slug.clone())
+        {
             continue;
         }
         models.push(slug);
@@ -170,11 +344,7 @@ fn fallback_provider_model_info(slug: &str) -> ModelInfo {
 }
 
 fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
-    provider.name.eq_ignore_ascii_case("mistral")
-        || provider
-            .base_url
-            .as_deref()
-            .is_some_and(|base_url| base_url.contains("api.mistral.ai"))
+    provider.uses_mistral_api()
 }
 
 fn enrich_provider_catalog_model(
@@ -590,9 +760,7 @@ impl ModelsManager {
     }
 
     fn normalize_legacy_model_slug(model: &str) -> Option<String> {
-        model
-            .eq_ignore_ascii_case(MISTRAL_LEGACY_BASE_MODEL)
-            .then(|| MISTRAL_DEFAULT_MODEL.to_string())
+        normalize_mistral_legacy_model_slug(model)
     }
 
     fn construct_model_info_from_candidates(
@@ -743,10 +911,10 @@ impl ModelsManager {
             } else {
                 envelope.models
             };
-            collect_openai_compatible_model_slugs(entries)
+            collect_openai_compatible_model_slugs(provider, entries)
         } else if let Ok(entries) = serde_json::from_slice::<Vec<OpenAiCompatibleModelEntry>>(body)
         {
-            collect_openai_compatible_model_slugs(entries)
+            collect_openai_compatible_model_slugs(provider, entries)
         } else {
             return Err(CodexErr::Stream(
                 format!(
@@ -775,18 +943,7 @@ impl ModelsManager {
 
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
-        let mut existing_models = self.remote_models.read().await.clone();
-        for model in models {
-            if let Some(existing_index) = existing_models
-                .iter()
-                .position(|existing| existing.slug == model.slug)
-            {
-                existing_models[existing_index] = model;
-            } else {
-                existing_models.push(model);
-            }
-        }
-        *self.remote_models.write().await = existing_models;
+        *self.remote_models.write().await = models;
     }
 
     fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {

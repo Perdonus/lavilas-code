@@ -149,6 +149,25 @@ fn repair_legacy_compatibility_rewrites_stale_mistral_provider_state() {
 }
 
 #[test]
+fn mistral_provider_supports_reasoning_controls() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://api.mistral.ai/v1".to_string()));
+
+    assert!(provider.supports_reasoning_controls());
+    assert!(provider.supports_chat_completions_reasoning_effort());
+}
+
+#[test]
+fn gemini_host_detection_uses_parsed_host() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some(
+            "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
+        ));
+
+    assert!(provider.uses_gemini_api());
+}
+
+#[test]
 fn canonicalize_provider_model_slug_repairs_mistral_tool_alias() {
     assert_eq!(
         canonicalize_provider_model_slug("mistral-vibe-cli-with-tools"),
