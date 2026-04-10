@@ -67,6 +67,7 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::ModelsManagerConfig;
+use codex_models_manager::model_info::normalize_provider_model_for_family;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -95,6 +96,7 @@ use serde::Deserializer;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -828,9 +830,22 @@ pub(crate) fn deserialize_config_toml_with_base(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {
+fn provider_model_family(provider: &ModelProviderInfo) -> &'static str {
+    if provider.uses_gemini_api() {
+        "gemini"
+    } else if provider.uses_mistral_api() {
+        "mistral"
+    } else {
+        "other"
+    }
+}
+
+fn load_catalog_json(
+    path: &AbsolutePathBuf,
+    provider: &ModelProviderInfo,
+) -> std::io::Result<ModelsResponse> {
     let file_contents = std::fs::read_to_string(path)?;
-    let catalog = serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
+    let mut catalog = serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidData,
             format!(
@@ -839,6 +854,29 @@ fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> 
             ),
         )
     })?;
+    let provider_family = provider_model_family(provider);
+    let mut seen_slugs = HashSet::new();
+    for model in &mut catalog.models {
+        let original_slug = model.slug.trim().to_string();
+        let normalized_slug =
+            normalize_provider_model_for_family(provider_family, original_slug.as_str());
+        if normalized_slug != original_slug {
+            model.slug = normalized_slug.clone();
+            if model.display_name == original_slug {
+                model.display_name = normalized_slug;
+            }
+        }
+    }
+    catalog.models.retain(|model| {
+        let slug = model.slug.trim();
+        if slug.is_empty() {
+            return false;
+        }
+        if provider.uses_gemini_api() && !slug.starts_with("gemini-") {
+            return false;
+        }
+        seen_slugs.insert(slug.to_string())
+    });
     if catalog.models.is_empty() {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
@@ -853,9 +891,10 @@ fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> 
 
 fn load_model_catalog(
     model_catalog_json: Option<AbsolutePathBuf>,
+    provider: &ModelProviderInfo,
 ) -> std::io::Result<Option<ModelsResponse>> {
     model_catalog_json
-        .map(|path| load_catalog_json(&path))
+        .map(|path| load_catalog_json(&path, provider))
         .transpose()
 }
 
@@ -2445,7 +2484,16 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
-        let model = model.or(config_profile.model).or(cfg.model);
+        let model = model
+            .or(config_profile.model)
+            .or(cfg.model)
+            .map(|model| {
+                normalize_provider_model_for_family(
+                    provider_model_family(&model_provider),
+                    model.as_str(),
+                )
+            })
+            .filter(|model| !model.is_empty());
         let service_tier = service_tier_override
             .unwrap_or_else(|| config_profile.service_tier.or(cfg.service_tier));
         let service_tier = match service_tier {
@@ -2536,7 +2584,7 @@ impl Config {
             .model_catalog_json
             .clone()
             .or(cfg.model_catalog_json.clone());
-        let model_catalog = load_model_catalog(configured_model_catalog_json)?;
+        let model_catalog = load_model_catalog(configured_model_catalog_json, &model_provider)?;
 
         let log_dir = cfg
             .log_dir

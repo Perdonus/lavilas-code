@@ -4336,7 +4336,7 @@ fn managed_profile_snapshot_catalog_is_loaded_as_authoritative_catalog_for_activ
 }
 
 #[test]
-fn profile_model_load_preserves_mistral_variant_slug() -> std::io::Result<()> {
+fn profile_model_load_repairs_mistral_variant_slug() -> std::io::Result<()> {
     let cfg = ConfigToml {
         profile: Some("mistral-profile".to_string()),
         profiles: HashMap::from([(
@@ -4355,7 +4355,7 @@ fn profile_model_load_preserves_mistral_variant_slug() -> std::io::Result<()> {
         std::env::temp_dir(),
     )?;
 
-    assert_eq!(config.model.as_deref(), Some("mistral-vibe-cli-with-tools"));
+    assert_eq!(config.model.as_deref(), Some("mistral-medium-latest"));
     Ok(())
 }
 

@@ -150,29 +150,14 @@ fn provider_uses_gemini_api(provider: &ModelProviderInfo) -> bool {
 }
 
 fn normalize_provider_catalog_slug(provider: &ModelProviderInfo, slug: &str) -> String {
-    let trimmed = slug.trim();
-
-    if provider_uses_gemini_api(provider) {
-        if let Some(normalized) = model_info::normalize_provider_model_alias_slug(trimmed) {
-            return normalized
-                .rsplit('/')
-                .next()
-                .unwrap_or(normalized.as_str())
-                .to_string();
-        }
-
-        if trimmed
-            .get(..7)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("models/"))
-        {
-            let normalized = trimmed[7..].trim();
-            if !normalized.is_empty() {
-                return normalized.to_ascii_lowercase();
-            }
-        }
-    }
-
-    trimmed.to_string()
+    let family = if provider_uses_gemini_api(provider) {
+        "gemini"
+    } else if provider_uses_mistral_api(provider) {
+        "mistral"
+    } else {
+        provider.name.as_str()
+    };
+    model_info::normalize_provider_model_for_family(family, slug)
 }
 
 fn provider_catalog_slug_allowed(provider: &ModelProviderInfo, slug: &str) -> bool {
@@ -231,13 +216,11 @@ fn openai_compatible_model_slug(
     }
 
     if provider_uses_mistral_api(provider)
-        && let Some(capabilities) = capabilities.as_ref()
-        && matches!(
+        && capabilities.as_ref().and_then(|capabilities| {
             capabilities
                 .completion_chat
-                .or(capabilities.chat_completion),
-            Some(false)
-        )
+                .or(capabilities.chat_completion)
+        }) != Some(true)
     {
         return None;
     }

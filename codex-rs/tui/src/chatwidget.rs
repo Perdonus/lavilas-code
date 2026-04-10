@@ -122,6 +122,7 @@ use codex_git_utils::local_git_branches;
 use codex_git_utils::recent_commits;
 use codex_models_manager::model_info::canonicalize_provider_model_slug;
 use codex_models_manager::model_info::normalize_provider_model_alias_slug;
+use codex_models_manager::model_info::normalize_provider_model_for_family;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -11475,7 +11476,14 @@ impl ChatWidget {
     ) {
         let mut presets = self.editable_current_provider_model_presets();
         let normalized_name = name.trim();
-        let normalized_model = model.trim();
+        let provider_family = if self.config.model_provider.uses_gemini_api() {
+            "gemini"
+        } else if self.config.model_provider.uses_mistral_api() {
+            "mistral"
+        } else {
+            self.config.model_provider.name.as_str()
+        };
+        let normalized_model = normalize_provider_model_for_family(provider_family, model.trim());
         if normalized_name.is_empty() || normalized_model.is_empty() {
             self.add_error_message(if self.ui_language().is_ru() {
                 "У пресета должны быть имя и модель.".to_string()

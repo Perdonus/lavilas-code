@@ -38,6 +38,11 @@ const GEMINI_API_HOST: &str = "generativelanguage.googleapis.com";
 const GEMINI_PROVIDER_NAME: &str = "gemini";
 const MISTRAL_API_HOST: &str = "api.mistral.ai";
 const MISTRAL_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
+const MISTRAL_VIBE_CLI_LATEST_MODEL: &str = "mistral-vibe-cli-latest";
+const MISTRAL_VIBE_CLI_TOOLS_MODEL: &str = "mistral-vibe-cli-with-tools";
+const MISTRAL_VIBE_CLI_FAST_MODEL: &str = "mistral-vibe-cli-fast";
+const MISTRAL_CANONICAL_MEDIUM_MODEL: &str = "mistral-medium-latest";
+const MISTRAL_CANONICAL_FAST_MODEL: &str = "mistral-small-latest";
 const PROVIDER_MODEL_COMPATIBILITY_SUFFIXES: [&str; 4] =
     ["-with-tools", "-tools", "-latest", "-fast"];
 const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
@@ -50,13 +55,29 @@ pub fn canonicalize_provider_model_slug(slug: &str) -> Option<String> {
         None => (None, slug),
     };
 
-    let canonical_terminal = PROVIDER_MODEL_COMPATIBILITY_SUFFIXES
-        .iter()
-        .find_map(|suffix| {
-            let base = terminal_segment.strip_suffix(suffix)?;
-            base.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL)
-                .then_some(MISTRAL_VIBE_CLI_MODEL)
-        })?;
+    let canonical_terminal = if terminal_segment.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_FAST_MODEL) {
+        Some(MISTRAL_CANONICAL_FAST_MODEL)
+    } else if terminal_segment.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL)
+        || terminal_segment.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_LATEST_MODEL)
+        || terminal_segment.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_TOOLS_MODEL)
+    {
+        Some(MISTRAL_CANONICAL_MEDIUM_MODEL)
+    } else {
+        PROVIDER_MODEL_COMPATIBILITY_SUFFIXES
+            .iter()
+            .find_map(|suffix| {
+                let base = terminal_segment.strip_suffix(suffix)?;
+                if !base.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL) {
+                    return None;
+                }
+
+                if suffix.eq_ignore_ascii_case("-fast") {
+                    Some(MISTRAL_CANONICAL_FAST_MODEL)
+                } else {
+                    Some(MISTRAL_CANONICAL_MEDIUM_MODEL)
+                }
+            })
+    }?;
 
     Some(match prefix {
         Some(prefix) => format!("{prefix}/{canonical_terminal}"),
@@ -381,6 +402,27 @@ impl ModelProviderInfo {
 
     pub fn supports_chat_completions_reasoning_effort(&self) -> bool {
         self.uses_gemini_api() || self.uses_mistral_api()
+    }
+
+    pub fn model_supports_chat_completions_reasoning_effort(&self, model: &str) -> bool {
+        if self.uses_gemini_api() {
+            return false;
+        }
+
+        if self.uses_mistral_api() {
+            let tail = model
+                .trim()
+                .rsplit('/')
+                .next()
+                .unwrap_or(model)
+                .to_ascii_lowercase();
+            return tail.starts_with("mistral-small")
+                || tail == "mistral-vibe-cli-fast"
+                || tail.starts_with("magistral-")
+                || tail.starts_with("labs-leanstral-");
+        }
+
+        self.supports_chat_completions_reasoning_effort()
     }
 
     pub fn effective_wire_api(&self) -> WireApi {

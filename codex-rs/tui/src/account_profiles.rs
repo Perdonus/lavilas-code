@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ use serde::Serialize;
 use crate::ui_preferences::default_profile_model;
 use crate::ui_preferences::ensure_profile_model_catalog;
 use crate::ui_preferences::normalize_profile_model;
+use crate::ui_preferences::profile_model_slug_allowed;
 use crate::ui_preferences::profiles_dir;
 use crate::ui_preferences::repair_profile_model_catalog;
 
@@ -585,14 +587,35 @@ fn repair_sidecar_model_metadata(
     changed
 }
 
-fn repair_sidecar_models(provider: &str, models: &mut [ModelInfo]) -> bool {
+fn repair_sidecar_models(provider: &str, models: &mut Vec<ModelInfo>) -> bool {
     let bundled_models = bundled_models_response()
         .map(|response| response.models)
         .unwrap_or_default();
     let mut changed = false;
-    for model in models {
+    for model in models.iter_mut() {
         changed |= repair_sidecar_model_metadata(provider, model, &bundled_models);
     }
+
+    let original_len = models.len();
+    let mut seen_slugs = HashSet::new();
+    models.retain(|model| {
+        let normalized_slug = normalize_profile_model(provider, model.slug.as_str());
+        if normalized_slug.is_empty()
+            || !profile_model_slug_allowed(provider, normalized_slug.as_str())
+        {
+            changed = true;
+            return false;
+        }
+        if !seen_slugs.insert(normalized_slug) {
+            changed = true;
+            return false;
+        }
+        true
+    });
+    if models.len() != original_len {
+        changed = true;
+    }
+
     changed
 }
 
@@ -945,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn load_stored_profile_preserves_legacy_mistral_model_and_sidecar() {
+    fn load_stored_profile_repairs_legacy_mistral_model_and_sidecar() {
         let codex_home = tempdir().expect("tempdir");
         let profiles = profiles_dir(codex_home.path());
         std::fs::create_dir_all(&profiles).expect("profiles dir");
@@ -979,16 +1002,26 @@ mod tests {
         .expect("write sidecar");
 
         let loaded = load_stored_profile(&profile_path).expect("load repaired profile");
-        assert_eq!(loaded.model, "mistral-vibe-cli");
+        assert_eq!(loaded.model, "mistral-medium-latest");
         assert!(
             std::fs::read_to_string(&profile_path)
                 .expect("profile contents")
-                .contains("\"mistral-vibe-cli\"")
+                .contains("\"mistral-medium-latest\"")
+        );
+        assert!(
+            !std::fs::read_to_string(&profile_path)
+                .expect("profile contents")
+                .contains("mistral-vibe-cli")
         );
         assert!(
             std::fs::read_to_string(&sidecar_path)
                 .expect("sidecar contents")
-                .contains("\"mistral-vibe-cli\"")
+                .contains("\"mistral-medium-latest\"")
+        );
+        assert!(
+            !std::fs::read_to_string(&sidecar_path)
+                .expect("sidecar contents")
+                .contains("mistral-vibe-cli")
         );
     }
 

@@ -124,7 +124,7 @@ use codex_login::provider_auth::auth_manager_for_provider;
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
-use codex_models_manager::model_info::normalize_provider_model_alias_slug;
+use codex_models_manager::model_info::normalize_provider_model_for_family;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_response_debug_context::extract_response_debug_context;
@@ -165,23 +165,20 @@ fn normalize_request_model_for_provider<'a>(
     provider: &ModelProviderInfo,
     model: &'a str,
 ) -> Cow<'a, str> {
-    if provider_uses_gemini_api(provider) {
-        let normalized = model.trim_start_matches("models/");
-        if let Some(normalized_alias) = normalize_provider_model_alias_slug(normalized) {
-            return Cow::Owned(
-                normalized_alias
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(normalized_alias.as_str())
-                    .to_string(),
-            );
-        }
-        if normalized != model {
-            return Cow::Owned(normalized.to_string());
-        }
-    }
+    let family = if provider_uses_gemini_api(provider) {
+        "gemini"
+    } else if provider_uses_mistral_api(provider) {
+        "mistral"
+    } else {
+        return Cow::Borrowed(model);
+    };
 
-    Cow::Borrowed(model)
+    let normalized = normalize_provider_model_for_family(family, model);
+    if normalized.eq(model) {
+        Cow::Borrowed(model)
+    } else {
+        Cow::Owned(normalized)
+    }
 }
 
 fn chat_completions_instructions_role(provider: &ModelProviderInfo) -> &'static str {
@@ -741,6 +738,10 @@ impl ModelClient {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
     ) -> Option<ReasoningEffortConfig> {
+        if !provider.model_supports_chat_completions_reasoning_effort(model_info.slug.as_str()) {
+            return None;
+        }
+
         let requested_effort = effort.or(model_info.default_reasoning_level);
         let supported_efforts = model_info
             .supported_reasoning_levels

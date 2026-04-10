@@ -332,11 +332,11 @@ fn find_bundled_provider_model_metadata(
         .cloned()
 }
 
-fn provider_catalog_slug_allowed(provider: Option<&ModelProviderInfo>, slug: &str) -> bool {
+fn normalize_provider_catalog_slug(provider: Option<&ModelProviderInfo>, slug: &str) -> String {
     let Some(provider) = provider else {
-        return true;
+        return slug.trim().to_string();
     };
-    let normalized_slug = normalize_profile_model(
+    normalize_profile_model(
         if provider.uses_gemini_api() {
             "gemini"
         } else if provider.uses_mistral_api() {
@@ -345,7 +345,14 @@ fn provider_catalog_slug_allowed(provider: Option<&ModelProviderInfo>, slug: &st
             provider.name.as_str()
         },
         slug,
-    );
+    )
+}
+
+fn provider_catalog_slug_allowed(provider: Option<&ModelProviderInfo>, slug: &str) -> bool {
+    let Some(provider) = provider else {
+        return true;
+    };
+    let normalized_slug = normalize_provider_catalog_slug(Some(provider), slug);
     let tail = normalized_slug
         .rsplit('/')
         .next()
@@ -392,23 +399,21 @@ fn openai_compatible_model_slug(
         id.or(slug).or(model).or(name)
     }?;
 
-    let slug = slug.trim().to_string();
-    if slug.is_empty() {
+    let normalized_slug = normalize_provider_catalog_slug(provider, slug.as_str());
+    if normalized_slug.is_empty() {
         return None;
     }
 
-    if !provider_catalog_slug_allowed(provider, slug.as_str()) {
+    if !provider_catalog_slug_allowed(provider, normalized_slug.as_str()) {
         return None;
     }
 
     if provider.is_some_and(ModelProviderInfo::uses_mistral_api)
-        && let Some(capabilities) = capabilities.as_ref()
-        && matches!(
+        && capabilities.as_ref().and_then(|capabilities| {
             capabilities
                 .completion_chat
-                .or(capabilities.chat_completion),
-            Some(false)
-        )
+                .or(capabilities.chat_completion)
+        }) != Some(true)
     {
         return None;
     }
@@ -431,7 +436,7 @@ fn openai_compatible_model_slug(
         }
     }
 
-    Some(slug)
+    Some(normalized_slug)
 }
 
 fn collect_openai_compatible_model_slugs(
@@ -443,12 +448,16 @@ fn collect_openai_compatible_model_slugs(
 
     for entry in entries {
         let slug = match entry {
-            OpenAiCompatibleModelEntry::String(value) => Some(value),
+            OpenAiCompatibleModelEntry::String(value) => {
+                Some(normalize_provider_catalog_slug(provider, value.as_str()))
+            }
             OpenAiCompatibleModelEntry::Object(value) => {
                 openai_compatible_model_slug(provider, value)
             }
         };
-        let Some(slug) = slug.map(|value| value.trim().to_string()) else {
+        let Some(slug) =
+            slug.map(|value| normalize_provider_catalog_slug(provider, value.as_str()))
+        else {
             continue;
         };
         if slug.is_empty()
@@ -621,6 +630,24 @@ fn fallback_reasoning_options(
     provider: &ModelProviderInfo,
     model_slug: &str,
 ) -> Vec<ReasoningEffortPreset> {
+    if provider.uses_mistral_api() {
+        if !provider.model_supports_chat_completions_reasoning_effort(model_slug) {
+            return Vec::new();
+        }
+
+        return vec![
+            ReasoningEffortPreset {
+                effort: ReasoningEffortConfig::None,
+                description: "Disables the extended reasoning budget for this model".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffortConfig::High,
+                description: "Uses the extended reasoning budget available for this model"
+                    .to_string(),
+            },
+        ];
+    }
+
     if !provider.uses_openai_responses_api() {
         return Vec::new();
     }
@@ -732,7 +759,15 @@ fn sanitize_provider_reasoning_presets(
     let supports_reasoning_controls = provider_supports_reasoning_controls(provider);
 
     for model in &mut models {
+        let model_supports_reasoning = provider.uses_openai_responses_api()
+            || provider.model_supports_chat_completions_reasoning_effort(model.model.as_str());
         if supports_reasoning_controls {
+            if !model_supports_reasoning {
+                model.supported_reasoning_efforts.clear();
+                model.default_reasoning_effort = ReasoningEffortConfig::None;
+                continue;
+            }
+
             let fallback_options = fallback_reasoning_options(provider, model.model.as_str());
             if model.supported_reasoning_efforts.is_empty() && fallback_options.is_empty() {
                 model.default_reasoning_effort = ReasoningEffortConfig::None;
@@ -1864,19 +1899,31 @@ impl App {
             .execute(request)
             .await
             .wrap_err("custom provider model list request failed")?;
-        let mut models =
+        let models =
             parse_provider_model_catalog_with_provider(response.body.as_ref(), Some(&provider))
                 .wrap_err("failed to parse custom provider model list response")?;
-        for model in &mut models {
-            let normalized_slug = normalize_profile_model(stored.provider.as_str(), &model.slug);
-            if normalized_slug != model.slug {
-                if model.display_name == model.slug {
-                    model.display_name = normalized_slug.clone();
-                }
-                model.slug = normalized_slug;
+        let mut seen = HashSet::new();
+        let mut sanitized = Vec::new();
+        for mut model in models {
+            let original_slug = model.slug.trim().to_string();
+            if original_slug.is_empty() {
+                continue;
             }
+            let normalized_slug =
+                normalize_provider_catalog_slug(Some(&provider), original_slug.as_str());
+            if normalized_slug.is_empty()
+                || !provider_catalog_slug_allowed(Some(&provider), normalized_slug.as_str())
+                || !seen.insert(normalized_slug.clone())
+            {
+                continue;
+            }
+            if model.display_name.trim().is_empty() || model.display_name == original_slug {
+                model.display_name = normalized_slug.clone();
+            }
+            model.slug = normalized_slug;
+            sanitized.push(model);
         }
-        Ok(Some(models))
+        Ok(Some(sanitized))
     }
 
     async fn resolve_profile_catalog_models(
@@ -1997,10 +2044,10 @@ impl App {
                 })
             })
             .filter(|models| !models.is_empty());
-        let mut runtime_models = if let Some(models) = disk_models {
-            models
-        } else if !refreshed_models.is_empty() {
+        let mut runtime_models = if !refreshed_models.is_empty() {
             refreshed_models.clone()
+        } else if let Some(models) = disk_models {
+            models
         } else if self.config.model_provider_id == previous_provider_id {
             previous_models
         } else {
@@ -8086,7 +8133,37 @@ mod tests {
         )?;
 
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0].slug, "models/gemini-2.5-flash");
+        assert_eq!(models[0].slug, "gemini-2.5-flash");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_provider_model_catalog_repairs_legacy_mistral_aliases_for_provider() -> Result<()> {
+        let provider = ModelProviderInfo {
+            name: "Mistral".to_string(),
+            base_url: Some("https://api.mistral.ai/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::ChatCompletions,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+        let models = parse_provider_model_catalog_with_provider(
+            br#"{"data":[{"id":"mistral-vibe-cli-with-tools","capabilities":{"chat_completion":true}},{"id":"mistral-medium-latest","capabilities":{"chat_completion":true}}]}"#,
+            Some(&provider),
+        )?;
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "mistral-medium-latest");
         Ok(())
     }
 
@@ -8290,6 +8367,59 @@ mod tests {
 
         assert!(sanitized[0].supported_reasoning_efforts.is_empty());
         assert_eq!(selected_reasoning_effort_for_preset(&sanitized[0]), None);
+    }
+
+    #[test]
+    fn chat_completions_provider_presets_restore_none_and_high_for_mistral_small() {
+        let provider = ModelProviderInfo {
+            name: "Mistral".to_string(),
+            base_url: Some("https://api.mistral.ai/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::ChatCompletions,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+        let sanitized = sanitize_provider_reasoning_presets(
+            vec![ModelPreset {
+                id: "mistral-small-latest".to_string(),
+                model: "mistral-small-latest".to_string(),
+                display_name: "mistral-small-latest".to_string(),
+                description: String::new(),
+                default_reasoning_effort: ReasoningEffortConfig::None,
+                supported_reasoning_efforts: Vec::new(),
+                supports_personality: false,
+                is_default: true,
+                upgrade: None,
+                show_in_picker: true,
+                availability_nux: None,
+                supported_in_api: true,
+                input_modalities: codex_protocol::openai_models::default_input_modalities(),
+            }],
+            &provider,
+        );
+
+        assert_eq!(
+            sanitized[0]
+                .supported_reasoning_efforts
+                .iter()
+                .map(|option| option.effort)
+                .collect::<Vec<_>>(),
+            vec![ReasoningEffortConfig::None, ReasoningEffortConfig::High]
+        );
+        assert_eq!(
+            selected_reasoning_effort_for_preset(&sanitized[0]),
+            Some(ReasoningEffortConfig::None)
+        );
     }
 
     #[test]

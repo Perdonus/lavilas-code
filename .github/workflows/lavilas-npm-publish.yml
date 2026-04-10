@@ -24,6 +24,18 @@ jobs:
             artifact_name: npm-codex-linux-arm64
             bin_path: codex-rs/target/aarch64-unknown-linux-musl/release/codex
             rust_target: aarch64-unknown-linux-musl
+          - os: macos-13
+            package: codex-darwin-x64
+            target_triple: x86_64-apple-darwin
+            artifact_name: npm-codex-darwin-x64
+            bin_path: codex-rs/target/x86_64-apple-darwin/release/codex
+            rust_target: x86_64-apple-darwin
+          - os: macos-14
+            package: codex-darwin-arm64
+            target_triple: aarch64-apple-darwin
+            artifact_name: npm-codex-darwin-arm64
+            bin_path: codex-rs/target/aarch64-apple-darwin/release/codex
+            rust_target: aarch64-apple-darwin
           - os: windows-latest
             package: codex-win32-x64
             target_triple: x86_64-pc-windows-msvc
@@ -375,6 +387,19 @@ jobs:
 
           bash .github/scripts/wait_for_npm_package.sh --timeout 900 "${refs[@]}"
 
+      - name: Smoke test staged base package against propagated platform packages (linux x64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/npm-smoke-staged"
+          rm -rf "$prefix"
+          npm install -g --prefix "$prefix" "$RUNNER_TEMP/pkg-codex"
+          node -e \
+            "require.resolve('@lavilas/codex-linux-x64/package.json', { paths: [process.argv[1]] })" \
+            "$prefix/lib/node_modules/@lavilas/codex"
+          "$prefix/bin/codex" --version
+          "$prefix/bin/lavilas" --version
+
       - name: Publish base package
         shell: bash
         env:
@@ -398,6 +423,12 @@ jobs:
           }
 
           publish_if_needed "$RUNNER_TEMP/pkg-codex"
+
+      - name: Wait for base package to propagate on npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/wait_for_npm_package.sh --timeout 900 "@lavilas/codex@${{ steps.version.outputs.release_version }}"
 
       - name: Smoke test npm install (linux x64)
         shell: bash

@@ -257,25 +257,25 @@ fn effective_wire_api_prioritizes_mistral_base_url_over_legacy_openai_flags() {
 }
 
 #[test]
-fn normalize_request_model_preserves_mistral_aliases() {
+fn normalize_request_model_repairs_mistral_aliases() {
     let provider =
         create_oss_provider_with_base_url("https://api.mistral.ai/v1", WireApi::Responses);
 
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli").as_ref(),
-        "mistral-vibe-cli"
+        "mistral-medium-latest"
     );
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-with-tools").as_ref(),
-        "mistral-vibe-cli-with-tools"
+        "mistral-medium-latest"
     );
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-fast").as_ref(),
-        "mistral-vibe-cli-fast"
+        "mistral-small-latest"
     );
     assert_eq!(
         normalize_request_model_for_provider(&provider, "mistral-vibe-cli-latest").as_ref(),
-        "mistral-vibe-cli-latest"
+        "mistral-medium-latest"
     );
 }
 
@@ -398,6 +398,79 @@ fn build_chat_completions_request_maps_reasoning_effort_for_mistral() {
             &prompt,
             &model_info,
             Some(codex_protocol::openai_models::ReasoningEffort::XHigh),
+        )
+        .expect("chat completions request");
+
+    assert_eq!(
+        request.reasoning_effort,
+        Some(codex_protocol::openai_models::ReasoningEffort::High)
+    );
+}
+
+#[test]
+fn build_chat_completions_request_omits_reasoning_effort_for_mistral_medium_with_stale_metadata() {
+    let client = test_model_client_with_provider(mistral_provider());
+    let prompt = super::Prompt {
+        base_instructions: BaseInstructions {
+            text: "".to_string(),
+        },
+        input: vec![],
+        tools: vec![],
+        parallel_tool_calls: false,
+        personality: None,
+        output_schema: None,
+    };
+    let mut model_info = test_model_info();
+    model_info.slug = "mistral-medium-latest".to_string();
+    model_info.default_reasoning_level = Some(codex_protocol::openai_models::ReasoningEffort::High);
+    model_info.supported_reasoning_levels = vec![ReasoningEffortPreset {
+        effort: codex_protocol::openai_models::ReasoningEffort::High,
+        description: "high".to_string(),
+    }];
+    let request = client
+        .new_session()
+        .build_chat_completions_request(
+            &prompt,
+            &model_info,
+            Some(codex_protocol::openai_models::ReasoningEffort::High),
+        )
+        .expect("chat completions request");
+
+    assert_eq!(request.reasoning_effort, None);
+}
+
+#[test]
+fn build_chat_completions_request_keeps_reasoning_effort_for_mistral_small_models() {
+    let client = test_model_client_with_provider(mistral_provider());
+    let prompt = super::Prompt {
+        base_instructions: BaseInstructions {
+            text: "".to_string(),
+        },
+        input: vec![],
+        tools: vec![],
+        parallel_tool_calls: false,
+        personality: None,
+        output_schema: None,
+    };
+    let mut model_info = test_model_info();
+    model_info.slug = "mistral-small-latest".to_string();
+    model_info.default_reasoning_level = Some(codex_protocol::openai_models::ReasoningEffort::None);
+    model_info.supported_reasoning_levels = vec![
+        ReasoningEffortPreset {
+            effort: codex_protocol::openai_models::ReasoningEffort::None,
+            description: "none".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: codex_protocol::openai_models::ReasoningEffort::High,
+            description: "high".to_string(),
+        },
+    ];
+    let request = client
+        .new_session()
+        .build_chat_completions_request(
+            &prompt,
+            &model_info,
+            Some(codex_protocol::openai_models::ReasoningEffort::High),
         )
         .expect("chat completions request");
 

@@ -158,6 +158,28 @@ fn mistral_provider_supports_reasoning_controls() {
 }
 
 #[test]
+fn mistral_model_reasoning_effort_support_is_model_specific() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://api.mistral.ai/v1".to_string()));
+
+    assert!(!provider.model_supports_chat_completions_reasoning_effort("mistral-medium-latest"));
+    assert!(!provider.model_supports_chat_completions_reasoning_effort(
+        "mistral-vibe-cli-with-tools"
+    ));
+    assert!(provider.model_supports_chat_completions_reasoning_effort("mistral-small-latest"));
+    assert!(provider.model_supports_chat_completions_reasoning_effort("mistral-vibe-cli-fast"));
+}
+
+#[test]
+fn gemini_model_reasoning_effort_support_stays_disabled() {
+    let provider = ModelProviderInfo::create_openai_provider(Some(
+        "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
+    ));
+
+    assert!(!provider.model_supports_chat_completions_reasoning_effort("gemini-2.5-pro"));
+}
+
+#[test]
 fn gemini_host_detection_uses_parsed_host() {
     let provider = ModelProviderInfo::create_openai_provider(Some(
         "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
@@ -170,7 +192,7 @@ fn gemini_host_detection_uses_parsed_host() {
 fn canonicalize_provider_model_slug_repairs_mistral_tool_alias() {
     assert_eq!(
         canonicalize_provider_model_slug("mistral-vibe-cli-with-tools"),
-        Some("mistral-vibe-cli".to_string())
+        Some("mistral-medium-latest".to_string())
     );
 }
 
@@ -178,7 +200,7 @@ fn canonicalize_provider_model_slug_repairs_mistral_tool_alias() {
 fn canonicalize_provider_model_slug_preserves_namespace() {
     assert_eq!(
         canonicalize_provider_model_slug("mistral/mistral-vibe-cli-fast"),
-        Some("mistral/mistral-vibe-cli".to_string())
+        Some("mistral/mistral-small-latest".to_string())
     );
 }
 

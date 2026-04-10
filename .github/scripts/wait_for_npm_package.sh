@@ -5,8 +5,8 @@ usage() {
   cat <<'USAGE'
 Usage: wait_for_npm_package.sh [--timeout SECONDS] [--interval SECONDS] <package@version>...
 
-Wait until npm metadata is available and the published tarball responds with HTTP 200
-for every specified package reference.
+Wait until npm metadata is available and npm can resolve the exact package
+reference via `npm pack`.
 USAGE
 }
 
@@ -49,11 +49,14 @@ for package_ref in "${package_refs[@]}"; do
     tarball="${tarball//$'\n'/}"
 
     if [[ -n "$tarball" && "$tarball" != "undefined" && "$tarball" != "null" ]]; then
-      if curl --silent --show-error --location --head --fail "$tarball" >/dev/null; then
+      pack_dir="$(mktemp -d)"
+      if (cd "$pack_dir" && npm pack "$package_ref" --silent >/dev/null 2>&1); then
+        rm -rf "$pack_dir"
         echo "Available: $package_ref -> $tarball"
         break
       fi
-      echo "Tarball not reachable yet for $package_ref: $tarball"
+      rm -rf "$pack_dir"
+      echo "Metadata ready but npm pack still fails for $package_ref"
     else
       echo "Metadata not ready yet for $package_ref"
     fi

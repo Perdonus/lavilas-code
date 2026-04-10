@@ -21,11 +21,17 @@ const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective so
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 const COMPATIBILITY_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
 const GEMINI_LEGACY_FLASH_MODEL: &str = "gemini-flash-latest";
+const GEMINI_LEGACY_FLASH_LITE_MODEL: &str = "gemini-flash-lite-latest";
 const GEMINI_LEGACY_PRO_MODEL: &str = "gemini-pro-latest";
 const GEMINI_CANONICAL_FLASH_MODEL: &str = "gemini-2.5-flash";
+const GEMINI_CANONICAL_FLASH_LITE_MODEL: &str = "gemini-2.5-flash-lite";
 const GEMINI_CANONICAL_PRO_MODEL: &str = "gemini-2.5-pro";
 const MISTRAL_LEGACY_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
-const MISTRAL_CANONICAL_MODEL: &str = "mistral-vibe-cli";
+const MISTRAL_LEGACY_VIBE_CLI_LATEST_MODEL: &str = "mistral-vibe-cli-latest";
+const MISTRAL_LEGACY_VIBE_CLI_TOOLS_MODEL: &str = "mistral-vibe-cli-with-tools";
+const MISTRAL_LEGACY_VIBE_CLI_FAST_MODEL: &str = "mistral-vibe-cli-fast";
+const MISTRAL_CANONICAL_MEDIUM_MODEL: &str = "mistral-medium-latest";
+const MISTRAL_CANONICAL_FAST_MODEL: &str = "mistral-small-latest";
 const COMPATIBILITY_PROVIDER_HINTS: [&str; 16] = [
     "anthropic",
     "claude",
@@ -121,6 +127,7 @@ pub fn normalize_provider_model_alias_slug(slug: &str) -> Option<String> {
         .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
     let normalized_tail = match tail.to_ascii_lowercase().as_str() {
         GEMINI_LEGACY_FLASH_MODEL => GEMINI_CANONICAL_FLASH_MODEL,
+        GEMINI_LEGACY_FLASH_LITE_MODEL => GEMINI_CANONICAL_FLASH_LITE_MODEL,
         GEMINI_LEGACY_PRO_MODEL => GEMINI_CANONICAL_PRO_MODEL,
         _ => return None,
     };
@@ -129,6 +136,37 @@ pub fn normalize_provider_model_alias_slug(slug: &str) -> Option<String> {
         Some(prefix) => format!("{prefix}/{normalized_tail}"),
         None => normalized_tail.to_string(),
     })
+}
+
+pub fn normalize_provider_model_for_family(provider: &str, model: &str) -> String {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if provider.eq_ignore_ascii_case("gemini") {
+        let normalized = trimmed
+            .strip_prefix("models/")
+            .or_else(|| trimmed.strip_prefix("MODELS/"))
+            .map(str::trim)
+            .unwrap_or(trimmed);
+        if let Some(alias) = normalize_provider_model_alias_slug(normalized) {
+            return alias
+                .rsplit('/')
+                .next()
+                .unwrap_or(alias.as_str())
+                .to_string();
+        }
+        return normalized.to_ascii_lowercase();
+    }
+
+    if provider.eq_ignore_ascii_case("mistral")
+        && let Some(canonical) = canonicalize_provider_model_slug(trimmed)
+    {
+        return canonical;
+    }
+
+    trimmed.to_string()
 }
 
 fn generic_model_info_from_slug(slug: &str, used_fallback_model_metadata: bool) -> ModelInfo {
@@ -253,21 +291,28 @@ fn canonicalize_mistral_variant_slug(slug: &str) -> Option<String> {
         None => (None, slug),
     };
 
-    let canonical_terminal = if terminal_segment.eq_ignore_ascii_case(MISTRAL_CANONICAL_MODEL)
-        || terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL)
-        || terminal_segment.eq_ignore_ascii_case("mistral-vibe-cli-with-tools")
-    {
-        Some(MISTRAL_CANONICAL_MODEL)
-    } else {
-        COMPATIBILITY_VARIANT_SUFFIXES
-            .iter()
-            .find_map(|suffix| terminal_segment.strip_suffix(suffix))
-            .filter(|base| {
-                base.eq_ignore_ascii_case(MISTRAL_CANONICAL_MODEL)
-                    || base.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL)
+    let canonical_terminal =
+        if terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_FAST_MODEL) {
+            Some(MISTRAL_CANONICAL_FAST_MODEL)
+        } else if terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL)
+            || terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_LATEST_MODEL)
+            || terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_TOOLS_MODEL)
+        {
+            Some(MISTRAL_CANONICAL_MEDIUM_MODEL)
+        } else {
+            COMPATIBILITY_VARIANT_SUFFIXES.iter().find_map(|suffix| {
+                let base = terminal_segment.strip_suffix(suffix)?;
+                if !base.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL) {
+                    return None;
+                }
+
+                if suffix.eq_ignore_ascii_case("-fast") {
+                    Some(MISTRAL_CANONICAL_FAST_MODEL)
+                } else {
+                    Some(MISTRAL_CANONICAL_MEDIUM_MODEL)
+                }
             })
-            .map(|_| MISTRAL_CANONICAL_MODEL)
-    }?;
+        }?;
 
     Some(match prefix {
         Some(prefix) => format!("{prefix}/{canonical_terminal}"),
