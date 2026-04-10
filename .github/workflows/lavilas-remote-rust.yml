@@ -35,8 +35,6 @@ jobs:
         env:
           CARGO_TEST_FILTER: ${{ inputs.cargo_test_filter }}
         run: |
-          if [ -n "$CARGO_TEST_FILTER" ]; then
-            cargo test -p codex-app-server "$CARGO_TEST_FILTER"
-          else
-            cargo test -p codex-app-server
-          fi
+          DEFAULT_CARGO_TEST_FILTER="thread_list_includes_original_codex_custom_sources_by_default"
+          EFFECTIVE_CARGO_TEST_FILTER="${CARGO_TEST_FILTER:-$DEFAULT_CARGO_TEST_FILTER}"
+          cargo test -p codex-app-server "$EFFECTIVE_CARGO_TEST_FILTER"
