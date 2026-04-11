@@ -659,12 +659,92 @@ fn build_chat_completions_messages_uses_user_instructions_for_mistral_tool_histo
     .expect("chat completions messages");
 
     assert_eq!(messages[0].role, "user");
-    assert_eq!(messages[1].role, "user");
-    assert_eq!(messages[2].role, "assistant");
-    assert_eq!(messages[3].role, "tool");
+    assert_eq!(messages[1].role, "assistant");
+    assert_eq!(messages[2].role, "tool");
+    assert_eq!(messages[3].role, "user");
     assert!(
         messages.iter().all(|message| message.role != "system"),
         "Mistral/Gemini-compatible requests should avoid system-role replays: {messages:?}"
+    );
+}
+
+#[test]
+fn build_chat_completions_messages_preserves_mistral_user_turn_boundaries() {
+    let provider = mistral_provider();
+    let messages = build_chat_completions_messages(
+        &provider,
+        "system prompt",
+        &[
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "first ask".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "first answer".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "second ask".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "second answer".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "third ask".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ],
+    )
+    .expect("chat completions messages");
+
+    let user_messages = messages
+        .iter()
+        .filter(|message| message.role == "user")
+        .map(|message| message.content.clone().expect("user content"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        user_messages,
+        vec![
+            json!("system prompt"),
+            json!("first ask"),
+            json!("second ask"),
+            json!("third ask"),
+        ]
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.role.as_str())
+            .collect::<Vec<_>>(),
+        vec!["user", "user", "assistant", "user", "assistant", "user"]
     );
 }
 

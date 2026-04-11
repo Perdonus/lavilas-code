@@ -2623,10 +2623,32 @@ impl App {
         Ok(true)
     }
 
-    fn delete_stored_profile(&mut self, profile_key: &str) {
+    async fn delete_stored_profile(&mut self, profile_key: &str) {
         let is_ru = self.ui_language_is_ru();
         let profile_path = stored_profile_path(self.config.codex_home.as_path(), profile_key);
         let stored_profile = load_stored_profile(profile_path.as_path()).ok();
+        let config_profile = stored_profile
+            .as_ref()
+            .and_then(|profile| profile.config_profile.clone())
+            .unwrap_or_else(|| profile_key.to_string());
+        let mut profiles_to_clear = HashSet::from([profile_key.to_string(), config_profile.clone()]);
+        let mut provider_keys_to_clear =
+            HashSet::from([format!("{profile_key}-provider"), format!("{config_profile}-provider")]);
+        if let Some(profile) = stored_profile.as_ref() {
+            let provider_key = account_provider_spec(profile.provider.as_str())
+                .and_then(|spec| {
+                    (spec.builtin_model_provider_id.is_none()).then(|| {
+                        profile
+                            .model_provider_id
+                            .clone()
+                            .unwrap_or_else(|| format!("{profile_key}-provider"))
+                    })
+                })
+                .or_else(|| profile.model_provider_id.clone());
+            if let Some(provider_key) = provider_key {
+                provider_keys_to_clear.insert(provider_key);
+            }
+        }
         let derived_catalog_path =
             profile_path.with_file_name(format!("{profile_key}.models.json"));
         let mut removed_any = false;
@@ -2654,8 +2676,46 @@ impl App {
             }
         }
 
+        let active_profile_deleted = self
+            .config
+            .active_profile
+            .as_deref()
+            .is_some_and(|active| active == profile_key || active == config_profile);
+        let mut edits = profiles_to_clear
+            .drain()
+            .map(|profile| ConfigEdit::ClearPath {
+                segments: vec!["profiles".to_string(), profile],
+            })
+            .collect::<Vec<_>>();
+        edits.extend(
+            provider_keys_to_clear
+                .drain()
+                .map(|provider_key| ConfigEdit::ClearPath {
+                    segments: vec!["model_providers".to_string(), provider_key],
+                }),
+        );
+        if active_profile_deleted {
+            edits.push(ConfigEdit::ClearPath {
+                segments: vec!["profile".to_string()],
+            });
+        }
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            self.chat_widget.add_error_message(if is_ru {
+                format!("Не удалось очистить конфигурацию профиля `{profile_key}`: {err}")
+            } else {
+                format!("Failed to clean config for profile `{profile_key}`: {err}")
+            });
+            return;
+        }
+        self.refresh_in_memory_config_from_disk_best_effort("deleting stored profile")
+            .await;
+
         if removed_any {
-            let active_hint = if self.config.active_profile.as_deref() == Some(profile_key) {
+            let active_hint = if active_profile_deleted {
                 Some(if is_ru {
                     "Удалён только сохранённый профиль. Текущая сессия останется активной до переключения аккаунта."
                         .to_string()
@@ -6087,7 +6147,7 @@ impl App {
                     .await?;
             }
             AppEvent::DeleteStoredProfile { profile_key } => {
-                self.delete_stored_profile(profile_key.as_str());
+                self.delete_stored_profile(profile_key.as_str()).await;
             }
             AppEvent::OpenLanguagePicker => {
                 self.chat_widget.open_language_picker_popup();
@@ -12390,6 +12450,70 @@ guardian_approval = true
         app.refresh_in_memory_config_from_disk().await?;
 
         assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_stored_profile_clears_profile_and_provider_config_entries() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        let codex_home_path = codex_home.path().to_path_buf();
+        let sidecar_path = codex_home_path
+            .join("Profiles")
+            .join("mistral-profile.models.json");
+
+        app.config.codex_home = codex_home_path.clone();
+        app.active_profile = Some("mistral-profile".to_string());
+        app.config.active_profile = Some("mistral-profile".to_string());
+
+        std::fs::create_dir_all(sidecar_path.parent().expect("sidecar parent"))?;
+        std::fs::write(&sidecar_path, "{\n  \"models\": []\n}\n")?;
+        save_stored_profile(
+            &codex_home_path,
+            "mistral-profile",
+            &StoredAccountProfile {
+                provider: "mistral".to_string(),
+                name: "Mistral".to_string(),
+                base_url: Some("https://api.mistral.ai/v1".to_string()),
+                model: "devstral-latest".to_string(),
+                model_catalog_json: Some(sidecar_path.clone()),
+                config_profile: Some("mistral-profile".to_string()),
+                model_provider_id: Some("mistral-profile-provider".to_string()),
+                experimental_bearer_token: Some("test-token".to_string()),
+            },
+        )?;
+        std::fs::write(
+            codex_home_path.join("config.toml"),
+            format!(
+                r#"profile = "mistral-profile"
+
+[profiles.mistral-profile]
+model_provider = "mistral-profile-provider"
+model = "devstral-latest"
+model_catalog_json = "{sidecar}"
+
+[model_providers.mistral-profile-provider]
+name = "Mistral"
+base_url = "https://api.mistral.ai/v1"
+wire_api = "chat_completions"
+requires_openai_auth = false
+supports_websockets = false
+experimental_bearer_token = "test-token"
+"#,
+                sidecar = sidecar_path.display()
+            ),
+        )?;
+
+        app.delete_stored_profile("mistral-profile").await;
+
+        let config = std::fs::read_to_string(codex_home_path.join("config.toml"))?;
+        assert!(!config.contains(r#"profile = "mistral-profile""#));
+        assert!(!config.contains("[profiles.mistral-profile]"));
+        assert!(!config.contains("[model_providers.mistral-profile-provider]"));
+        assert!(!stored_profile_path(&codex_home_path, "mistral-profile").exists());
+        assert!(!sidecar_path.exists());
+        assert_eq!(app.active_profile, None);
+        assert_eq!(app.config.active_profile, None);
         Ok(())
     }
 

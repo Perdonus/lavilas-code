@@ -2540,8 +2540,14 @@ fn build_chat_completions_messages(
             ResponseItem::Message { role, content, .. } => {
                 let text = content_items_to_chat_text(content);
                 if !text.is_empty() {
+                    // Mistral/Gemini translate developer/system instructions
+                    // into a `user` role, but real user turns must remain
+                    // normal chat messages or later prompts get collapsed into
+                    // a stale instruction tail.
+                    let is_instruction_message = role.eq_ignore_ascii_case("developer")
+                        || role.eq_ignore_ascii_case("system");
                     let normalized_role = normalize_chat_completions_role(provider, role);
-                    if normalized_role.eq_ignore_ascii_case(instructions_role) {
+                    if is_instruction_message {
                         if messages.is_empty() {
                             leading_instruction_segments.push(text);
                         } else {
