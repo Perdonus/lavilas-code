@@ -132,9 +132,10 @@ fn map_api_error_extracts_identity_auth_details_from_headers() {
 }
 
 #[test]
-fn map_api_error_preserves_generic_provider_429_as_unexpected_status() {
+fn map_api_error_maps_generic_provider_429_to_retryable_stream() {
     let mut headers = HeaderMap::new();
     headers.insert(REQUEST_ID_HEADER, http::HeaderValue::from_static("req-429"));
+    headers.insert("retry-after", http::HeaderValue::from_static("7"));
     let body = serde_json::json!({
         "error": {
             "message": "Slow down"
@@ -149,12 +150,11 @@ fn map_api_error_preserves_generic_provider_429_as_unexpected_status() {
         body: Some(body),
     }));
 
-    let CodexErr::UnexpectedStatus(err) = err else {
-        panic!("expected CodexErr::UnexpectedStatus, got {err:?}");
+    let CodexErr::Stream(message, delay) = err else {
+        panic!("expected CodexErr::Stream, got {err:?}");
     };
-    assert_eq!(err.status, http::StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(err.request_id.as_deref(), Some("req-429"));
-    assert_eq!(err.body, r#"{"error":{"message":"Slow down"}}"#);
+    assert_eq!(message, r#"{"error":{"message":"Slow down"}}"#);
+    assert_eq!(delay, Some(std::time::Duration::from_secs(7)));
 }
 
 #[test]

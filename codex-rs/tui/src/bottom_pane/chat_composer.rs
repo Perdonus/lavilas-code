@@ -2604,6 +2604,15 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.handle_submission(/*should_queue*/ false),
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::SHIFT) => self.handle_input_basic(KeyEvent {
+                code: KeyCode::Enter,
+                modifiers,
+                ..key_event
+            }),
             input => self.handle_input_basic(input),
         }
     }
@@ -5534,6 +5543,32 @@ mod tests {
     /// Behavior: while a paste-like burst is active, Enter should not submit; it should insert a
     /// newline into the buffered payload and flush as a single paste later.
     #[test]
+    fn shift_enter_inserts_newline_without_submitting() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Спросите помощника Lavilas о чём угодно".to_string(),
+            /*disable_paste_burst*/ true,
+        );
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let (result, redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert!(matches!(result, InputResult::None));
+        assert!(redraw);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+
+        assert_eq!(composer.textarea.text(), "a
+b");
+    }
+
     fn ascii_burst_treats_enter_as_newline() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;

@@ -88,6 +88,13 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                         }
                     }
 
+                    if is_retryable_provider_rate_limit(headers.as_ref(), &body_text) {
+                        return CodexErr::Stream(
+                            body_text,
+                            extract_retry_after_delay(headers.as_ref()),
+                        );
+                    }
+
                     unexpected_http_status_error(status, url, headers.as_ref(), body_text)
                 } else {
                     unexpected_http_status_error(status, url, headers.as_ref(), body_text)
@@ -133,6 +140,26 @@ fn unexpected_http_status_error(
 #[cfg(test)]
 #[path = "api_bridge_tests.rs"]
 mod tests;
+
+fn is_retryable_provider_rate_limit(headers: Option<&HeaderMap>, body: &str) -> bool {
+    if extract_header(headers, ACTIVE_LIMIT_HEADER).is_some() {
+        return false;
+    }
+
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|value| value.get("error").cloned())
+        .and_then(|error| error.get("type").and_then(Value::as_str).map(str::to_string))
+        .is_none_or(|error_type| {
+            error_type != "usage_limit_reached" && error_type != "usage_not_included"
+        })
+}
+
+fn extract_retry_after_delay(headers: Option<&HeaderMap>) -> Option<std::time::Duration> {
+    let raw = extract_header(headers, "retry-after")?;
+    let seconds = raw.trim().parse::<u64>().ok()?;
+    Some(std::time::Duration::from_secs(seconds))
+}
 
 fn extract_request_id(headers: Option<&HeaderMap>) -> Option<String> {
     extract_header(headers, REQUEST_ID_HEADER)
