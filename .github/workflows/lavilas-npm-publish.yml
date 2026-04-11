@@ -393,7 +393,8 @@ jobs:
           set -euo pipefail
           prefix="$RUNNER_TEMP/npm-smoke-staged"
           rm -rf "$prefix"
-          npm install -g --prefix "$prefix" "$RUNNER_TEMP/pkg-codex"
+          tarball_name="$(cd "$RUNNER_TEMP/pkg-codex" && npm pack --pack-destination "$RUNNER_TEMP" --silent | tail -n1)"
+          npm install -g --prefix "$prefix" "$RUNNER_TEMP/$tarball_name"
           node -e \
             "require.resolve('@lavilas/codex-linux-x64/package.json', { paths: [process.argv[1]] })" \
             "$prefix/lib/node_modules/@lavilas/codex"
