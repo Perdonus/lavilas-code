@@ -2354,11 +2354,15 @@ impl ChatCompletionsMessage {
 struct ChatCompletionToolCall {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
-    #[serde(rename = "type")]
+    #[serde(default = "default_chat_completion_tool_call_kind", rename = "type")]
     kind: String,
     function: ChatCompletionCalledFunction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extra_content: Option<ChatCompletionToolCallExtraContent>,
+}
+
+fn default_chat_completion_tool_call_kind() -> String {
+    "function".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

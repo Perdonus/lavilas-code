@@ -879,6 +879,48 @@ fn chat_completions_response_preserves_gemini_thought_signature_on_tool_calls() 
 }
 
 #[test]
+fn chat_completions_response_allows_missing_tool_call_type() {
+    let response: ChatCompletionsResponse = serde_json::from_value(json!({
+        "id": "resp-1",
+        "model": "mistral-small-latest",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "function": {
+                        "name": "exec_command",
+                        "arguments": "{\"cmd\":\"pwd\"}"
+                    }
+                }]
+            }
+        }]
+    }))
+    .expect("chat completions response");
+
+    let events = chat_completions_response_to_events(response).expect("events");
+    let function_call = events.into_iter().find_map(|event| match event {
+        super::ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+            name,
+            arguments,
+            call_id,
+            ..
+        }) => Some((name, arguments, call_id)),
+        _ => None,
+    });
+
+    assert_eq!(
+        function_call,
+        Some((
+            "exec_command".to_string(),
+            "{\"cmd\":\"pwd\"}".to_string(),
+            "call-1".to_string(),
+        ))
+    );
+}
+
+#[test]
 fn reconfigure_updates_runtime_provider_and_resets_transport_fallback_state() {
     let client = test_model_client(SessionSource::Cli);
     client
