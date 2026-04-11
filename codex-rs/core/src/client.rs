@@ -2503,6 +2503,7 @@ fn build_chat_completions_messages(
     }
 
     let mut tool_names_by_call_id: HashMap<String, String> = HashMap::new();
+    let mut trailing_instruction_segments = Vec::new();
     for item in input {
         match item {
             ResponseItem::Message { role, content, .. } => {
@@ -2510,7 +2511,11 @@ fn build_chat_completions_messages(
                 if !text.is_empty() {
                     let normalized_role = normalize_chat_completions_role(provider, role);
                     if normalized_role.eq_ignore_ascii_case(instructions_role) {
-                        leading_instruction_segments.push(text);
+                        if messages.is_empty() {
+                            leading_instruction_segments.push(text);
+                        } else {
+                            trailing_instruction_segments.push(text);
+                        }
                     } else {
                         messages.push(ChatCompletionsMessage::text(normalized_role, text));
                     }
@@ -2643,6 +2648,13 @@ fn build_chat_completions_messages(
                 leading_instruction_segments.join("\n\n"),
             ),
         );
+    }
+
+    if !trailing_instruction_segments.is_empty() {
+        messages.push(ChatCompletionsMessage::text(
+            "user",
+            trailing_instruction_segments.join("\n\n"),
+        ));
     }
 
     Ok(messages)

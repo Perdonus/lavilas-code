@@ -669,6 +669,51 @@ fn build_chat_completions_messages_uses_user_instructions_for_mistral_tool_histo
 }
 
 #[test]
+fn build_chat_completions_messages_rewrites_trailing_mistral_instructions_to_user_tail() {
+    let provider = mistral_provider();
+    let messages = build_chat_completions_messages(
+        &provider,
+        "",
+        &[
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "run it".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "done".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "keep it terse".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ],
+    )
+    .expect("chat completions messages");
+
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[1].role, "assistant");
+    assert_eq!(messages[2].role, "user");
+    assert_eq!(messages[2].content, Some(json!("keep it terse")));
+}
+
+#[test]
 fn build_chat_completions_messages_never_emits_system_after_tool() {
     let provider =
         create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::ChatCompletions);
