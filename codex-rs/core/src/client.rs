@@ -82,6 +82,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_tools::ToolSpec;
 use codex_tools::create_tools_json_for_responses_api;
+use codex_utils_cache::sha1_digest;
 use codex_utils_stream_parser::strip_hidden_reasoning_tags;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
@@ -195,6 +196,32 @@ fn normalize_chat_completions_role<'a>(provider: &ModelProviderInfo, role: &'a s
     } else {
         role
     }
+}
+
+fn mistral_tool_call_id_is_valid(call_id: &str) -> bool {
+    call_id.len() == 9 && call_id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn normalize_chat_completions_tool_call_id(
+    provider: &ModelProviderInfo,
+    call_id: &str,
+) -> String {
+    if !provider_uses_mistral_api(provider) || mistral_tool_call_id_is_valid(call_id) {
+        return call_id.to_string();
+    }
+
+    let digest = sha1_digest(call_id.as_bytes());
+    let mut normalized = String::with_capacity(9);
+    for byte in digest {
+        use std::fmt::Write;
+
+        let _ = write!(&mut normalized, "{byte:02x}");
+        if normalized.len() >= 9 {
+            normalized.truncate(9);
+            break;
+        }
+    }
+    normalized
 }
 
 fn encode_google_thought_signature(thought_signature: &str) -> String {
@@ -2530,7 +2557,9 @@ fn build_chat_completions_messages(
                 ..
             } => {
                 let tool_name = chat_completion_tool_name(name, namespace.as_deref());
-                tool_names_by_call_id.insert(call_id.clone(), tool_name.clone());
+                let provider_call_id =
+                    normalize_chat_completions_tool_call_id(provider, call_id.as_str());
+                tool_names_by_call_id.insert(provider_call_id.clone(), tool_name.clone());
                 let extra_content = if provider_uses_gemini_api(provider) {
                     decode_google_thought_signature(id.as_ref()).map(|thought_signature| {
                         ChatCompletionToolCallExtraContent {
@@ -2544,7 +2573,7 @@ fn build_chat_completions_messages(
                 };
                 messages.push(ChatCompletionsMessage::assistant_tool_call(
                     tool_name,
-                    call_id.clone(),
+                    provider_call_id,
                     arguments.clone(),
                     extra_content,
                 ));
@@ -2555,10 +2584,12 @@ fn build_chat_completions_messages(
                 call_id,
                 ..
             } => {
-                tool_names_by_call_id.insert(call_id.clone(), name.clone());
+                let provider_call_id =
+                    normalize_chat_completions_tool_call_id(provider, call_id.as_str());
+                tool_names_by_call_id.insert(provider_call_id.clone(), name.clone());
                 messages.push(ChatCompletionsMessage::assistant_tool_call(
                     name.clone(),
-                    call_id.clone(),
+                    provider_call_id,
                     serde_json::to_string(&json!({ "input": input }))?,
                     None,
                 ));
@@ -2570,10 +2601,12 @@ fn build_chat_completions_messages(
                 ..
             } if execution == "client" => {
                 let tool_name = "tool_search".to_string();
-                tool_names_by_call_id.insert(call_id.clone(), tool_name.clone());
+                let provider_call_id =
+                    normalize_chat_completions_tool_call_id(provider, call_id.as_str());
+                tool_names_by_call_id.insert(provider_call_id.clone(), tool_name.clone());
                 messages.push(ChatCompletionsMessage::assistant_tool_call(
                     tool_name,
-                    call_id.clone(),
+                    provider_call_id,
                     serde_json::to_string(arguments)?,
                     None,
                 ));
@@ -2590,15 +2623,22 @@ fn build_chat_completions_messages(
                 let tool_name = "local_shell".to_string();
                 let arguments =
                     serde_json::to_string(&shell_tool_params_from_local_shell_action(action))?;
-                tool_names_by_call_id.insert(call_id.clone(), tool_name.clone());
+                let provider_call_id =
+                    normalize_chat_completions_tool_call_id(provider, call_id.as_str());
+                tool_names_by_call_id.insert(provider_call_id.clone(), tool_name.clone());
                 messages.push(ChatCompletionsMessage::assistant_tool_call(
-                    tool_name, call_id, arguments, None,
+                    tool_name,
+                    provider_call_id,
+                    arguments,
+                    None,
                 ));
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
+                let provider_call_id =
+                    normalize_chat_completions_tool_call_id(provider, call_id.as_str());
                 messages.push(ChatCompletionsMessage::tool(
-                    tool_names_by_call_id.get(call_id).cloned(),
-                    call_id.clone(),
+                    tool_names_by_call_id.get(&provider_call_id).cloned(),
+                    provider_call_id,
                     tool_output_to_chat_text(output),
                 ));
             }
@@ -2607,10 +2647,12 @@ fn build_chat_completions_messages(
                 name,
                 output,
             } => {
+                let provider_call_id =
+                    normalize_chat_completions_tool_call_id(provider, call_id.as_str());
                 messages.push(ChatCompletionsMessage::tool(
                     name.clone()
-                        .or_else(|| tool_names_by_call_id.get(call_id).cloned()),
-                    call_id.clone(),
+                        .or_else(|| tool_names_by_call_id.get(&provider_call_id).cloned()),
+                    provider_call_id,
                     tool_output_to_chat_text(output),
                 ));
             }
@@ -2619,12 +2661,14 @@ fn build_chat_completions_messages(
                 tools,
                 ..
             } => {
+                let provider_call_id =
+                    normalize_chat_completions_tool_call_id(provider, call_id.as_str());
                 messages.push(ChatCompletionsMessage::tool(
                     tool_names_by_call_id
-                        .get(call_id)
+                        .get(&provider_call_id)
                         .cloned()
                         .or_else(|| Some("tool_search".to_string())),
-                    call_id.clone(),
+                    provider_call_id,
                     serde_json::to_string(tools)
                         .unwrap_or_else(|_| JsonValue::Array(tools.clone()).to_string()),
                 ));

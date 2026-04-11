@@ -714,6 +714,43 @@ fn build_chat_completions_messages_rewrites_trailing_mistral_instructions_to_use
 }
 
 #[test]
+fn build_chat_completions_messages_sanitizes_mistral_tool_call_ids() {
+    let provider = mistral_provider();
+    let original_call_id = "call_Smc1D0Q5cb1b6Gh1KASesy74".to_string();
+    let messages = build_chat_completions_messages(
+        &provider,
+        "",
+        &[
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: original_call_id.clone(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: original_call_id,
+                output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                    "ok".to_string(),
+                ),
+            },
+        ],
+    )
+    .expect("chat completions messages");
+
+    let tool_call_id = messages[0]
+        .tool_calls
+        .as_ref()
+        .and_then(|tool_calls| tool_calls.first())
+        .and_then(|tool_call| tool_call.id.as_deref())
+        .expect("assistant tool call id");
+
+    assert_eq!(tool_call_id.len(), 9);
+    assert!(tool_call_id.chars().all(|ch| ch.is_ascii_alphanumeric()));
+    assert_eq!(messages[1].tool_call_id.as_deref(), Some(tool_call_id));
+}
+
+#[test]
 fn build_chat_completions_messages_never_emits_system_after_tool() {
     let provider =
         create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::ChatCompletions);
