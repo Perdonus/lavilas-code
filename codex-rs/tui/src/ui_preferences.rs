@@ -587,7 +587,7 @@ fn seed_model_info(seed: ProfileCatalogSeed) -> serde_json::Value {
         "priority": 0,
         "availability_nux": null,
         "upgrade": null,
-        "base_instructions": "You are Lavilas Codex, a coding assistant focused on software tasks.",
+        "base_instructions": "You are Lavilas Codex, a coding assistant focused on software tasks. Inspect the workspace and local system with tools before making assumptions, then act precisely.",
         "supports_reasoning_summaries": false,
         "default_reasoning_summary": "none",
         "support_verbosity": true,

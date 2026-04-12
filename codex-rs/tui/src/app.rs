@@ -7912,7 +7912,7 @@ async fn fetch_loaded_subagent_threads(
                 request_id,
                 params: ThreadLoadedListParams {
                     cursor: cursor.clone(),
-                    limit: Some(SUBAGENT_BACKFILL_PAGE_SIZE),
+                    limit: Some(SUBAGENT_BACKFILL_PAGE_SIZE.try_into().unwrap()),
                 },
             })
             .await

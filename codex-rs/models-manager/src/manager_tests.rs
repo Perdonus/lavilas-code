@@ -694,6 +694,58 @@ async fn refresh_available_models_uses_provider_auth_token() {
 }
 
 #[tokio::test]
+async fn refresh_available_models_allows_remote_refresh_for_provider_backed_custom_catalog() {
+    let server = MockServer::start().await;
+    let auth_script = ProviderAuthScript::new(&["provider-token"]).unwrap();
+    let remote_models = vec![remote_model("provider-live-model", "Provider Live", 0)];
+
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .and(header_regex("Authorization", "Bearer provider-token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(ModelsResponse {
+                    models: remote_models.clone(),
+                }),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("unused"));
+    let provider = ModelProviderInfo {
+        auth: Some(auth_script.auth_config()),
+        ..provider_for(server.uri())
+    };
+    let seeded_catalog = ModelsResponse {
+        models: vec![remote_model("seed-model", "Seed", 10)],
+    };
+    let manager = ModelsManager::new_with_provider(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        Some(seeded_catalog),
+        CollaborationModesConfig::default(),
+        provider,
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("provider-backed custom catalog should still refresh");
+
+    let available = manager.get_remote_models().await;
+    assert_models_contain(&available, &remote_models);
+    assert!(
+        !available
+            .iter()
+            .any(|candidate| candidate.slug == "seed-model"),
+        "live refresh should replace the bootstrap snapshot for provider-backed custom catalogs"
+    );
+}
+
+#[tokio::test]
 async fn refresh_available_models_accepts_openai_compatible_catalog() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

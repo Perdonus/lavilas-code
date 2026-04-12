@@ -977,6 +977,43 @@ fn build_chat_completions_messages_replays_builtin_provider_tools_as_tool_histor
 }
 
 #[test]
+fn build_chat_completions_messages_skips_unavailable_builtin_history_tools_when_known() {
+    let provider =
+        create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::ChatCompletions);
+    let action: codex_protocol::models::WebSearchAction = serde_json::from_value(json!({
+        "type": "search",
+        "query": "weather in kudrovo",
+    }))
+    .expect("web search action");
+    let available_tool_names = HashSet::from(["local_shell".to_string()]);
+
+    let messages = build_chat_completions_messages_with_tools(
+        &provider,
+        "",
+        &[
+            ResponseItem::WebSearchCall {
+                id: Some("ws_1".to_string()),
+                status: Some("completed".to_string()),
+                action: Some(action),
+            },
+            ResponseItem::ImageGenerationCall {
+                id: "ig_1".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("a landing page hero image".to_string()),
+                result: "Zm9v".to_string(),
+            },
+        ],
+        Some(&available_tool_names),
+    )
+    .expect("chat completions messages");
+
+    assert!(
+        messages.is_empty(),
+        "unsupported built-in history tools should be omitted for chat completions providers"
+    );
+}
+
+#[test]
 fn build_chat_completions_messages_batches_consecutive_tool_calls_into_one_assistant_turn() {
     let provider =
         create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::ChatCompletions);

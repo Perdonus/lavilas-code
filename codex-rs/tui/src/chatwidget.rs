@@ -3969,21 +3969,7 @@ impl ChatWidget {
             }
             CollabAgentTool::ResumeAgent => {
                 if let Some(receiver_thread_id) = first_receiver {
-                    if matches!(status, CollabAgentToolCallStatus::InProgress) {
-                        self.on_collab_event(multi_agents::resume_begin(
-                            codex_protocol::protocol::CollabResumeBeginEvent {
-                                call_id: id,
-                                sender_thread_id,
-                                receiver_thread_id,
-                                receiver_agent_nickname: first_receiver_metadata
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.agent_nickname.clone()),
-                                receiver_agent_role: first_receiver_metadata
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.agent_role.clone()),
-                            },
-                        ));
-                    } else {
+                    if !matches!(status, CollabAgentToolCallStatus::InProgress) {
                         self.on_collab_event(multi_agents::resume_end(
                             codex_protocol::protocol::CollabResumeEndEvent {
                                 call_id: id,
@@ -4008,24 +3994,7 @@ impl ChatWidget {
                 }
             }
             CollabAgentTool::Wait => {
-                if matches!(status, CollabAgentToolCallStatus::InProgress) {
-                    self.on_collab_event(multi_agents::waiting_begin(
-                        codex_protocol::protocol::CollabWaitingBeginEvent {
-                            sender_thread_id,
-                            receiver_thread_ids: receiver_thread_ids
-                                .iter()
-                                .filter_map(|thread_id| {
-                                    app_server_collab_thread_id_to_core(thread_id)
-                                })
-                                .collect(),
-                            receiver_agents: app_server_collab_receiver_agent_refs(
-                                &receiver_thread_ids,
-                                &self.collab_agent_metadata,
-                            ),
-                            call_id: id,
-                        },
-                    ));
-                } else {
+                if !matches!(status, CollabAgentToolCallStatus::InProgress) {
                     let (agent_statuses, statuses) = app_server_collab_agent_statuses_to_core(
                         &receiver_thread_ids,
                         &agents_states,
@@ -7309,13 +7278,11 @@ impl ChatWidget {
             EventMsg::CollabAgentInteractionEnd(ev) => {
                 self.on_collab_event(multi_agents::interaction_end(ev))
             }
-            EventMsg::CollabWaitingBegin(ev) => {
-                self.on_collab_event(multi_agents::waiting_begin(ev))
-            }
+            EventMsg::CollabWaitingBegin(_) => {}
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(multi_agents::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(multi_agents::close_end(ev)),
-            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
+            EventMsg::CollabResumeBegin(_) => {}
             EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
             EventMsg::ThreadRolledBack(rollback) => {
                 // Conservatively clear `/copy` state on rollback. The app layer trims visible
@@ -11300,6 +11267,7 @@ impl ChatWidget {
             ..Default::default()
         });
 
+        let presets_are_empty = presets.is_empty();
         items.extend(presets.into_iter().map(|preset| {
             let model_label = provider_models
                 .iter()
@@ -11327,7 +11295,7 @@ impl ChatWidget {
             } else {
                 "Active provider presets".to_string()
             }),
-            subtitle: Some(if presets.is_empty() {
+            subtitle: Some(if presets_are_empty {
                 if is_ru {
                     format!(
                         "Провайдер: {} ({}). Быстрых пресетов сейчас нет: /model сразу откроет полный каталог, пока вы не добавите свои.",
@@ -11595,7 +11563,11 @@ impl ChatWidget {
             },
             None,
         );
-        self.open_model_presets_settings_popup();
+        if enabled {
+            self.open_model_presets_settings_popup();
+        } else {
+            self.open_custom_settings_popup();
+        }
     }
 
     pub(crate) fn upsert_current_provider_model_preset(

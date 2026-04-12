@@ -1071,10 +1071,13 @@ impl ModelClientSession {
     ) -> Result<ChatCompletionsRequest> {
         let runtime_config = self.client.runtime_config();
         let input = prompt.get_formatted_input();
-        let messages = build_chat_completions_messages(
+        let chat_completions_tool_names =
+            serializable_chat_completions_tool_names(&prompt.tools)?;
+        let messages = build_chat_completions_messages_with_tools(
             &runtime_config.provider,
             &prompt.base_instructions.text,
             &input,
+            Some(&chat_completions_tool_names),
         )?;
         let tools = create_tools_json_for_chat_completions(&prompt.tools)?;
         let has_tools = !tools.is_empty();
@@ -2460,6 +2463,18 @@ fn create_tools_json_for_chat_completions(
     Ok(values)
 }
 
+fn serializable_chat_completions_tool_names(
+    tools: &[ToolSpec],
+) -> std::result::Result<HashSet<String>, serde_json::Error> {
+    let mut names = HashSet::new();
+    for tool in tools {
+        if chat_completions_tool_value(tool)?.is_some() {
+            names.insert(tool.name().to_string());
+        }
+    }
+    Ok(names)
+}
+
 fn chat_completions_tool_value(
     tool: &ToolSpec,
 ) -> std::result::Result<Option<JsonValue>, serde_json::Error> {
@@ -2563,6 +2578,15 @@ fn build_chat_completions_messages(
     provider: &ModelProviderInfo,
     instructions: &str,
     input: &[ResponseItem],
+) -> Result<Vec<ChatCompletionsMessage>> {
+    build_chat_completions_messages_with_tools(provider, instructions, input, None)
+}
+
+fn build_chat_completions_messages_with_tools(
+    provider: &ModelProviderInfo,
+    instructions: &str,
+    input: &[ResponseItem],
+    available_tool_names: Option<&HashSet<String>>,
 ) -> Result<Vec<ChatCompletionsMessage>> {
     let mut messages = Vec::new();
     let instructions_role = chat_completions_instructions_role(provider);
@@ -2720,6 +2744,9 @@ fn build_chat_completions_messages(
                 tools,
                 ..
             } => {
+                if available_tool_names.is_some_and(|names| !names.contains("tool_search")) {
+                    continue;
+                }
                 flush_chat_completions_pending_tool_calls(&mut messages, &mut pending_tool_calls);
                 let provider_call_id =
                     normalize_chat_completions_tool_call_id(provider, call_id.as_str());
@@ -2734,6 +2761,9 @@ fn build_chat_completions_messages(
                 ));
             }
             ResponseItem::WebSearchCall { id, status, action } => {
+                if available_tool_names.is_some_and(|names| !names.contains("web_search")) {
+                    continue;
+                }
                 synthetic_tool_call_counter += 1;
                 let raw_call_id = id
                     .clone()
@@ -2774,6 +2804,11 @@ fn build_chat_completions_messages(
                 revised_prompt,
                 ..
             } => {
+                if available_tool_names
+                    .is_some_and(|names| !names.contains("image_generation"))
+                {
+                    continue;
+                }
                 synthetic_tool_call_counter += 1;
                 let raw_call_id = if id.trim().is_empty() {
                     format!("image-generation-history-{synthetic_tool_call_counter}")

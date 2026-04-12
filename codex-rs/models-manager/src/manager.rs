@@ -875,8 +875,11 @@ impl ModelsManager {
 
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
-        // don't override the custom model catalog if one was provided by the user
-        if matches!(*self.catalog_mode.read().await, CatalogMode::Custom) {
+        // Static custom catalogs stay pinned, but provider-backed custom catalogs created by
+        // account profiles are only bootstrap snapshots and must still be able to refresh.
+        if matches!(*self.catalog_mode.read().await, CatalogMode::Custom)
+            && !self.custom_catalog_allows_remote_refresh().await
+        {
             return Ok(());
         }
 
@@ -910,6 +913,11 @@ impl ModelsManager {
                 self.fetch_and_update_models().await
             }
         }
+    }
+
+    async fn custom_catalog_allows_remote_refresh(&self) -> bool {
+        let provider = self.provider.read().await.clone();
+        provider.base_url.is_some() && !provider.requires_openai_auth
     }
 
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
