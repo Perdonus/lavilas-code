@@ -115,6 +115,7 @@ use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::api_bridge::CoreAuthProvider;
 use codex_api::api_bridge::map_api_error;
 use codex_client::HttpTransport;
+use codex_client::sse_stream;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_login::api_bridge::auth_provider_from_auth;
@@ -182,12 +183,8 @@ fn normalize_request_model_for_provider<'a>(
     }
 }
 
-fn chat_completions_instructions_role(provider: &ModelProviderInfo) -> &'static str {
-    if provider_uses_gemini_api(provider) || provider_uses_mistral_api(provider) {
-        "user"
-    } else {
-        "system"
-    }
+fn chat_completions_instructions_role(_provider: &ModelProviderInfo) -> &'static str {
+    "system"
 }
 
 fn normalize_chat_completions_role<'a>(provider: &ModelProviderInfo, role: &'a str) -> &'a str {
@@ -1095,7 +1092,7 @@ impl ModelClientSession {
             tool_choice: has_tools.then_some("auto".to_string()),
             parallel_tool_calls: has_tools.then_some(prompt.parallel_tool_calls),
             reasoning_effort,
-            stream: false,
+            stream: true,
         })
     }
 
@@ -1475,22 +1472,16 @@ impl ModelClientSession {
         loop {
             let client_setup = self.client.current_client_setup().await?;
             let request = self.build_chat_completions_request(prompt, model_info, effort)?;
-            match execute_chat_completions_request(
+            match execute_chat_completions_streaming_request(
                 &client_setup.api_provider,
                 &client_setup.api_auth,
                 &request,
+                session_telemetry,
+                self.client.runtime_config().provider.stream_idle_timeout(),
             )
             .await
             {
-                Ok(response) => {
-                    let events = chat_completions_response_to_events(response)?;
-                    let api_stream = futures::stream::iter(
-                        events.into_iter().map(Ok::<ResponseEvent, ApiError>),
-                    );
-                    let (stream, _last_request_rx) =
-                        map_response_stream(api_stream, session_telemetry.clone());
-                    return Ok(stream);
-                }
+                Ok(stream) => return Ok(stream),
                 Err(unauthorized_transport @ TransportError::Http { status, .. })
                     if status == StatusCode::UNAUTHORIZED =>
                 {
@@ -2760,6 +2751,248 @@ fn tool_output_to_chat_text(output: &FunctionCallOutputPayload) -> String {
         .body
         .to_text()
         .unwrap_or_else(|| serde_json::to_string(output).unwrap_or_default())
+}
+
+async fn execute_chat_completions_streaming_request(
+    provider: &codex_api::Provider,
+    auth: &CoreAuthProvider,
+    request: &ChatCompletionsRequest,
+    session_telemetry: &SessionTelemetry,
+    idle_timeout: Duration,
+) -> std::result::Result<ResponseStream, TransportError> {
+    let transport = ReqwestTransport::new(build_reqwest_client());
+    let mut http_request = provider.build_request(Method::POST, "chat/completions");
+    if let Some(token) = auth.token.as_ref()
+        && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
+    {
+        http_request
+            .headers
+            .insert(http::header::AUTHORIZATION, header);
+    }
+    if let Some(account_id) = auth.account_id.as_ref()
+        && let Ok(header) = HeaderValue::from_str(account_id)
+    {
+        http_request.headers.insert("ChatGPT-Account-ID", header);
+    }
+    http_request.body =
+        Some(serde_json::to_value(request).map_err(|err| TransportError::Build(err.to_string()))?);
+
+    let stream_response = transport.stream(http_request).await?;
+    let (tx, mut rx) = mpsc::channel(128);
+    sse_stream(stream_response.bytes, idle_timeout, tx);
+
+    let (tx_event, rx_event) = mpsc::channel(128);
+    let session_telemetry = session_telemetry.clone();
+    tokio::spawn(async move {
+        let mut emitted_created = false;
+        let mut emitted_message = false;
+        let mut text_accumulator = String::new();
+        let mut pending_tool_calls: HashMap<usize, ChatCompletionToolCall> = HashMap::new();
+        let mut response_id = String::new();
+        let mut response_model: Option<String> = None;
+        let mut usage: Option<ChatCompletionsUsage> = None;
+
+        while let Some(frame) = rx.recv().await {
+            let raw = match frame {
+                Ok(raw) => raw,
+                Err(err) => {
+                    let _ = tx_event.send(Err(map_api_error(ApiError::Stream(err.to_string())))).await;
+                    return;
+                }
+            };
+
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed == "[DONE]" {
+                break;
+            }
+
+            let chunk: ChatCompletionsStreamChunk = match serde_json::from_str(trimmed) {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    let _ = tx_event
+                        .send(Err(map_api_error(ApiError::Stream(format!(
+                            "failed to decode chat completions stream chunk: {err}"
+                        )))))
+                        .await;
+                    return;
+                }
+            };
+
+            if !emitted_created {
+                emitted_created = true;
+                if tx_event.send(Ok(ResponseEvent::Created)).await.is_err() {
+                    return;
+                }
+            }
+
+            if let Some(id) = chunk.id.clone() {
+                response_id = id;
+            }
+            if let Some(model) = chunk.model.clone() {
+                if response_model.as_deref() != Some(model.as_str()) {
+                    response_model = Some(model.clone());
+                    if tx_event.send(Ok(ResponseEvent::ServerModel(model))).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            if chunk.usage.is_some() {
+                usage = chunk.usage.clone();
+            }
+
+            for choice in chunk.choices {
+                let delta = choice.delta;
+                if let Some(content) = delta.content {
+                    let text = strip_hidden_reasoning_tags(&content);
+                    if !text.is_empty() {
+                        text_accumulator.push_str(&text);
+                        if !emitted_message {
+                            emitted_message = true;
+                            let item = ResponseItem::Message {
+                                id: None,
+                                role: "assistant".to_string(),
+                                content: vec![ContentItem::OutputText { text: String::new() }],
+                                end_turn: None,
+                                phase: None,
+                            };
+                            if tx_event.send(Ok(ResponseEvent::OutputItemAdded(item))).await.is_err() {
+                                return;
+                            }
+                        }
+                        if tx_event.send(Ok(ResponseEvent::OutputTextDelta(text))).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+
+                for tool_call_delta in delta.tool_calls {
+                    let entry = pending_tool_calls.entry(tool_call_delta.index).or_insert_with(|| {
+                        ChatCompletionToolCall {
+                            id: tool_call_delta.id.clone(),
+                            kind: tool_call_delta.kind.clone().unwrap_or_else(default_chat_completion_tool_call_kind),
+                            function: ChatCompletionCalledFunction {
+                                name: String::new(),
+                                arguments: String::new(),
+                            },
+                            extra_content: None,
+                        }
+                    });
+                    if entry.id.is_none() {
+                        entry.id = tool_call_delta.id.clone();
+                    }
+                    if let Some(kind) = tool_call_delta.kind.clone() {
+                        entry.kind = kind;
+                    }
+                    if let Some(function) = tool_call_delta.function {
+                        if let Some(name) = function.name
+                            && entry.function.name.is_empty()
+                        {
+                            entry.function.name = name;
+                        }
+                        if let Some(arguments) = function.arguments {
+                            entry.function.arguments.push_str(&arguments);
+                        }
+                    }
+                }
+            }
+        }
+
+        if emitted_message {
+            let item = ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: text_accumulator,
+                }],
+                end_turn: None,
+                phase: None,
+            };
+            if tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await.is_err() {
+                return;
+            }
+        }
+
+        let mut ordered_tool_calls = pending_tool_calls.into_iter().collect::<Vec<_>>();
+        ordered_tool_calls.sort_by_key(|(index, _)| *index);
+        for (index, tool_call) in ordered_tool_calls {
+            let item = ResponseItem::FunctionCall {
+                id: tool_call
+                    .extra_content
+                    .as_ref()
+                    .and_then(|extra| extra.google.as_ref())
+                    .and_then(|google| google.thought_signature.as_deref())
+                    .map(encode_google_thought_signature),
+                name: tool_call.function.name,
+                namespace: None,
+                arguments: tool_call.function.arguments,
+                call_id: tool_call
+                    .id
+                    .unwrap_or_else(|| format!("chatcmpl-tool-{index}")),
+            };
+            if tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await.is_err() {
+                return;
+            }
+        }
+
+        let _ = tx_event
+            .send(Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage: usage.map(chat_completions_usage_to_token_usage),
+            }))
+            .await;
+        drop(session_telemetry);
+    });
+
+    Ok(ResponseStream { rx_event })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ChatCompletionsStreamChunk {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    choices: Vec<ChatCompletionsStreamChoice>,
+    #[serde(default)]
+    usage: Option<ChatCompletionsUsage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ChatCompletionsStreamChoice {
+    #[serde(default)]
+    delta: ChatCompletionsStreamDelta,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ChatCompletionsStreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ChatCompletionsStreamToolCallDelta>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ChatCompletionsStreamToolCallDelta {
+    #[serde(default)]
+    index: usize,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    function: Option<ChatCompletionsStreamFunctionDelta>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ChatCompletionsStreamFunctionDelta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
 }
 
 async fn execute_chat_completions_request(
