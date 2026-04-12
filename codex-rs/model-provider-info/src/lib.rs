@@ -401,7 +401,7 @@ impl ModelProviderInfo {
     }
 
     pub fn supports_chat_completions_reasoning_effort(&self) -> bool {
-        self.uses_gemini_api() || self.uses_mistral_api()
+        self.uses_mistral_api()
     }
 
     pub fn model_supports_chat_completions_reasoning_effort(&self, model: &str) -> bool {

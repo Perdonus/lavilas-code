@@ -17,6 +17,7 @@ pub(crate) const MISTRAL_FAST_PROFILE_MODEL: &str = "devstral-small-latest";
 pub(crate) const MISTRAL_REASONING_PROFILE_MODEL: &str = "magistral-medium-latest";
 
 const NO_REASONING_LEVELS: &[&str] = &[];
+const MISTRAL_REASONING_LEVELS: &[&str] = &["none", "high"];
 const OPENAI_REASONING_LEVELS: &[&str] = &["low", "medium", "high", "xhigh"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -498,10 +499,50 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
             ProfileCatalogSeed {
                 model: MISTRAL_REASONING_PROFILE_MODEL,
                 description: "Reasoning-профиль Mistral для тяжёлых инженерных и аналитических задач.",
+                default_reasoning_level: "high",
+                supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
+                supports_parallel_tool_calls: true,
+                supports_image_input: false,
+            },
+            ProfileCatalogSeed {
+                model: "magistral-small-latest",
+                description: "Компактный reasoning-профиль Mistral для быстрых проходов с размышлением.",
+                default_reasoning_level: "high",
+                supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
+                supports_parallel_tool_calls: true,
+                supports_image_input: false,
+            },
+            ProfileCatalogSeed {
+                model: "mistral-small-latest",
+                description: "Компактная общая модель Mistral с поддержкой reasoning budget.",
+                default_reasoning_level: "high",
+                supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
+                supports_parallel_tool_calls: true,
+                supports_image_input: false,
+            },
+            ProfileCatalogSeed {
+                model: "mistral-medium-latest",
+                description: "Средний универсальный профиль Mistral для кода и длинных проходов.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
                 supports_image_input: false,
+            },
+            ProfileCatalogSeed {
+                model: "mistral-large-latest",
+                description: "Крупный общий профиль Mistral для тяжёлых coding-задач.",
+                default_reasoning_level: "none",
+                supported_reasoning_levels: NO_REASONING_LEVELS,
+                supports_parallel_tool_calls: true,
+                supports_image_input: false,
+            },
+            ProfileCatalogSeed {
+                model: "pixtral-large-latest",
+                description: "Мультимодальный профиль Mistral с упором на визуальные входы.",
+                default_reasoning_level: "none",
+                supported_reasoning_levels: NO_REASONING_LEVELS,
+                supports_parallel_tool_calls: true,
+                supports_image_input: true,
             },
             ProfileCatalogSeed {
                 model: "codestral-latest",

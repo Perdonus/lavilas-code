@@ -4206,9 +4206,8 @@ impl ChatWidget {
     /// Runs a commit tick for the current stream queue snapshot.
     ///
     /// `scope` controls whether this call may commit in smooth mode or only when catch-up
-    /// is currently active. While lines are actively streaming we hide the status row to avoid
-    /// duplicate "in progress" affordances. Restoration is gated separately so we only re-show
-    /// the row after commentary completion once stream queues are idle.
+    /// is currently active. Keep the status row mounted while stream cells commit so the
+    /// bottom pane height stays stable when commentary or worker output starts arriving.
     fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
         let now = Instant::now();
         let outcome = run_commit_tick(
@@ -4219,7 +4218,6 @@ impl ChatWidget {
             now,
         );
         for cell in outcome.cells {
-            self.bottom_pane.hide_status_indicator();
             self.add_boxed_history(cell);
         }
 
@@ -10562,6 +10560,12 @@ impl ChatWidget {
             });
         }
 
+        let model_presets_actions: Vec<SelectionAction> = if self.current_model_presets_enabled() {
+            vec![Box::new(|tx| tx.send(AppEvent::OpenModelPresetsSettings))]
+        } else {
+            vec![Box::new(|tx| tx.send(AppEvent::ToggleModelPresetsEnabled))]
+        };
+
         items.extend(vec![
             SelectionItem {
                 name: if is_ru {
@@ -10588,10 +10592,16 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: if is_ru {
-                    "Пресеты моделей".to_string()
+                name: if self.current_model_presets_enabled() {
+                    if is_ru {
+                        "Пресеты моделей".to_string()
+                    } else {
+                        "Model presets".to_string()
+                    }
+                } else if is_ru {
+                    "Включить быстрые пресеты моделей".to_string()
                 } else {
-                    "Model presets".to_string()
+                    "Enable quick model presets".to_string()
                 },
                 description: Some(if self.current_model_presets_enabled() {
                     if is_ru {
@@ -10613,7 +10623,7 @@ impl ChatWidget {
                 } else {
                     "model presets quick picker".to_string()
                 }),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelPresetsSettings))],
+                actions: model_presets_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -11159,14 +11169,20 @@ impl ChatWidget {
                     "Quick presets: enabled".to_string()
                 }
             } else if is_ru {
-                "Быстрые пресеты: выключены".to_string()
+                "Включить быстрые пресеты".to_string()
             } else {
-                "Quick presets: disabled".to_string()
+                "Enable quick presets".to_string()
             },
-            description: Some(if is_ru {
-                "Переключает быстрые пресеты в /model.".to_string()
+            description: Some(if enabled {
+                if is_ru {
+                    "Переключает быстрые пресеты в /model.".to_string()
+                } else {
+                    "Toggles quick presets in /model.".to_string()
+                }
+            } else if is_ru {
+                "Снова включает быстрый выбор моделей в /model.".to_string()
             } else {
-                "Toggles quick presets in /model.".to_string()
+                "Turns the quick /model picker back on.".to_string()
             }),
             actions: vec![Box::new(|tx| tx.send(AppEvent::ToggleModelPresetsEnabled))],
             dismiss_on_select: true,

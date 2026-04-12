@@ -186,6 +186,7 @@ fn gemini_model_reasoning_effort_support_stays_disabled() {
         "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
     ));
 
+    assert!(!provider.supports_chat_completions_reasoning_effort());
     assert!(!provider.model_supports_chat_completions_reasoning_effort("gemini-2.5-pro"));
 }
 

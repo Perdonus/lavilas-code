@@ -299,12 +299,12 @@ fn normalize_request_model_strips_gemini_models_prefix() {
         normalize_request_model_for_provider(&provider, "gemini-flash-latest").as_ref(),
         "gemini-2.5-flash"
     );
-    assert!(provider.supports_chat_completions_reasoning_effort());
+    assert!(!provider.supports_chat_completions_reasoning_effort());
     assert!(provider.supports_reasoning_controls());
 }
 
 #[test]
-fn build_chat_completions_request_includes_reasoning_effort_for_gemini() {
+fn build_chat_completions_request_omits_reasoning_effort_for_gemini() {
     let client = test_model_client_with_provider(gemini_provider());
     let prompt = super::Prompt {
         base_instructions: BaseInstructions {
@@ -334,10 +334,7 @@ fn build_chat_completions_request_includes_reasoning_effort_for_gemini() {
         )
         .expect("chat completions request");
 
-    assert_eq!(
-        request.reasoning_effort,
-        Some(codex_protocol::openai_models::ReasoningEffort::High)
-    );
+    assert_eq!(request.reasoning_effort, None);
     assert_eq!(request.messages.len(), 1);
     assert_eq!(
         request.messages[0].content,

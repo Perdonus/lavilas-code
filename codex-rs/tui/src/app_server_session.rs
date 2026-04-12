@@ -180,24 +180,9 @@ impl AppServerSession {
             })
             .await
             .wrap_err("account/read failed during TUI bootstrap")?;
-        let model_request_id = self.next_request_id();
-        let models: ModelListResponse = self
-            .client
-            .request_typed(ClientRequest::ModelList {
-                request_id: model_request_id,
-                params: ModelListParams {
-                    cursor: None,
-                    limit: None,
-                    include_hidden: Some(true),
-                },
-            })
-            .await
-            .wrap_err("model/list failed during TUI bootstrap")?;
-        let available_models = models
-            .data
-            .into_iter()
-            .map(model_preset_from_api_model)
-            .collect::<Vec<_>>();
+        let available_models = self
+            .fetch_all_models("model/list failed during TUI bootstrap")
+            .await?;
         let default_model = config
             .model
             .clone()
@@ -645,25 +630,7 @@ impl AppServerSession {
     }
 
     pub(crate) async fn list_models(&mut self) -> Result<Vec<ModelPreset>> {
-        let request_id = self.next_request_id();
-        let models: ModelListResponse = self
-            .client
-            .request_typed(ClientRequest::ModelList {
-                request_id,
-                params: ModelListParams {
-                    cursor: None,
-                    limit: None,
-                    include_hidden: Some(true),
-                },
-            })
-            .await
-            .wrap_err("model/list failed in TUI")?;
-
-        Ok(models
-            .data
-            .into_iter()
-            .map(model_preset_from_api_model)
-            .collect())
+        self.fetch_all_models("model/list failed in TUI").await
     }
 
     pub(crate) async fn thread_realtime_start(
@@ -770,6 +737,37 @@ impl AppServerSession {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
         RequestId::Integer(request_id)
+    }
+
+    async fn fetch_all_models(&mut self, error_context: &'static str) -> Result<Vec<ModelPreset>> {
+        let mut cursor = None;
+        let mut models = Vec::new();
+
+        loop {
+            let request_id = self.next_request_id();
+            let response: ModelListResponse = self
+                .client
+                .request_typed(ClientRequest::ModelList {
+                    request_id,
+                    params: ModelListParams {
+                        cursor: cursor.clone(),
+                        limit: Some(100),
+                        include_hidden: Some(true),
+                    },
+                })
+                .await
+                .wrap_err(error_context)?;
+
+            models.extend(response.data.into_iter().map(model_preset_from_api_model));
+
+            if let Some(next_cursor) = response.next_cursor {
+                cursor = Some(next_cursor);
+            } else {
+                break;
+            }
+        }
+
+        Ok(models)
     }
 }
 

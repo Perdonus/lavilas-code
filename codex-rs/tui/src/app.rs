@@ -427,12 +427,12 @@ fn openai_compatible_model_slug(
         return None;
     }
 
-    if provider.is_some_and(ModelProviderInfo::uses_mistral_api)
+    if !provider.is_some_and(ModelProviderInfo::uses_mistral_api)
         && capabilities.as_ref().and_then(|capabilities| {
             capabilities
                 .completion_chat
                 .or(capabilities.chat_completion)
-        }) != Some(true)
+        }) == Some(false)
     {
         return None;
     }
@@ -1905,7 +1905,7 @@ impl App {
         };
         let transport = ReqwestTransport::new(build_reqwest_client());
         let mut request = api_provider.build_request(Method::GET, "models");
-        request.timeout = Some(Duration::from_secs(5));
+        request.timeout = Some(Duration::from_secs(15));
         if let Some(token) = auth.token.as_ref()
             && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
         {
@@ -2053,9 +2053,8 @@ impl App {
             }
         };
         self.refresh_in_memory_config_from_disk().await?;
-        let disk_models = self
-            .active_profile_sidecar_models()
-            .or_else(|| {
+        let sidecar_models = self.active_profile_sidecar_models();
+        let disk_models = sidecar_models.clone().or_else(|| {
                 self.config.model_catalog.as_ref().map(|catalog| {
                     catalog
                         .models
@@ -2066,7 +2065,21 @@ impl App {
                 })
             })
             .filter(|models| !models.is_empty());
-        let mut runtime_models = if !refreshed_models.is_empty() {
+        // Custom profile activation refreshes the sidecar eagerly before we get
+        // here, while the app-server catalog can still lag on its own cache.
+        // Prefer the freshly written sidecar for custom providers so /model
+        // switches immediately to the provider we just activated.
+        let mut runtime_models = if sidecar_models.is_some() {
+            if let Some(models) = disk_models.clone() {
+                models
+            } else if !refreshed_models.is_empty() {
+                refreshed_models.clone()
+            } else if self.config.model_provider_id == previous_provider_id {
+                previous_models.clone()
+            } else {
+                Vec::new()
+            }
+        } else if !refreshed_models.is_empty() {
             refreshed_models.clone()
         } else if let Some(models) = disk_models {
             models
@@ -8528,6 +8541,50 @@ mod tests {
         };
 
         assert!(provider_supports_reasoning_controls(&provider));
+    }
+
+    #[test]
+    fn openai_compatible_model_slug_keeps_mistral_models_without_chat_completion_flag() {
+        let provider = ModelProviderInfo {
+            name: "Mistral".to_string(),
+            base_url: Some("https://api.mistral.ai/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::ChatCompletions,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+
+        let slug = openai_compatible_model_slug(
+            Some(&provider),
+            OpenAiCompatibleModelObject {
+                id: Some("mistral-medium-latest".to_string()),
+                slug: None,
+                model: None,
+                name: None,
+                base_model_id: None,
+                base_model_id_snake: None,
+                supported_generation_methods: Vec::new(),
+                supported_generation_methods_snake: Vec::new(),
+                capabilities: Some(OpenAiCompatibleModelCapabilities {
+                    completion_chat: Some(false),
+                    chat_completion: Some(false),
+                }),
+                kind: None,
+                archived: Some(false),
+            },
+        );
+
+        assert_eq!(slug.as_deref(), Some("mistral-medium-latest"));
     }
 
     #[test]

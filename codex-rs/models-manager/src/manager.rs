@@ -334,6 +334,7 @@ fn apply_provider_catalog_capabilities(
     capabilities: Option<&OpenAiCompatibleModelCapabilities>,
 ) {
     model_info::enrich_compatibility_model_capabilities(model, capability_slug);
+    let catalog_reports_reasoning = capabilities.and_then(|caps| caps.reasoning) == Some(true);
 
     if capabilities
         .and_then(OpenAiCompatibleModelCapabilities::supports_tool_use)
@@ -352,7 +353,8 @@ fn apply_provider_catalog_capabilities(
     }
 
     if model.supported_reasoning_levels.is_empty()
-        && provider.model_supports_chat_completions_reasoning_effort(capability_slug)
+        && (provider.model_supports_chat_completions_reasoning_effort(capability_slug)
+            || (catalog_reports_reasoning && provider.supports_chat_completions_reasoning_effort()))
     {
         model.supported_reasoning_levels =
             model_info::compatibility_reasoning_presets_for_slug(capability_slug);
