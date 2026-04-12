@@ -3136,8 +3136,8 @@ fn assistant_chat_completions_response_item(role: String, text: String) -> Respo
     }
 }
 
-async fn ensure_chat_completions_message_started(
-    tx_event: &mpsc::Sender<std::result::Result<ResponseEvent, TransportError>>,
+async fn ensure_chat_completions_message_started<E>(
+    tx_event: &mpsc::Sender<std::result::Result<ResponseEvent, E>>,
     emitted_message: &mut bool,
 ) -> bool {
     if *emitted_message {
