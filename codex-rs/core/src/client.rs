@@ -25,6 +25,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -1084,16 +1085,33 @@ impl ModelClientSession {
             model_info,
             effort,
         );
+        let supports_parallel_tool_calls = model_info.supports_parallel_tool_calls
+            || runtime_config
+                .provider
+                .model_supports_parallel_tool_calls(model_info.slug.as_str());
 
         Ok(ChatCompletionsRequest {
             model: request_model.into_owned(),
             messages,
             tools,
             tool_choice: has_tools.then_some("auto".to_string()),
-            parallel_tool_calls: has_tools.then_some(prompt.parallel_tool_calls),
+            parallel_tool_calls: has_tools
+                .then_some(prompt.parallel_tool_calls && supports_parallel_tool_calls),
             reasoning_effort,
             stream: true,
         })
+    }
+
+    fn build_chat_completions_headers(&self, turn_metadata_header: Option<&str>) -> ApiHeaderMap {
+        let runtime_config = self.client.runtime_config();
+        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
+        let mut headers = build_responses_headers(
+            runtime_config.beta_features_header.as_deref(),
+            /*turn_state*/ None,
+            turn_metadata_header.as_ref(),
+        );
+        headers.extend(self.client.build_responses_identity_headers());
+        headers
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1472,10 +1490,14 @@ impl ModelClientSession {
         loop {
             let client_setup = self.client.current_client_setup().await?;
             let request = self.build_chat_completions_request(prompt, model_info, effort)?;
+            let extra_headers = self.build_chat_completions_headers(turn_metadata_header);
+            let custom_tool_names = chat_completions_custom_tool_names(&prompt.tools);
             match execute_chat_completions_streaming_request(
                 &client_setup.api_provider,
                 &client_setup.api_auth,
                 &request,
+                extra_headers,
+                custom_tool_names,
                 session_telemetry,
                 self.client.runtime_config().provider.stream_idle_timeout(),
             )
@@ -2297,6 +2319,16 @@ struct ChatCompletionsMessage {
     tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<ChatCompletionToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning: Option<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning_details: Option<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thinking: Option<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thoughts: Option<JsonValue>,
 }
 
 impl ChatCompletionsMessage {
@@ -2307,6 +2339,11 @@ impl ChatCompletionsMessage {
             name: None,
             tool_call_id: None,
             tool_calls: None,
+            reasoning: None,
+            reasoning_details: None,
+            reasoning_content: None,
+            thinking: None,
+            thoughts: None,
         }
     }
 
@@ -2327,6 +2364,11 @@ impl ChatCompletionsMessage {
                 function: ChatCompletionCalledFunction { name, arguments },
                 extra_content,
             }]),
+            reasoning: None,
+            reasoning_details: None,
+            reasoning_content: None,
+            thinking: None,
+            thoughts: None,
         }
     }
 
@@ -2337,6 +2379,11 @@ impl ChatCompletionsMessage {
             name,
             tool_call_id: Some(call_id),
             tool_calls: None,
+            reasoning: None,
+            reasoning_details: None,
+            reasoning_content: None,
+            thinking: None,
+            thoughts: None,
         }
     }
 }
@@ -2519,32 +2566,29 @@ fn build_chat_completions_messages(
 ) -> Result<Vec<ChatCompletionsMessage>> {
     let mut messages = Vec::new();
     let instructions_role = chat_completions_instructions_role(provider);
-    let mut leading_instruction_segments = Vec::new();
+    let mut instruction_segments = Vec::new();
     if !instructions.trim().is_empty() {
-        leading_instruction_segments.push(instructions.to_string());
+        instruction_segments.push(instructions.to_string());
     }
 
     let mut tool_names_by_call_id: HashMap<String, String> = HashMap::new();
-    let mut trailing_instruction_segments = Vec::new();
+    let mut pending_tool_calls: Vec<ChatCompletionToolCall> = Vec::new();
+    let mut synthetic_tool_call_counter = 0usize;
     for item in input {
         match item {
             ResponseItem::Message { role, content, .. } => {
                 let text = content_items_to_chat_text(content);
                 if !text.is_empty() {
-                    // Mistral/Gemini translate developer/system instructions
-                    // into a `user` role, but real user turns must remain
-                    // normal chat messages or later prompts get collapsed into
-                    // a stale instruction tail.
                     let is_instruction_message = role.eq_ignore_ascii_case("developer")
                         || role.eq_ignore_ascii_case("system");
-                    let normalized_role = normalize_chat_completions_role(provider, role);
                     if is_instruction_message {
-                        if messages.is_empty() {
-                            leading_instruction_segments.push(text);
-                        } else {
-                            trailing_instruction_segments.push(text);
-                        }
+                        instruction_segments.push(text);
                     } else {
+                        let normalized_role = normalize_chat_completions_role(provider, role);
+                        flush_chat_completions_pending_tool_calls(
+                            &mut messages,
+                            &mut pending_tool_calls,
+                        );
                         messages.push(ChatCompletionsMessage::text(normalized_role, text));
                     }
                 }
@@ -2572,12 +2616,15 @@ fn build_chat_completions_messages(
                 } else {
                     None
                 };
-                messages.push(ChatCompletionsMessage::assistant_tool_call(
-                    tool_name,
-                    provider_call_id,
-                    arguments.clone(),
+                pending_tool_calls.push(ChatCompletionToolCall {
+                    id: Some(provider_call_id),
+                    kind: default_chat_completion_tool_call_kind(),
+                    function: ChatCompletionCalledFunction {
+                        name: tool_name,
+                        arguments: arguments.clone(),
+                    },
                     extra_content,
-                ));
+                });
             }
             ResponseItem::CustomToolCall {
                 name,
@@ -2588,12 +2635,15 @@ fn build_chat_completions_messages(
                 let provider_call_id =
                     normalize_chat_completions_tool_call_id(provider, call_id.as_str());
                 tool_names_by_call_id.insert(provider_call_id.clone(), name.clone());
-                messages.push(ChatCompletionsMessage::assistant_tool_call(
-                    name.clone(),
-                    provider_call_id,
-                    serde_json::to_string(&json!({ "input": input }))?,
-                    None,
-                ));
+                pending_tool_calls.push(ChatCompletionToolCall {
+                    id: Some(provider_call_id),
+                    kind: default_chat_completion_tool_call_kind(),
+                    function: ChatCompletionCalledFunction {
+                        name: name.clone(),
+                        arguments: serde_json::to_string(&json!({ "input": input }))?,
+                    },
+                    extra_content: None,
+                });
             }
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
@@ -2605,12 +2655,15 @@ fn build_chat_completions_messages(
                 let provider_call_id =
                     normalize_chat_completions_tool_call_id(provider, call_id.as_str());
                 tool_names_by_call_id.insert(provider_call_id.clone(), tool_name.clone());
-                messages.push(ChatCompletionsMessage::assistant_tool_call(
-                    tool_name,
-                    provider_call_id,
-                    serde_json::to_string(arguments)?,
-                    None,
-                ));
+                pending_tool_calls.push(ChatCompletionToolCall {
+                    id: Some(provider_call_id),
+                    kind: default_chat_completion_tool_call_kind(),
+                    function: ChatCompletionCalledFunction {
+                        name: tool_name,
+                        arguments: serde_json::to_string(arguments)?,
+                    },
+                    extra_content: None,
+                });
             }
             ResponseItem::LocalShellCall {
                 id,
@@ -2627,14 +2680,18 @@ fn build_chat_completions_messages(
                 let provider_call_id =
                     normalize_chat_completions_tool_call_id(provider, call_id.as_str());
                 tool_names_by_call_id.insert(provider_call_id.clone(), tool_name.clone());
-                messages.push(ChatCompletionsMessage::assistant_tool_call(
-                    tool_name,
-                    provider_call_id,
-                    arguments,
-                    None,
-                ));
+                pending_tool_calls.push(ChatCompletionToolCall {
+                    id: Some(provider_call_id),
+                    kind: default_chat_completion_tool_call_kind(),
+                    function: ChatCompletionCalledFunction {
+                        name: tool_name,
+                        arguments,
+                    },
+                    extra_content: None,
+                });
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
+                flush_chat_completions_pending_tool_calls(&mut messages, &mut pending_tool_calls);
                 let provider_call_id =
                     normalize_chat_completions_tool_call_id(provider, call_id.as_str());
                 messages.push(ChatCompletionsMessage::tool(
@@ -2648,6 +2705,7 @@ fn build_chat_completions_messages(
                 name,
                 output,
             } => {
+                flush_chat_completions_pending_tool_calls(&mut messages, &mut pending_tool_calls);
                 let provider_call_id =
                     normalize_chat_completions_tool_call_id(provider, call_id.as_str());
                 messages.push(ChatCompletionsMessage::tool(
@@ -2662,6 +2720,7 @@ fn build_chat_completions_messages(
                 tools,
                 ..
             } => {
+                flush_chat_completions_pending_tool_calls(&mut messages, &mut pending_tool_calls);
                 let provider_call_id =
                     normalize_chat_completions_tool_call_id(provider, call_id.as_str());
                 messages.push(ChatCompletionsMessage::tool(
@@ -2674,35 +2733,124 @@ fn build_chat_completions_messages(
                         .unwrap_or_else(|_| JsonValue::Array(tools.clone()).to_string()),
                 ));
             }
+            ResponseItem::WebSearchCall { id, status, action } => {
+                synthetic_tool_call_counter += 1;
+                let raw_call_id = id
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| format!("web-search-history-{synthetic_tool_call_counter}"));
+                let provider_call_id =
+                    normalize_chat_completions_tool_call_id(provider, raw_call_id.as_str());
+                let tool_name = "web_search".to_string();
+                tool_names_by_call_id.insert(provider_call_id.clone(), tool_name.clone());
+                let arguments = action
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?
+                    .unwrap_or_else(|| "{}".to_string());
+                pending_tool_calls.push(ChatCompletionToolCall {
+                    id: Some(provider_call_id.clone()),
+                    kind: default_chat_completion_tool_call_kind(),
+                    function: ChatCompletionCalledFunction {
+                        name: tool_name.clone(),
+                        arguments,
+                    },
+                    extra_content: None,
+                });
+                flush_chat_completions_pending_tool_calls(&mut messages, &mut pending_tool_calls);
+                let output = json!({
+                    "status": status,
+                    "action": action,
+                });
+                messages.push(ChatCompletionsMessage::tool(
+                    Some(tool_name),
+                    provider_call_id,
+                    serde_json::to_string(&output).unwrap_or_else(|_| output.to_string()),
+                ));
+            }
+            ResponseItem::ImageGenerationCall {
+                id,
+                status,
+                revised_prompt,
+                ..
+            } => {
+                synthetic_tool_call_counter += 1;
+                let raw_call_id = if id.trim().is_empty() {
+                    format!("image-generation-history-{synthetic_tool_call_counter}")
+                } else {
+                    id.clone()
+                };
+                let provider_call_id =
+                    normalize_chat_completions_tool_call_id(provider, raw_call_id.as_str());
+                let tool_name = "image_generation".to_string();
+                tool_names_by_call_id.insert(provider_call_id.clone(), tool_name.clone());
+                let arguments = serde_json::to_string(&json!({
+                    "prompt": revised_prompt,
+                }))?;
+                pending_tool_calls.push(ChatCompletionToolCall {
+                    id: Some(provider_call_id.clone()),
+                    kind: default_chat_completion_tool_call_kind(),
+                    function: ChatCompletionCalledFunction {
+                        name: tool_name.clone(),
+                        arguments,
+                    },
+                    extra_content: None,
+                });
+                flush_chat_completions_pending_tool_calls(&mut messages, &mut pending_tool_calls);
+                let output = json!({
+                    "status": status,
+                    "revised_prompt": revised_prompt,
+                    "result": "[image generation result omitted during provider translation]",
+                });
+                messages.push(ChatCompletionsMessage::tool(
+                    Some(tool_name),
+                    provider_call_id,
+                    serde_json::to_string(&output).unwrap_or_else(|_| output.to_string()),
+                ));
+            }
             ResponseItem::Reasoning { .. }
             | ResponseItem::ToolSearchCall { .. }
             | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::Other => {}
         }
     }
+    flush_chat_completions_pending_tool_calls(&mut messages, &mut pending_tool_calls);
 
-    if !leading_instruction_segments.is_empty() {
+    if !instruction_segments.is_empty() {
         messages.insert(
             0,
             ChatCompletionsMessage::text(
                 instructions_role,
-                leading_instruction_segments.join("\n\n"),
+                instruction_segments.join("\n\n"),
             ),
         );
     }
 
-    if !trailing_instruction_segments.is_empty() {
-        messages.push(ChatCompletionsMessage::text(
-            "user",
-            trailing_instruction_segments.join("\n\n"),
-        ));
+    Ok(messages)
+}
+
+fn flush_chat_completions_pending_tool_calls(
+    messages: &mut Vec<ChatCompletionsMessage>,
+    pending_tool_calls: &mut Vec<ChatCompletionToolCall>,
+) {
+    if pending_tool_calls.is_empty() {
+        return;
     }
 
-    Ok(messages)
+    messages.push(ChatCompletionsMessage {
+        role: "assistant".to_string(),
+        content: None,
+        name: None,
+        tool_call_id: None,
+        tool_calls: Some(std::mem::take(pending_tool_calls)),
+        reasoning: None,
+        reasoning_details: None,
+        reasoning_content: None,
+        thinking: None,
+        thoughts: None,
+    });
 }
 
 fn content_items_to_chat_text(content: &[ContentItem]) -> String {
@@ -2721,6 +2869,288 @@ fn content_items_to_chat_text(content: &[ContentItem]) -> String {
         }
     }
     segments.join("\n")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatCompletionsContentChannel {
+    Text,
+    ReasoningSummary,
+    ReasoningContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChatCompletionsExtractedSegment {
+    channel: ChatCompletionsContentChannel,
+    text: String,
+}
+
+fn classify_chat_completions_content_channel(
+    part_type: &str,
+    default_channel: ChatCompletionsContentChannel,
+) -> ChatCompletionsContentChannel {
+    let normalized = part_type.to_ascii_lowercase();
+    if normalized == "image_url" {
+        ChatCompletionsContentChannel::Text
+    } else if normalized.contains("reasoning")
+        || normalized.contains("thinking")
+        || normalized.contains("thought")
+    {
+        if normalized.contains("content") || normalized.contains("encrypted") {
+            ChatCompletionsContentChannel::ReasoningContent
+        } else {
+            ChatCompletionsContentChannel::ReasoningSummary
+        }
+    } else {
+        default_channel
+    }
+}
+
+fn push_chat_completions_segment(
+    segments: &mut Vec<ChatCompletionsExtractedSegment>,
+    channel: ChatCompletionsContentChannel,
+    text: impl Into<String>,
+) {
+    let text = strip_hidden_reasoning_tags(&text.into());
+    if !text.is_empty() {
+        segments.push(ChatCompletionsExtractedSegment { channel, text });
+    }
+}
+
+fn collect_chat_completions_segments(
+    value: &JsonValue,
+    default_channel: ChatCompletionsContentChannel,
+    segments: &mut Vec<ChatCompletionsExtractedSegment>,
+) {
+    match value {
+        JsonValue::Null => {}
+        JsonValue::String(text) => {
+            push_chat_completions_segment(segments, default_channel, text);
+        }
+        JsonValue::Array(items) => {
+            for item in items {
+                collect_chat_completions_segments(item, default_channel, segments);
+            }
+        }
+        JsonValue::Object(object) => {
+            let resolved_channel = object
+                .get("type")
+                .and_then(JsonValue::as_str)
+                .map(|part_type| {
+                    classify_chat_completions_content_channel(part_type, default_channel)
+                })
+                .unwrap_or(default_channel);
+
+            if object.get("type").and_then(JsonValue::as_str) == Some("image_url") {
+                push_chat_completions_segment(
+                    segments,
+                    ChatCompletionsContentChannel::Text,
+                    "[image attachment omitted during provider translation]",
+                );
+                return;
+            }
+
+            if let Some(text) = object.get("delta").and_then(JsonValue::as_str) {
+                push_chat_completions_segment(segments, resolved_channel, text);
+            }
+            if let Some(text) = object.get("text").and_then(JsonValue::as_str) {
+                push_chat_completions_segment(segments, resolved_channel, text);
+            }
+            if let Some(text) = object
+                .get("text")
+                .and_then(|text| text.get("value"))
+                .and_then(JsonValue::as_str)
+            {
+                push_chat_completions_segment(segments, resolved_channel, text);
+            }
+            if let Some(summary) = object.get("summary") {
+                collect_chat_completions_segments(
+                    summary,
+                    ChatCompletionsContentChannel::ReasoningSummary,
+                    segments,
+                );
+            }
+            if let Some(content) = object.get("content") {
+                collect_chat_completions_segments(content, resolved_channel, segments);
+            }
+            if let Some(parts) = object.get("parts") {
+                collect_chat_completions_segments(parts, resolved_channel, segments);
+            }
+            if let Some(reasoning) = object.get("reasoning") {
+                collect_chat_completions_segments(
+                    reasoning,
+                    ChatCompletionsContentChannel::ReasoningSummary,
+                    segments,
+                );
+            }
+            if let Some(reasoning_details) = object.get("reasoning_details") {
+                collect_chat_completions_segments(
+                    reasoning_details,
+                    ChatCompletionsContentChannel::ReasoningSummary,
+                    segments,
+                );
+            }
+            if let Some(thinking) = object.get("thinking") {
+                collect_chat_completions_segments(
+                    thinking,
+                    ChatCompletionsContentChannel::ReasoningSummary,
+                    segments,
+                );
+            }
+            if let Some(thoughts) = object.get("thoughts") {
+                collect_chat_completions_segments(
+                    thoughts,
+                    ChatCompletionsContentChannel::ReasoningSummary,
+                    segments,
+                );
+            }
+            if let Some(reasoning_content) = object.get("reasoning_content") {
+                collect_chat_completions_segments(
+                    reasoning_content,
+                    ChatCompletionsContentChannel::ReasoningContent,
+                    segments,
+                );
+            }
+        }
+        other => {
+            push_chat_completions_segment(segments, default_channel, other.to_string());
+        }
+    }
+}
+
+fn extract_chat_completions_message_segments(
+    message: &ChatCompletionsMessage,
+) -> Vec<ChatCompletionsExtractedSegment> {
+    let mut segments = Vec::new();
+    if let Some(content) = message.content.as_ref() {
+        collect_chat_completions_segments(
+            content,
+            ChatCompletionsContentChannel::Text,
+            &mut segments,
+        );
+    }
+    if let Some(reasoning) = message.reasoning.as_ref() {
+        collect_chat_completions_segments(
+            reasoning,
+            ChatCompletionsContentChannel::ReasoningSummary,
+            &mut segments,
+        );
+    }
+    if let Some(reasoning_details) = message.reasoning_details.as_ref() {
+        collect_chat_completions_segments(
+            reasoning_details,
+            ChatCompletionsContentChannel::ReasoningSummary,
+            &mut segments,
+        );
+    }
+    if let Some(thinking) = message.thinking.as_ref() {
+        collect_chat_completions_segments(
+            thinking,
+            ChatCompletionsContentChannel::ReasoningSummary,
+            &mut segments,
+        );
+    }
+    if let Some(thoughts) = message.thoughts.as_ref() {
+        collect_chat_completions_segments(
+            thoughts,
+            ChatCompletionsContentChannel::ReasoningSummary,
+            &mut segments,
+        );
+    }
+    if let Some(reasoning_content) = message.reasoning_content.as_ref() {
+        collect_chat_completions_segments(
+            reasoning_content,
+            ChatCompletionsContentChannel::ReasoningContent,
+            &mut segments,
+        );
+    }
+    segments
+}
+
+fn extract_chat_completions_delta_segments(
+    delta: &ChatCompletionsStreamDelta,
+) -> Vec<ChatCompletionsExtractedSegment> {
+    let mut segments = Vec::new();
+    if let Some(content) = delta.content.as_ref() {
+        collect_chat_completions_segments(
+            content,
+            ChatCompletionsContentChannel::Text,
+            &mut segments,
+        );
+    }
+    if let Some(reasoning) = delta.reasoning.as_ref() {
+        collect_chat_completions_segments(
+            reasoning,
+            ChatCompletionsContentChannel::ReasoningSummary,
+            &mut segments,
+        );
+    }
+    if let Some(reasoning_details) = delta.reasoning_details.as_ref() {
+        collect_chat_completions_segments(
+            reasoning_details,
+            ChatCompletionsContentChannel::ReasoningSummary,
+            &mut segments,
+        );
+    }
+    if let Some(thinking) = delta.thinking.as_ref() {
+        collect_chat_completions_segments(
+            thinking,
+            ChatCompletionsContentChannel::ReasoningSummary,
+            &mut segments,
+        );
+    }
+    if let Some(thoughts) = delta.thoughts.as_ref() {
+        collect_chat_completions_segments(
+            thoughts,
+            ChatCompletionsContentChannel::ReasoningSummary,
+            &mut segments,
+        );
+    }
+    if let Some(reasoning_content) = delta.reasoning_content.as_ref() {
+        collect_chat_completions_segments(
+            reasoning_content,
+            ChatCompletionsContentChannel::ReasoningContent,
+            &mut segments,
+        );
+    }
+    segments
+}
+
+fn chat_completions_message_text_from_segments(
+    segments: &[ChatCompletionsExtractedSegment],
+) -> String {
+    segments
+        .iter()
+        .filter(|segment| segment.channel == ChatCompletionsContentChannel::Text)
+        .map(|segment| segment.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn assistant_chat_completions_response_item(role: String, text: String) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role,
+        content: vec![ContentItem::OutputText { text }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+async fn ensure_chat_completions_message_started(
+    tx_event: &mpsc::Sender<std::result::Result<ResponseEvent, TransportError>>,
+    emitted_message: &mut bool,
+) -> bool {
+    if *emitted_message {
+        return true;
+    }
+
+    *emitted_message = true;
+    tx_event
+        .send(Ok(ResponseEvent::OutputItemAdded(
+            assistant_chat_completions_response_item("assistant".to_string(), String::new()),
+        )))
+        .await
+        .is_ok()
 }
 
 fn shell_tool_params_from_local_shell_action(action: &LocalShellAction) -> JsonValue {
@@ -2753,15 +3183,74 @@ fn tool_output_to_chat_text(output: &FunctionCallOutputPayload) -> String {
         .unwrap_or_else(|| serde_json::to_string(output).unwrap_or_default())
 }
 
+fn chat_completions_custom_tool_names(tools: &[ToolSpec]) -> HashSet<String> {
+    tools.iter()
+        .filter_map(|tool| match tool {
+            ToolSpec::Freeform(tool) => Some(tool.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn decode_chat_completions_custom_tool_input(arguments: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<JsonValue>(arguments).ok()?;
+    let input = parsed.get("input")?;
+    input
+        .as_str()
+        .map(ToOwned::to_owned)
+        .or_else(|| Some(input.to_string()))
+}
+
+fn chat_completions_tool_call_response_item(
+    tool_call: ChatCompletionToolCall,
+    index: usize,
+    custom_tool_names: &HashSet<String>,
+) -> ResponseItem {
+    let thought_signature = tool_call
+        .extra_content
+        .as_ref()
+        .and_then(|extra| extra.google.as_ref())
+        .and_then(|google| google.thought_signature.as_deref())
+        .map(encode_google_thought_signature);
+    let name = tool_call.function.name;
+    let arguments = tool_call.function.arguments;
+    let call_id = tool_call
+        .id
+        .unwrap_or_else(|| format!("chatcmpl-tool-{index}"));
+
+    if custom_tool_names.contains(name.as_str())
+        && let Some(input) = decode_chat_completions_custom_tool_input(arguments.as_str())
+    {
+        return ResponseItem::CustomToolCall {
+            id: thought_signature,
+            status: None,
+            call_id,
+            name,
+            input,
+        };
+    }
+
+    ResponseItem::FunctionCall {
+        id: thought_signature,
+        name,
+        namespace: None,
+        arguments,
+        call_id,
+    }
+}
+
 async fn execute_chat_completions_streaming_request(
     provider: &codex_api::Provider,
     auth: &CoreAuthProvider,
     request: &ChatCompletionsRequest,
+    extra_headers: ApiHeaderMap,
+    custom_tool_names: HashSet<String>,
     session_telemetry: &SessionTelemetry,
     idle_timeout: Duration,
 ) -> std::result::Result<ResponseStream, TransportError> {
     let transport = ReqwestTransport::new(build_reqwest_client());
     let mut http_request = provider.build_request(Method::POST, "chat/completions");
+    http_request.headers.extend(extra_headers);
     if let Some(token) = auth.token.as_ref()
         && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
     {
@@ -2786,6 +3275,8 @@ async fn execute_chat_completions_streaming_request(
     tokio::spawn(async move {
         let mut emitted_created = false;
         let mut emitted_message = false;
+        let mut emitted_reasoning_included = false;
+        let mut emitted_reasoning_summary_part = false;
         let mut text_accumulator = String::new();
         let mut pending_tool_calls: HashMap<usize, ChatCompletionToolCall> = HashMap::new();
         let mut response_id = String::new();
@@ -2845,25 +3336,98 @@ async fn execute_chat_completions_streaming_request(
 
             for choice in chunk.choices {
                 let delta = choice.delta;
-                if let Some(content) = delta.content {
-                    let text = strip_hidden_reasoning_tags(&content);
-                    if !text.is_empty() {
-                        text_accumulator.push_str(&text);
-                        if !emitted_message {
-                            emitted_message = true;
-                            let item = ResponseItem::Message {
-                                id: None,
-                                role: "assistant".to_string(),
-                                content: vec![ContentItem::OutputText { text: String::new() }],
-                                end_turn: None,
-                                phase: None,
-                            };
-                            if tx_event.send(Ok(ResponseEvent::OutputItemAdded(item))).await.is_err() {
+                let segments = extract_chat_completions_delta_segments(&delta);
+                for segment in segments {
+                    match segment.channel {
+                        ChatCompletionsContentChannel::Text => {
+                            text_accumulator.push_str(&segment.text);
+                            if !ensure_chat_completions_message_started(
+                                &tx_event,
+                                &mut emitted_message,
+                            )
+                            .await
+                            {
+                                return;
+                            }
+                            if tx_event
+                                .send(Ok(ResponseEvent::OutputTextDelta(segment.text)))
+                                .await
+                                .is_err()
+                            {
                                 return;
                             }
                         }
-                        if tx_event.send(Ok(ResponseEvent::OutputTextDelta(text))).await.is_err() {
-                            return;
+                        ChatCompletionsContentChannel::ReasoningSummary => {
+                            if !ensure_chat_completions_message_started(
+                                &tx_event,
+                                &mut emitted_message,
+                            )
+                            .await
+                            {
+                                return;
+                            }
+                            if !emitted_reasoning_included {
+                                emitted_reasoning_included = true;
+                                if tx_event
+                                    .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
+                                    .await
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            if !emitted_reasoning_summary_part {
+                                emitted_reasoning_summary_part = true;
+                                if tx_event
+                                    .send(Ok(ResponseEvent::ReasoningSummaryPartAdded {
+                                        summary_index: 0,
+                                    }))
+                                    .await
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            if tx_event
+                                .send(Ok(ResponseEvent::ReasoningSummaryDelta {
+                                    delta: segment.text,
+                                    summary_index: 0,
+                                }))
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        ChatCompletionsContentChannel::ReasoningContent => {
+                            if !ensure_chat_completions_message_started(
+                                &tx_event,
+                                &mut emitted_message,
+                            )
+                            .await
+                            {
+                                return;
+                            }
+                            if !emitted_reasoning_included {
+                                emitted_reasoning_included = true;
+                                if tx_event
+                                    .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
+                                    .await
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            if tx_event
+                                .send(Ok(ResponseEvent::ReasoningContentDelta {
+                                    delta: segment.text,
+                                    content_index: 0,
+                                }))
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
                         }
                     }
                 }
@@ -2877,7 +3441,7 @@ async fn execute_chat_completions_streaming_request(
                                 name: String::new(),
                                 arguments: String::new(),
                             },
-                            extra_content: None,
+                            extra_content: tool_call_delta.extra_content.clone(),
                         }
                     });
                     if entry.id.is_none() {
@@ -2896,20 +3460,16 @@ async fn execute_chat_completions_streaming_request(
                             entry.function.arguments.push_str(&arguments);
                         }
                     }
+                    if let Some(extra_content) = tool_call_delta.extra_content {
+                        entry.extra_content = Some(extra_content);
+                    }
                 }
             }
         }
 
         if emitted_message {
-            let item = ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: text_accumulator,
-                }],
-                end_turn: None,
-                phase: None,
-            };
+            let item =
+                assistant_chat_completions_response_item("assistant".to_string(), text_accumulator);
             if tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await.is_err() {
                 return;
             }
@@ -2918,20 +3478,8 @@ async fn execute_chat_completions_streaming_request(
         let mut ordered_tool_calls = pending_tool_calls.into_iter().collect::<Vec<_>>();
         ordered_tool_calls.sort_by_key(|(index, _)| *index);
         for (index, tool_call) in ordered_tool_calls {
-            let item = ResponseItem::FunctionCall {
-                id: tool_call
-                    .extra_content
-                    .as_ref()
-                    .and_then(|extra| extra.google.as_ref())
-                    .and_then(|google| google.thought_signature.as_deref())
-                    .map(encode_google_thought_signature),
-                name: tool_call.function.name,
-                namespace: None,
-                arguments: tool_call.function.arguments,
-                call_id: tool_call
-                    .id
-                    .unwrap_or_else(|| format!("chatcmpl-tool-{index}")),
-            };
+            let item =
+                chat_completions_tool_call_response_item(tool_call, index, &custom_tool_names);
             if tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await.is_err() {
                 return;
             }
@@ -2970,7 +3518,17 @@ struct ChatCompletionsStreamChoice {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ChatCompletionsStreamDelta {
     #[serde(default)]
-    content: Option<String>,
+    content: Option<JsonValue>,
+    #[serde(default)]
+    reasoning: Option<JsonValue>,
+    #[serde(default)]
+    reasoning_details: Option<JsonValue>,
+    #[serde(default)]
+    reasoning_content: Option<JsonValue>,
+    #[serde(default)]
+    thinking: Option<JsonValue>,
+    #[serde(default)]
+    thoughts: Option<JsonValue>,
     #[serde(default)]
     tool_calls: Vec<ChatCompletionsStreamToolCallDelta>,
 }
@@ -2985,6 +3543,8 @@ struct ChatCompletionsStreamToolCallDelta {
     kind: Option<String>,
     #[serde(default)]
     function: Option<ChatCompletionsStreamFunctionDelta>,
+    #[serde(default)]
+    extra_content: Option<ChatCompletionToolCallExtraContent>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -3044,24 +3604,49 @@ fn chat_completions_response_to_events(
         events.push(ResponseEvent::ServerModel(model));
     }
 
-    let ChatCompletionsMessage {
-        role,
-        content,
-        tool_calls,
-        ..
-    } = choice.message;
-
-    if let Some(text) = chat_message_content_to_text(content.as_ref())
-        && !text.is_empty()
-    {
-        let item = ResponseItem::Message {
-            id: None,
+    let message = choice.message;
+    let role = message.role.clone();
+    let tool_calls = message.tool_calls.clone();
+    let segments = extract_chat_completions_message_segments(&message);
+    if !segments.is_empty() {
+        let item = assistant_chat_completions_response_item(
             role,
-            content: vec![ContentItem::OutputText { text }],
-            end_turn: None,
-            phase: None,
-        };
+            chat_completions_message_text_from_segments(&segments),
+        );
         events.push(ResponseEvent::OutputItemAdded(item.clone()));
+        let mut emitted_reasoning_included = false;
+        let mut emitted_reasoning_summary_part = false;
+        for segment in segments {
+            match segment.channel {
+                ChatCompletionsContentChannel::Text => {}
+                ChatCompletionsContentChannel::ReasoningSummary => {
+                    if !emitted_reasoning_included {
+                        emitted_reasoning_included = true;
+                        events.push(ResponseEvent::ServerReasoningIncluded(true));
+                    }
+                    if !emitted_reasoning_summary_part {
+                        emitted_reasoning_summary_part = true;
+                        events.push(ResponseEvent::ReasoningSummaryPartAdded {
+                            summary_index: 0,
+                        });
+                    }
+                    events.push(ResponseEvent::ReasoningSummaryDelta {
+                        delta: segment.text,
+                        summary_index: 0,
+                    });
+                }
+                ChatCompletionsContentChannel::ReasoningContent => {
+                    if !emitted_reasoning_included {
+                        emitted_reasoning_included = true;
+                        events.push(ResponseEvent::ServerReasoningIncluded(true));
+                    }
+                    events.push(ResponseEvent::ReasoningContentDelta {
+                        delta: segment.text,
+                        content_index: 0,
+                    });
+                }
+            }
+        }
         events.push(ResponseEvent::OutputItemDone(item));
     }
 
@@ -3088,52 +3673,6 @@ fn chat_completions_response_to_events(
         token_usage: usage.map(chat_completions_usage_to_token_usage),
     });
     Ok(events)
-}
-
-fn chat_message_content_to_text(content: Option<&JsonValue>) -> Option<String> {
-    let value = content?;
-    match value {
-        JsonValue::Null => None,
-        JsonValue::String(text) => Some(strip_hidden_reasoning_tags(text)),
-        JsonValue::Array(items) => {
-            let parts = items
-                .iter()
-                .filter_map(chat_message_part_to_text)
-                .collect::<Vec<_>>();
-            if parts.is_empty() {
-                None
-            } else {
-                Some(strip_hidden_reasoning_tags(&parts.join("\n")))
-            }
-        }
-        JsonValue::Object(_) => {
-            chat_message_part_to_text(value).map(|text| strip_hidden_reasoning_tags(&text))
-        }
-        other => Some(other.to_string()),
-    }
-}
-
-fn chat_message_part_to_text(value: &JsonValue) -> Option<String> {
-    match value {
-        JsonValue::String(text) => Some(strip_hidden_reasoning_tags(text)),
-        JsonValue::Object(object) => {
-            if object.get("type").and_then(JsonValue::as_str) == Some("image_url") {
-                return Some("[image attachment omitted during provider translation]".to_string());
-            }
-            object
-                .get("text")
-                .and_then(JsonValue::as_str)
-                .map(|text| strip_hidden_reasoning_tags(text))
-                .or_else(|| {
-                    object
-                        .get("text")
-                        .and_then(|text| text.get("value"))
-                        .and_then(JsonValue::as_str)
-                        .map(strip_hidden_reasoning_tags)
-                })
-        }
-        _ => None,
-    }
 }
 
 fn fallback_memory_summarize_output(raw_memory: ApiRawMemory) -> ApiMemorySummarizeOutput {

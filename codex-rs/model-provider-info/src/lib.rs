@@ -410,12 +410,7 @@ impl ModelProviderInfo {
         }
 
         if self.uses_mistral_api() {
-            let tail = model
-                .trim()
-                .rsplit('/')
-                .next()
-                .unwrap_or(model)
-                .to_ascii_lowercase();
+            let tail = provider_model_tail(model);
             return tail.starts_with("mistral-small")
                 || tail == "mistral-vibe-cli-fast"
                 || tail.starts_with("magistral-")
@@ -423,6 +418,24 @@ impl ModelProviderInfo {
         }
 
         self.supports_chat_completions_reasoning_effort()
+    }
+
+    pub fn model_supports_parallel_tool_calls(&self, model: &str) -> bool {
+        let tail = provider_model_tail(model);
+
+        if self.uses_gemini_api() {
+            return tail.starts_with("gemini-");
+        }
+
+        if self.uses_mistral_api() {
+            return mistral_model_family_supports_tool_use(tail.as_str());
+        }
+
+        false
+    }
+
+    pub fn model_supports_search_tool(&self, model: &str) -> bool {
+        self.model_supports_parallel_tool_calls(model)
     }
 
     pub fn effective_wire_api(&self) -> WireApi {
@@ -459,6 +472,33 @@ impl ModelProviderInfo {
 
         changed
     }
+}
+
+fn provider_model_tail(model: &str) -> String {
+    canonicalize_provider_model_slug(model)
+        .unwrap_or_else(|| model.trim().to_string())
+        .rsplit('/')
+        .next()
+        .unwrap_or(model.trim())
+        .to_ascii_lowercase()
+}
+
+fn mistral_model_family_supports_tool_use(tail: &str) -> bool {
+    [
+        "codestral-",
+        "devstral-",
+        "magistral-",
+        "mamba-codestral-",
+        "ministral-",
+        "mistral-",
+        "mixtral-",
+        "open-codestral-",
+        "open-mistral-",
+        "pixtral-",
+        "voxtral-",
+    ]
+    .iter()
+    .any(|prefix| tail.starts_with(prefix))
 }
 
 pub const DEFAULT_LMSTUDIO_PORT: u16 = 1234;

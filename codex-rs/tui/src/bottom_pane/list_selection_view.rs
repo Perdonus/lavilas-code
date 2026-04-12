@@ -446,6 +446,70 @@ impl ListSelectionView {
         }
     }
 
+    fn move_page_up(&mut self) {
+        let before = self.selected_actual_idx();
+        let len = self.visible_len();
+        if len == 0 {
+            return;
+        }
+
+        let step = Self::max_visible_rows(len).max(1);
+        let current = self.state.selected_idx.unwrap_or(0);
+        self.state.selected_idx = Some(current.saturating_sub(step));
+        self.state.ensure_visible(len, step);
+        self.skip_disabled_up();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
+    fn move_page_down(&mut self) {
+        let before = self.selected_actual_idx();
+        let len = self.visible_len();
+        if len == 0 {
+            return;
+        }
+
+        let step = Self::max_visible_rows(len).max(1);
+        let current = self.state.selected_idx.unwrap_or(0);
+        self.state.selected_idx = Some(current.saturating_add(step).min(len.saturating_sub(1)));
+        self.state.ensure_visible(len, step);
+        self.skip_disabled_down();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
+    fn move_home(&mut self) {
+        let before = self.selected_actual_idx();
+        let len = self.visible_len();
+        if len == 0 {
+            return;
+        }
+
+        self.state.selected_idx = Some(0);
+        self.state.ensure_visible(len, Self::max_visible_rows(len));
+        self.skip_disabled_down();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
+    fn move_end(&mut self) {
+        let before = self.selected_actual_idx();
+        let len = self.visible_len();
+        if len == 0 {
+            return;
+        }
+
+        self.state.selected_idx = Some(len.saturating_sub(1));
+        self.state.ensure_visible(len, Self::max_visible_rows(len));
+        self.skip_disabled_up();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
     fn fire_selection_changed(&self) {
         if let Some(cb) = &self.on_selection_changed
             && let Some(actual) = self.selected_actual_idx()
@@ -651,6 +715,32 @@ impl BottomPaneView for ListSelectionView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if !self.is_searchable => self.move_down(),
+            KeyEvent {
+                code: KeyCode::PageUp,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.move_page_up(),
+            KeyEvent {
+                code: KeyCode::PageDown,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.move_page_down(),
+            KeyEvent {
+                code: KeyCode::Home,
+                ..
+            } => self.move_home(),
+            KeyEvent {
+                code: KeyCode::End,
+                ..
+            } => self.move_end(),
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -1236,6 +1326,40 @@ mod tests {
         let after_scroll = render_lines_with_width(&view, width);
 
         format!("before scroll:\n{before_scroll}\n\nafter scroll:\n{after_scroll}")
+    }
+
+    #[test]
+    fn page_navigation_moves_selection_by_popup_window() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items: (1..=20)
+                    .map(|idx| SelectionItem {
+                        name: format!("Item {idx}"),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            tx,
+        );
+
+        assert_eq!(view.selected_index(), Some(0));
+
+        view.handle_key_event(KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(view.selected_index(), Some(MAX_POPUP_ROWS));
+
+        view.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+        assert_eq!(view.selected_index(), Some(0));
+
+        view.handle_key_event(KeyEvent::from(KeyCode::End));
+        assert_eq!(view.selected_index(), Some(19));
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Home));
+        assert_eq!(view.selected_index(), Some(0));
     }
 
     #[test]

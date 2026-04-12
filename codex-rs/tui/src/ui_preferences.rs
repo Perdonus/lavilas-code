@@ -278,7 +278,6 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
                             .collect::<Vec<_>>();
                     (provider_key.clone(), presets)
                 })
-                .filter(|(_, presets)| !presets.is_empty())
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
@@ -357,14 +356,8 @@ pub(crate) fn save_provider_model_presets(
         .cloned()
         .filter_map(normalize_stored_model_preset)
         .collect::<Vec<_>>();
-    if normalized.is_empty() {
-        if let Some(providers) = json["model_presets"]["providers"].as_object_mut() {
-            providers.remove(provider_key);
-        }
-    } else {
-        json["model_presets"]["providers"][provider_key] =
-            serde_json::to_value(normalized).unwrap_or_else(|_| serde_json::json!([]));
-    }
+    json["model_presets"]["providers"][provider_key] =
+        serde_json::to_value(normalized).unwrap_or_else(|_| serde_json::json!([]));
     save_settings_json(codex_home, &json)
 }
 
@@ -649,6 +642,7 @@ mod tests {
     use super::profile_model_catalog_path;
     use super::save_command_prefix;
     use super::save_hidden_commands;
+    use super::save_provider_model_presets;
     use super::save_ui_language;
     use tempfile::tempdir;
 
@@ -667,6 +661,20 @@ mod tests {
         assert_eq!(preferences.language, UiLanguage::En);
         assert_eq!(preferences.command_prefix, '!');
         assert_eq!(preferences.hidden_commands, vec!["model", "profiles"]);
+    }
+
+    #[test]
+    fn empty_provider_model_presets_round_trip_as_configured_empty_state() {
+        let codex_home = tempdir().expect("tempdir");
+        save_provider_model_presets(codex_home.path(), "mistral-profile-provider", &[])
+            .expect("save empty presets");
+
+        let preferences = load_ui_preferences(codex_home.path());
+        let saved = preferences
+            .provider_model_presets
+            .get("mistral-profile-provider")
+            .expect("provider key preserved");
+        assert!(saved.is_empty());
     }
 
     #[test]

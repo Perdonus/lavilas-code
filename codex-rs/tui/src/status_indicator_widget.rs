@@ -31,6 +31,9 @@ use crate::wrapping::word_wrap_lines;
 
 pub(crate) const STATUS_DETAILS_DEFAULT_MAX_LINES: usize = 3;
 const DETAILS_PREFIX: &str = "  └ ";
+const STATUS_ELAPSED_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const STATUS_SHIMMER_FRAME_INTERVAL: Duration = Duration::from_millis(125);
+const STATUS_BLINK_FRAME_INTERVAL: Duration = Duration::from_millis(600);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatusDetailsCapitalization {
@@ -71,6 +74,32 @@ pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     let minutes = (elapsed_secs % 3600) / 60;
     let seconds = elapsed_secs % 60;
     format!("{hours}h {minutes:02}m {seconds:02}s")
+}
+
+fn stdout_supports_truecolor() -> bool {
+    supports_color::on_cached(supports_color::Stream::Stdout)
+        .map(|level| level.has_16m)
+        .unwrap_or(false)
+}
+
+fn duration_from_nanos_saturating(nanos: u128) -> Duration {
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+}
+
+fn duration_until_next_tick(elapsed: Duration, interval: Duration) -> Duration {
+    let interval_nanos = interval.as_nanos();
+    if interval_nanos == 0 {
+        return Duration::ZERO;
+    }
+
+    let elapsed_nanos = elapsed.as_nanos();
+    let remainder = elapsed_nanos % interval_nanos;
+    let wait_nanos = if remainder == 0 {
+        interval_nanos
+    } else {
+        interval_nanos - remainder
+    };
+    duration_from_nanos_saturating(wait_nanos)
 }
 
 impl StatusIndicatorWidget {
@@ -194,6 +223,26 @@ impl StatusIndicatorWidget {
         self.elapsed_seconds_at(Instant::now())
     }
 
+    fn next_frame_delay_at(&self, now: Instant) -> Option<Duration> {
+        if self.is_paused {
+            return None;
+        }
+
+        let elapsed = self.elapsed_duration_at(now);
+        let elapsed_delay = duration_until_next_tick(elapsed, STATUS_ELAPSED_REFRESH_INTERVAL);
+        if !self.animations_enabled {
+            return Some(elapsed_delay);
+        }
+
+        let animation_interval = if stdout_supports_truecolor() {
+            STATUS_SHIMMER_FRAME_INTERVAL
+        } else {
+            STATUS_BLINK_FRAME_INTERVAL
+        };
+        let animation_delay = duration_until_next_tick(elapsed, animation_interval);
+        Some(elapsed_delay.min(animation_delay))
+    }
+
     /// Wrap the details text into a fixed width and return the lines, truncating if necessary.
     fn wrapped_details_lines(&self, width: u16) -> Vec<Line<'static>> {
         let Some(details) = self.details.as_deref() else {
@@ -237,12 +286,10 @@ impl Renderable for StatusIndicatorWidget {
             return;
         }
 
-        if self.animations_enabled {
-            // Schedule next animation frame.
-            self.frame_requester
-                .schedule_frame_in(Duration::from_millis(32));
-        }
         let now = Instant::now();
+        if let Some(delay) = self.next_frame_delay_at(now) {
+            self.frame_requester.schedule_frame_in(delay);
+        }
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
@@ -312,6 +359,35 @@ mod tests {
         assert_eq!(fmt_elapsed_compact(/*elapsed_secs*/ 3600), "1h 00m 00s");
         assert_eq!(fmt_elapsed_compact(3600 + 60 + 1), "1h 01m 01s");
         assert_eq!(fmt_elapsed_compact(25 * 3600 + 2 * 60 + 3), "25h 02m 03s");
+    }
+
+    #[test]
+    fn duration_until_next_tick_aligns_to_interval_boundary() {
+        assert_eq!(
+            duration_until_next_tick(Duration::from_millis(0), Duration::from_secs(1)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            duration_until_next_tick(Duration::from_millis(250), Duration::from_secs(1)),
+            Duration::from_millis(750)
+        );
+        assert_eq!(
+            duration_until_next_tick(Duration::from_millis(600), Duration::from_millis(600)),
+            Duration::from_millis(600)
+        );
+    }
+
+    #[test]
+    fn paused_status_does_not_schedule_frames() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ true,
+        );
+        w.pause_timer_at(Instant::now());
+        assert_eq!(w.next_frame_delay_at(Instant::now()), None);
     }
 
     #[test]

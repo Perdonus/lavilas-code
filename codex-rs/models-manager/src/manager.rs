@@ -89,12 +89,36 @@ struct OpenAiCompatibleModelObject {
     archived: Option<bool>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct OpenAiCompatibleModelCapabilities {
     #[serde(default)]
     completion_chat: Option<bool>,
     #[serde(default)]
     chat_completion: Option<bool>,
+    #[serde(default)]
+    reasoning: Option<bool>,
+    #[serde(default)]
+    function_calling: Option<bool>,
+    #[serde(default)]
+    tools: Option<bool>,
+    #[serde(default, rename = "tool_calls")]
+    tool_calls: Option<bool>,
+}
+
+impl OpenAiCompatibleModelCapabilities {
+    fn supports_chat_completions(&self) -> Option<bool> {
+        self.completion_chat.or(self.chat_completion)
+    }
+
+    fn supports_tool_use(&self) -> Option<bool> {
+        self.function_calling.or(self.tools).or(self.tool_calls)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OpenAiCompatibleCatalogModel {
+    slug: String,
+    capabilities: Option<OpenAiCompatibleModelCapabilities>,
 }
 
 fn candidate_model_slug_matches(requested_slug: &str, candidate_slug: &str) -> bool {
@@ -175,10 +199,18 @@ fn provider_catalog_slug_allowed(provider: &ModelProviderInfo, slug: &str) -> bo
     true
 }
 
-fn openai_compatible_model_slug(
+fn provider_catalog_dedup_key(provider: &ModelProviderInfo, slug: &str) -> String {
+    if provider_uses_gemini_api(provider) {
+        return normalize_provider_catalog_slug(provider, slug).to_ascii_lowercase();
+    }
+
+    slug.trim().to_ascii_lowercase()
+}
+
+fn openai_compatible_catalog_model(
     provider: &ModelProviderInfo,
     value: OpenAiCompatibleModelObject,
-) -> Option<String> {
+) -> Option<OpenAiCompatibleCatalogModel> {
     let OpenAiCompatibleModelObject {
         id,
         slug,
@@ -215,12 +247,11 @@ fn openai_compatible_model_slug(
         return None;
     }
 
-    if provider_uses_mistral_api(provider)
-        && capabilities.as_ref().and_then(|capabilities| {
-            capabilities
-                .completion_chat
-                .or(capabilities.chat_completion)
-        }) != Some(true)
+    if !provider_uses_mistral_api(provider)
+        && capabilities
+        .as_ref()
+        .and_then(OpenAiCompatibleModelCapabilities::supports_chat_completions)
+        == Some(false)
     {
         return None;
     }
@@ -243,35 +274,42 @@ fn openai_compatible_model_slug(
         }
     }
 
-    Some(normalized_slug)
+    Some(OpenAiCompatibleCatalogModel {
+        slug: normalized_slug,
+        capabilities,
+    })
 }
 
-fn collect_openai_compatible_model_slugs(
+fn collect_openai_compatible_models(
     provider: &ModelProviderInfo,
     entries: impl IntoIterator<Item = OpenAiCompatibleModelEntry>,
-) -> Vec<String> {
+) -> Vec<OpenAiCompatibleCatalogModel> {
     let mut seen = HashSet::new();
     let mut models = Vec::new();
 
     for entry in entries {
-        let slug = match entry {
-            OpenAiCompatibleModelEntry::String(value) => Some(value),
+        let model = match entry {
+            OpenAiCompatibleModelEntry::String(value) => Some(OpenAiCompatibleCatalogModel {
+                slug: value,
+                capabilities: None,
+            }),
             OpenAiCompatibleModelEntry::Object(value) => {
-                openai_compatible_model_slug(provider, value)
+                openai_compatible_catalog_model(provider, value)
             }
         };
-        let Some(slug) =
-            slug.map(|value| normalize_provider_catalog_slug(provider, value.as_str()))
-        else {
+        let Some(mut model) = model else {
             continue;
         };
+        model.slug = normalize_provider_catalog_slug(provider, model.slug.as_str());
+        let dedup_key = provider_catalog_dedup_key(provider, model.slug.as_str());
+        let slug = model.slug.clone();
         if slug.is_empty()
             || !provider_catalog_slug_allowed(provider, slug.as_str())
-            || !seen.insert(slug.clone())
+            || !seen.insert(dedup_key)
         {
             continue;
         }
-        models.push(slug);
+        models.push(model);
     }
 
     models
@@ -289,12 +327,70 @@ fn fallback_provider_model_info(slug: &str) -> ModelInfo {
     model
 }
 
+fn apply_provider_catalog_capabilities(
+    provider: &ModelProviderInfo,
+    capability_slug: &str,
+    model: &mut ModelInfo,
+    capabilities: Option<&OpenAiCompatibleModelCapabilities>,
+) {
+    model_info::enrich_compatibility_model_capabilities(model, capability_slug);
+
+    if capabilities
+        .and_then(OpenAiCompatibleModelCapabilities::supports_tool_use)
+        == Some(true)
+        || provider.model_supports_parallel_tool_calls(capability_slug)
+    {
+        model.supports_parallel_tool_calls = true;
+    }
+
+    if capabilities
+        .and_then(OpenAiCompatibleModelCapabilities::supports_tool_use)
+        == Some(true)
+        || provider.model_supports_search_tool(capability_slug)
+    {
+        model.supports_search_tool = true;
+    }
+
+    if model.supported_reasoning_levels.is_empty()
+        && provider.model_supports_chat_completions_reasoning_effort(capability_slug)
+    {
+        model.supported_reasoning_levels =
+            model_info::compatibility_reasoning_presets_for_slug(capability_slug);
+    }
+
+    if !model.supported_reasoning_levels.is_empty() {
+        let supported_efforts = model
+            .supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>();
+        let default_effort_supported = model
+            .default_reasoning_level
+            .is_some_and(|effort| supported_efforts.contains(&effort));
+        if !default_effort_supported {
+            model.default_reasoning_level =
+                model_info::compatibility_default_reasoning_level_for_slug(capability_slug)
+                    .or_else(|| supported_efforts.first().copied());
+        }
+    }
+}
+
 fn strip_provider_reasoning_default_without_supported_levels(
     provider: &ModelProviderInfo,
     model: &mut ModelInfo,
 ) {
     if provider.uses_openai_responses_api() || !model.supported_reasoning_levels.is_empty() {
         return;
+    }
+
+    if provider.model_supports_chat_completions_reasoning_effort(model.slug.as_str()) {
+        model.supported_reasoning_levels =
+            model_info::compatibility_reasoning_presets_for_slug(model.slug.as_str());
+        if !model.supported_reasoning_levels.is_empty() {
+            model.default_reasoning_level =
+                model_info::compatibility_default_reasoning_level_for_slug(model.slug.as_str());
+            return;
+        }
     }
 
     model.default_reasoning_level = None;
@@ -306,10 +402,11 @@ fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
 
 fn enrich_provider_catalog_model(
     provider: &ModelProviderInfo,
-    requested_slug: &str,
+    catalog_model: &OpenAiCompatibleCatalogModel,
     index: usize,
     bundled_models: &[ModelInfo],
 ) -> ModelInfo {
+    let requested_slug = catalog_model.slug.as_str();
     let (presented_slug, metadata_slug) = if provider_uses_mistral_api(provider) {
         let presented_slug = requested_slug.to_string();
         let metadata_slug = model_info::normalize_provider_model_alias_slug(requested_slug)
@@ -343,6 +440,12 @@ fn enrich_provider_catalog_model(
     model.visibility = codex_protocol::openai_models::ModelVisibility::List;
     model.supported_in_api = true;
     model.priority = i32::try_from(index).unwrap_or(i32::MAX);
+    apply_provider_catalog_capabilities(
+        provider,
+        metadata_slug.as_str(),
+        &mut model,
+        catalog_model.capabilities.as_ref(),
+    );
     strip_provider_reasoning_default_without_supported_levels(provider, &mut model);
     model
 }
@@ -857,7 +960,7 @@ impl ModelsManager {
             return Ok(Self::sanitize_provider_catalog_models(models, provider));
         }
 
-        let slugs = if let Ok(envelope) =
+        let catalog_models = if let Ok(envelope) =
             serde_json::from_slice::<OpenAiCompatibleModelsEnvelope>(body)
         {
             let entries = if !envelope.data.is_empty() {
@@ -865,10 +968,10 @@ impl ModelsManager {
             } else {
                 envelope.models
             };
-            collect_openai_compatible_model_slugs(provider, entries)
+            collect_openai_compatible_models(provider, entries)
         } else if let Ok(entries) = serde_json::from_slice::<Vec<OpenAiCompatibleModelEntry>>(body)
         {
-            collect_openai_compatible_model_slugs(provider, entries)
+            collect_openai_compatible_models(provider, entries)
         } else {
             return Err(CodexErr::Stream(
                 format!(
@@ -882,11 +985,11 @@ impl ModelsManager {
         let bundled_models = crate::bundled_models_response()
             .map(|response| response.models)
             .unwrap_or_default();
-        Ok(slugs
+        Ok(catalog_models
             .into_iter()
             .enumerate()
-            .map(|(index, slug)| {
-                enrich_provider_catalog_model(provider, slug.as_str(), index, &bundled_models)
+            .map(|(index, catalog_model)| {
+                enrich_provider_catalog_model(provider, &catalog_model, index, &bundled_models)
             })
             .collect())
     }
@@ -905,9 +1008,10 @@ impl ModelsManager {
             }
 
             let normalized_slug = normalize_provider_catalog_slug(provider, original_slug.as_str());
+            let dedup_key = provider_catalog_dedup_key(provider, original_slug.as_str());
             if normalized_slug.is_empty()
                 || !provider_catalog_slug_allowed(provider, normalized_slug.as_str())
-                || !seen_slugs.insert(normalized_slug.clone())
+                || !seen_slugs.insert(dedup_key)
             {
                 continue;
             }
@@ -916,6 +1020,13 @@ impl ModelsManager {
                 model.display_name = normalized_slug.clone();
             }
             model.slug = normalized_slug;
+            let capability_slug = model.slug.clone();
+            apply_provider_catalog_capabilities(
+                provider,
+                capability_slug.as_str(),
+                &mut model,
+                None,
+            );
             strip_provider_reasoning_default_without_supported_levels(provider, &mut model);
             sanitized.push(model);
         }

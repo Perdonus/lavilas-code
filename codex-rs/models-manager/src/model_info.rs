@@ -3,6 +3,8 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -107,8 +109,7 @@ pub fn compatibility_model_info_from_slug(slug: &str) -> Option<ModelInfo> {
     );
     model.slug = slug.to_string();
     model.display_name = compatibility_display_name(compatibility_base);
-    model.supports_parallel_tool_calls = slug_supports_tool_use(slug);
-    model.supports_search_tool = slug_supports_tool_use(slug);
+    enrich_compatibility_model_capabilities(&mut model, slug);
     Some(model)
 }
 
@@ -160,10 +161,8 @@ pub fn normalize_provider_model_for_family(provider: &str, model: &str) -> Strin
         return normalized.to_ascii_lowercase();
     }
 
-    if provider.eq_ignore_ascii_case("mistral")
-        && let Some(canonical) = canonicalize_provider_model_slug(trimmed)
-    {
-        return canonical;
+    if provider.eq_ignore_ascii_case("mistral") {
+        return trimmed.to_string();
     }
 
     trimmed.to_string()
@@ -283,6 +282,62 @@ fn slug_supports_tool_use(slug: &str) -> bool {
         .iter()
         .any(|needle| base_slug.contains(needle))
     })
+}
+
+pub fn compatibility_reasoning_presets_for_slug(slug: &str) -> Vec<ReasoningEffortPreset> {
+    if !slug_supports_reasoning_effort(slug) {
+        return Vec::new();
+    }
+
+    vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::None,
+            description: "No reasoning".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "High reasoning".to_string(),
+        },
+    ]
+}
+
+pub fn compatibility_default_reasoning_level_for_slug(slug: &str) -> Option<ReasoningEffort> {
+    (!compatibility_reasoning_presets_for_slug(slug).is_empty()).then_some(ReasoningEffort::High)
+}
+
+pub fn enrich_compatibility_model_capabilities(model: &mut ModelInfo, slug: &str) {
+    let tool_use = slug_supports_tool_use(slug);
+    if tool_use {
+        model.supports_parallel_tool_calls = true;
+        model.supports_search_tool = true;
+    }
+
+    if model.supported_reasoning_levels.is_empty() {
+        let presets = compatibility_reasoning_presets_for_slug(slug);
+        if !presets.is_empty() {
+            model.supported_reasoning_levels = presets;
+        }
+    }
+
+    if model.default_reasoning_level.is_none() {
+        model.default_reasoning_level = compatibility_default_reasoning_level_for_slug(slug);
+    }
+}
+
+fn slug_supports_reasoning_effort(slug: &str) -> bool {
+    let normalized = canonicalize_provider_model_slug(slug)
+        .or_else(|| normalize_provider_model_alias_slug(slug))
+        .unwrap_or_else(|| slug.trim().to_string());
+    let tail = normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized.as_str())
+        .to_ascii_lowercase();
+
+    tail.starts_with("mistral-small")
+        || tail == MISTRAL_LEGACY_VIBE_CLI_FAST_MODEL
+        || tail.starts_with("magistral-")
+        || tail.starts_with("labs-leanstral-")
 }
 
 fn canonicalize_mistral_variant_slug(slug: &str) -> Option<String> {

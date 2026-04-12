@@ -96,9 +96,13 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
@@ -206,6 +210,8 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 const EXTERNAL_EDITOR_HINT: &str =
     "Сохраните изменения и закройте внешний редактор, чтобы продолжить.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+const ACTIVE_THREAD_EVENT_DRAIN_BUDGET: usize = 64;
+const SUBAGENT_BACKFILL_PAGE_SIZE: usize = 100;
 
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
@@ -228,6 +234,19 @@ enum PendingModelPresetInputRequest {
         preset_id: String,
         model: String,
         suggested_name: String,
+    },
+}
+
+#[derive(Debug)]
+enum SubagentBackfillResult {
+    Completed {
+        primary_thread_id: ThreadId,
+        threads: Vec<AppServerThread>,
+        had_read_error: bool,
+    },
+    Failed {
+        primary_thread_id: ThreadId,
+        message: String,
     },
 }
 
@@ -895,9 +914,9 @@ fn guardian_approvals_mode() -> GuardianApprovalsMode {
 }
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
-/// Smooth-mode streaming drains one line per tick, so this interval controls
-/// perceived typing speed for non-backlogged output.
-const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
+/// Smooth-mode streaming still looks live at ~30 FPS, while avoiding the redraw
+/// storm that 120 FPS creates on weaker CPUs during worker-heavy sessions.
+const COMMIT_ANIMATION_TICK: Duration = Duration::from_millis(33);
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -1625,6 +1644,9 @@ pub(crate) struct App {
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     primary_thread_id: Option<ThreadId>,
     last_subagent_backfill_attempt: Option<ThreadId>,
+    subagent_backfill_inflight_primary: Option<ThreadId>,
+    subagent_backfill_rx: Option<mpsc::UnboundedReceiver<SubagentBackfillResult>>,
+    subagent_backfill_task: Option<JoinHandle<()>>,
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
@@ -4127,20 +4149,15 @@ impl App {
         Ok(())
     }
 
-    /// Eagerly fetches nickname and role for receiver threads referenced by a collab notification.
+    /// Registers placeholder metadata for receiver threads referenced by a collab notification.
     ///
-    /// This runs on every buffered thread notification before it reaches rendering. For each
-    /// receiver thread id that the navigation cache does not yet have metadata for, it issues a
-    /// `thread/read` RPC and registers the result in both `AgentNavigationState` and the
-    /// `ChatWidget` metadata map. Threads that already have a nickname or role cached are skipped,
-    /// so the cost is at most one RPC per thread over the lifetime of a session.
-    ///
-    /// Failures are logged and silently ignored -- the worst outcome is that a rendered item shows
-    /// a thread id instead of a human-readable name, which is the same behavior the TUI had before
-    /// this change.
+    /// Worker-heavy sessions can emit many collab events in bursts. Doing `thread/read` here turns
+    /// every burst into synchronous I/O on the UI loop, which is exactly the redraw starvation we
+    /// want to avoid. Instead we register the thread id immediately and let cheaper live events or
+    /// background backfill fill in nickname/role later.
     async fn hydrate_collab_agent_metadata_for_notification(
         &mut self,
-        app_server: &mut AppServerSession,
+        _app_server: &mut AppServerSession,
         notification: &ServerNotification,
     ) {
         let Some(receiver_thread_ids) = collab_receiver_thread_ids(notification) else {
@@ -4156,34 +4173,16 @@ impl App {
                 continue;
             };
 
-            if self
-                .agent_navigation
-                .get(&thread_id)
-                .is_some_and(|entry| entry.agent_nickname.is_some() || entry.agent_role.is_some())
-            {
+            if self.agent_navigation.get(&thread_id).is_some() {
                 continue;
             }
 
-            match app_server
-                .thread_read(thread_id, /*include_turns*/ false)
-                .await
-            {
-                Ok(thread) => {
-                    self.upsert_agent_picker_thread(
-                        thread_id,
-                        thread.agent_nickname,
-                        thread.agent_role,
-                        /*is_closed*/ false,
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        thread_id = %thread_id,
-                        error = %err,
-                        "failed to hydrate collab receiver thread metadata"
-                    );
-                }
-            }
+            self.upsert_agent_picker_thread(
+                thread_id,
+                /*agent_nickname*/ None,
+                /*agent_role*/ None,
+                /*is_closed*/ false,
+            );
         }
     }
 
@@ -4463,6 +4462,23 @@ impl App {
         let has_non_primary_agent_thread = self
             .agent_navigation
             .has_non_primary_thread(self.primary_thread_id);
+        let primary_thread_id = self.primary_thread_id;
+        let mut backfill_inflight = primary_thread_id.is_some()
+            && self.subagent_backfill_inflight_primary == primary_thread_id;
+        if !has_non_primary_agent_thread && !backfill_inflight {
+            let started = self.start_subagent_backfill_task(app_server);
+            backfill_inflight = started
+                || (primary_thread_id.is_some()
+                    && self.subagent_backfill_inflight_primary == primary_thread_id);
+        }
+        if !has_non_primary_agent_thread && backfill_inflight {
+            self.chat_widget.add_info_message(
+                "Синхронизирую список воркеров в фоне. Откройте /agent ещё раз через секунду."
+                    .to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
         if !self.config.features.enabled(Feature::Collab) && !has_non_primary_agent_thread {
             self.chat_widget.open_multi_agent_enable_prompt();
             return;
@@ -4872,12 +4888,14 @@ impl App {
 
     fn reset_thread_event_state(&mut self) {
         self.abort_all_thread_event_listeners();
+        self.cancel_subagent_backfill_task();
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.last_subagent_backfill_attempt = None;
+        self.subagent_backfill_inflight_primary = None;
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
@@ -4952,77 +4970,92 @@ impl App {
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
-        self.backfill_loaded_subagent_threads(app_server).await;
+        self.start_subagent_backfill_task(app_server);
         Ok(())
     }
 
-    /// Fetches all loaded threads from the app server and registers descendants of the primary
-    /// thread in the navigation cache and chat widget metadata.
-    ///
-    /// Called after `replace_chat_widget_with_app_server_thread` during resume, fork, and new
-    /// thread creation so that the `/agent` picker and keyboard navigation are pre-populated even
-    /// if the TUI did not witness the original spawn events.
-    ///
-    /// The loaded-thread list is fetched in full (no pagination) and the spawn tree is walked
-    /// by `find_loaded_subagent_threads_for_primary`. Each discovered subagent is registered via
-    /// `upsert_agent_picker_thread`, which writes to both `AgentNavigationState` and the
-    /// `ChatWidget` metadata map.
-    async fn backfill_loaded_subagent_threads(
-        &mut self,
-        app_server: &mut AppServerSession,
-    ) -> bool {
+    fn cancel_subagent_backfill_task(&mut self) {
+        if let Some(handle) = self.subagent_backfill_task.take() {
+            handle.abort();
+        }
+        self.subagent_backfill_rx = None;
+    }
+
+    /// Starts background discovery of already-loaded subagent threads for the current primary
+    /// thread. The fetch runs off the UI loop so resume/fork paths do not block the TUI.
+    fn start_subagent_backfill_task(&mut self, app_server: &AppServerSession) -> bool {
         let Some(primary_thread_id) = self.primary_thread_id else {
             return false;
         };
-
-        let loaded_thread_ids = match app_server
-            .thread_loaded_list(ThreadLoadedListParams {
-                cursor: None,
-                limit: None,
-            })
-            .await
+        if self.subagent_backfill_inflight_primary == Some(primary_thread_id)
+            || self.last_subagent_backfill_attempt == Some(primary_thread_id)
         {
-            Ok(response) => response.data,
-            Err(err) => {
-                tracing::warn!(%err, "failed to list loaded threads for subagent backfill");
-                return false;
-            }
-        };
+            return false;
+        }
 
-        let mut threads = Vec::new();
-        let mut had_read_error = false;
-        for thread_id in loaded_thread_ids {
-            let Ok(thread_id) = ThreadId::from_string(&thread_id) else {
-                tracing::warn!("ignoring loaded thread with invalid id during subagent backfill");
-                continue;
-            };
+        self.cancel_subagent_backfill_task();
+        self.last_subagent_backfill_attempt = Some(primary_thread_id);
+        self.subagent_backfill_inflight_primary = Some(primary_thread_id);
 
-            if thread_id == primary_thread_id {
-                continue;
-            }
+        let request_handle = app_server.request_handle();
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.subagent_backfill_rx = Some(rx);
+        self.subagent_backfill_task = Some(tokio::spawn(async move {
+            let result = fetch_loaded_subagent_threads(request_handle, primary_thread_id).await;
+            let _ = tx.send(result);
+        }));
+        true
+    }
 
-            match app_server
-                .thread_read(thread_id, /*include_turns*/ false)
-                .await
-            {
-                Ok(thread) => threads.push(thread),
-                Err(err) => {
-                    had_read_error = true;
-                    tracing::warn!(thread_id = %thread_id, %err, "failed to read loaded thread");
+    fn finish_subagent_backfill_task(&mut self) {
+        self.subagent_backfill_task = None;
+        self.subagent_backfill_rx = None;
+    }
+
+    fn apply_subagent_backfill_result(&mut self, result: SubagentBackfillResult) -> bool {
+        match result {
+            SubagentBackfillResult::Completed {
+                primary_thread_id,
+                threads,
+                had_read_error,
+            } => {
+                if self.primary_thread_id != Some(primary_thread_id) {
+                    return false;
                 }
+
+                self.subagent_backfill_inflight_primary = None;
+                if had_read_error {
+                    self.last_subagent_backfill_attempt = None;
+                }
+
+                let mut changed = false;
+                for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
+                    self.upsert_agent_picker_thread(
+                        thread.thread_id,
+                        thread.agent_nickname,
+                        thread.agent_role,
+                        /*is_closed*/ false,
+                    );
+                    changed = true;
+                }
+                changed
+            }
+            SubagentBackfillResult::Failed {
+                primary_thread_id,
+                message,
+            } => {
+                if self.primary_thread_id == Some(primary_thread_id) {
+                    self.subagent_backfill_inflight_primary = None;
+                    self.last_subagent_backfill_attempt = None;
+                    tracing::warn!(
+                        primary_thread_id = %primary_thread_id,
+                        error = %message,
+                        "failed to backfill loaded subagent threads"
+                    );
+                }
+                false
             }
         }
-
-        for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
-            self.upsert_agent_picker_thread(
-                thread.thread_id,
-                thread.agent_nickname,
-                thread.agent_role,
-                /*is_closed*/ false,
-            );
-        }
-
-        !had_read_error
     }
 
     /// Returns the adjacent thread id for keyboard navigation, backfilling from the server if the
@@ -5047,13 +5080,13 @@ impl App {
         }
 
         let primary_thread_id = self.primary_thread_id?;
-        if self.last_subagent_backfill_attempt == Some(primary_thread_id) {
+        if self.subagent_backfill_inflight_primary == Some(primary_thread_id)
+            || self.last_subagent_backfill_attempt == Some(primary_thread_id)
+        {
             return None;
         }
 
-        if self.backfill_loaded_subagent_threads(app_server).await {
-            self.last_subagent_backfill_attempt = Some(primary_thread_id);
-        }
+        self.start_subagent_backfill_task(app_server);
         self.agent_navigation
             .adjacent_thread_id(self.current_displayed_thread_id(), direction)
     }
@@ -5070,9 +5103,18 @@ impl App {
         };
 
         let mut disconnected = false;
+        let mut hit_budget = false;
+        let mut drained = 0usize;
         loop {
             match rx.try_recv() {
-                Ok(event) => self.handle_thread_event_now(event),
+                Ok(event) => {
+                    self.handle_thread_event_now(event);
+                    drained += 1;
+                    if drained >= ACTIVE_THREAD_EVENT_DRAIN_BUDGET {
+                        hit_budget = true;
+                        break;
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -5087,7 +5129,7 @@ impl App {
             self.clear_active_thread().await;
         }
 
-        if self.backtrack_render_pending {
+        if self.backtrack_render_pending || hit_budget {
             tui.frame_requester().schedule_frame();
         }
         Ok(())
@@ -5416,6 +5458,9 @@ impl App {
             active_thread_rx: None,
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
+            subagent_backfill_inflight_primary: None,
+            subagent_backfill_rx: None,
+            subagent_backfill_task: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
@@ -5516,6 +5561,29 @@ impl App {
                             }
                         } else {
                             app.clear_active_thread().await;
+                        }
+                        AppRunControl::Continue
+                    }
+                    subagent_backfill = async {
+                        if let Some(rx) = app.subagent_backfill_rx.as_mut() {
+                            rx.recv().await
+                        } else {
+                            None
+                        }
+                    }, if app.subagent_backfill_rx.is_some() => {
+                        match subagent_backfill {
+                            Some(result) => {
+                                let needs_redraw = app.apply_subagent_backfill_result(result);
+                                app.finish_subagent_backfill_task();
+                                if needs_redraw {
+                                    tui.frame_requester().schedule_frame();
+                                }
+                            }
+                            None => {
+                                app.subagent_backfill_inflight_primary = None;
+                                app.last_subagent_backfill_attempt = None;
+                                app.finish_subagent_backfill_task();
+                            }
                         }
                         AppRunControl::Continue
                     }
@@ -7828,6 +7896,82 @@ async fn fetch_all_mcp_server_statuses(
     }
 
     Ok(statuses)
+}
+
+async fn fetch_loaded_subagent_threads(
+    request_handle: AppServerRequestHandle,
+    primary_thread_id: ThreadId,
+) -> SubagentBackfillResult {
+    let mut cursor = None;
+    let mut loaded_thread_ids = Vec::new();
+
+    loop {
+        let request_id = RequestId::String(format!("thread-loaded-list-{}", Uuid::new_v4()));
+        let response: ThreadLoadedListResponse = match request_handle
+            .request_typed(ClientRequest::ThreadLoadedList {
+                request_id,
+                params: ThreadLoadedListParams {
+                    cursor: cursor.clone(),
+                    limit: Some(SUBAGENT_BACKFILL_PAGE_SIZE),
+                },
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                return SubagentBackfillResult::Failed {
+                    primary_thread_id,
+                    message: format!("{err}"),
+                };
+            }
+        };
+        loaded_thread_ids.extend(response.data);
+        if let Some(next_cursor) = response.next_cursor {
+            cursor = Some(next_cursor);
+        } else {
+            break;
+        }
+    }
+
+    let mut threads = Vec::new();
+    let mut had_read_error = false;
+    for thread_id in loaded_thread_ids {
+        let Ok(thread_id) = ThreadId::from_string(&thread_id) else {
+            tracing::warn!(
+                thread_id,
+                "ignoring loaded thread with invalid id during subagent backfill"
+            );
+            had_read_error = true;
+            continue;
+        };
+        if thread_id == primary_thread_id {
+            continue;
+        }
+
+        let request_id = RequestId::String(format!("thread-read-{}", Uuid::new_v4()));
+        match request_handle
+            .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
+                request_id,
+                params: ThreadReadParams {
+                    thread_id: thread_id.to_string(),
+                    include_turns: false,
+                },
+            })
+            .await
+        {
+            Ok(response) => threads.push(response.thread),
+            Err(err) => {
+                had_read_error = true;
+                tracing::warn!(thread_id = %thread_id, error = %err, "failed to read loaded thread");
+            }
+        }
+    }
+
+    SubagentBackfillResult::Completed {
+        primary_thread_id,
+        threads,
+        had_read_error,
+    }
 }
 
 async fn fetch_account_rate_limits(
@@ -11444,6 +11588,9 @@ guardian_approval = true
             active_thread_rx: None,
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
+            subagent_backfill_inflight_primary: None,
+            subagent_backfill_rx: None,
+            subagent_backfill_task: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
@@ -11501,6 +11648,9 @@ guardian_approval = true
                 active_thread_rx: None,
                 primary_thread_id: None,
                 last_subagent_backfill_attempt: None,
+                subagent_backfill_inflight_primary: None,
+                subagent_backfill_rx: None,
+                subagent_backfill_task: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),

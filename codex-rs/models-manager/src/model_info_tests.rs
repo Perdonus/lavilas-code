@@ -1,5 +1,6 @@
 use super::*;
 use crate::ModelsManagerConfig;
+use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -77,6 +78,18 @@ fn normalize_provider_model_alias_slug_repairs_gemini_legacy_aliases() {
 }
 
 #[test]
+fn normalize_provider_model_for_family_preserves_mistral_presented_slug() {
+    assert_eq!(
+        normalize_provider_model_for_family("mistral", "mistral-vibe-cli-with-tools"),
+        "mistral-vibe-cli-with-tools".to_string()
+    );
+    assert_eq!(
+        normalize_provider_model_for_family("mistral", "mistral-medium-2508"),
+        "mistral-medium-2508".to_string()
+    );
+}
+
+#[test]
 fn compatibility_model_info_keeps_tool_support_for_canonical_mistral_vibe_cli() {
     let model = compatibility_model_info_from_slug("mistral-vibe-cli")
         .expect("canonical Mistral Vibe CLI should produce compatibility metadata");
@@ -100,6 +113,21 @@ fn compatibility_model_info_repairs_mistral_fast_variant() {
 }
 
 #[test]
+fn compatibility_model_info_adds_reasoning_for_mistral_small_family() {
+    let model = compatibility_model_info_from_slug("mistral-small-latest")
+        .expect("Mistral small should produce compatibility metadata");
+
+    assert_eq!(model.default_reasoning_level, Some(ReasoningEffort::High));
+    assert_eq!(
+        model.supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>(),
+        vec![ReasoningEffort::None, ReasoningEffort::High]
+    );
+}
+
+#[test]
 fn compatibility_model_info_supports_real_mistral_families() {
     let devstral = compatibility_model_info_from_slug("devstral-latest")
         .expect("devstral should produce compatibility metadata");
@@ -116,4 +144,16 @@ fn compatibility_model_info_supports_real_mistral_families() {
     assert!(pixtral.supports_parallel_tool_calls);
     assert!(pixtral.supports_search_tool);
     assert!(!pixtral.used_fallback_model_metadata);
+
+    let magistral = compatibility_model_info_from_slug("magistral-medium-latest")
+        .expect("magistral should produce compatibility metadata");
+    assert_eq!(magistral.default_reasoning_level, Some(ReasoningEffort::High));
+    assert_eq!(
+        magistral
+            .supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>(),
+        vec![ReasoningEffort::None, ReasoningEffort::High]
+    );
 }

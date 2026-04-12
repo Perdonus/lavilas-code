@@ -171,12 +171,32 @@ fn mistral_model_reasoning_effort_support_is_model_specific() {
 }
 
 #[test]
+fn mistral_model_tool_support_is_model_specific() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://api.mistral.ai/v1".to_string()));
+
+    assert!(provider.model_supports_parallel_tool_calls("devstral-latest"));
+    assert!(provider.model_supports_parallel_tool_calls("pixtral-large-latest"));
+    assert!(provider.model_supports_search_tool("mistral-medium-latest"));
+}
+
+#[test]
 fn gemini_model_reasoning_effort_support_stays_disabled() {
     let provider = ModelProviderInfo::create_openai_provider(Some(
         "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
     ));
 
     assert!(!provider.model_supports_chat_completions_reasoning_effort("gemini-2.5-pro"));
+}
+
+#[test]
+fn gemini_model_tool_support_stays_enabled() {
+    let provider = ModelProviderInfo::create_openai_provider(Some(
+        "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
+    ));
+
+    assert!(provider.model_supports_parallel_tool_calls("gemini-2.5-flash"));
+    assert!(provider.model_supports_search_tool("gemini-2.5-pro"));
 }
 
 #[test]

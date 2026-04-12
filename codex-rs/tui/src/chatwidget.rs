@@ -3247,6 +3247,40 @@ impl ChatWidget {
         );
     }
 
+    fn composer_has_draft_content(&self) -> bool {
+        !self.bottom_pane.composer_text().is_empty()
+            || !self.bottom_pane.composer_local_images().is_empty()
+            || !self.bottom_pane.remote_image_urls().is_empty()
+    }
+
+    fn try_restore_last_submitted_user_message_to_composer(&mut self) -> bool {
+        if self.composer_has_draft_content() {
+            return false;
+        }
+
+        let Some(last_user_message) = self.last_rendered_user_message_event.clone() else {
+            return false;
+        };
+
+        let local_images = last_user_message
+            .local_images
+            .into_iter()
+            .enumerate()
+            .map(|(idx, path)| LocalImageAttachment {
+                placeholder: local_image_label_text(idx + 1),
+                path,
+            })
+            .collect();
+        self.restore_user_message_to_composer(UserMessage {
+            text: last_user_message.message,
+            local_images,
+            remote_image_urls: last_user_message.remote_image_urls,
+            text_elements: last_user_message.text_elements,
+            mention_bindings: Vec::new(),
+        });
+        true
+    }
+
     pub(crate) fn capture_thread_input_state(&self) -> Option<ThreadInputState> {
         let composer = ThreadComposerState {
             text: self.bottom_pane.composer_text(),
@@ -4957,16 +4991,24 @@ impl ChatWidget {
             _ => {}
         }
 
-        if key_event.kind == KeyEventKind::Press
-            && self.queued_message_edit_binding.is_press(key_event)
-            && self.has_queued_follow_up_messages()
+        if key_event.kind == KeyEventKind::Press && self.queued_message_edit_binding.is_press(key_event)
         {
-            if let Some(user_message) = self.pop_latest_queued_user_message() {
-                self.restore_user_message_to_composer(user_message);
-                self.refresh_pending_input_preview();
-                self.request_redraw();
+            if self.has_queued_follow_up_messages() {
+                if let Some(user_message) = self.pop_latest_queued_user_message() {
+                    self.restore_user_message_to_composer(user_message);
+                    self.refresh_pending_input_preview();
+                    self.request_redraw();
+                }
+                return;
             }
-            return;
+
+            if self.bottom_pane.no_modal_or_popup_active()
+                && !self.bottom_pane.is_task_running()
+                && self.try_restore_last_submitted_user_message_to_composer()
+            {
+                self.request_redraw();
+                return;
+            }
         }
 
         if matches!(key_event.code, KeyCode::Esc)
@@ -8794,11 +8836,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
-        let presets: Vec<ModelPreset> = presets
-            .into_iter()
-            .filter(|preset| preset.show_in_picker)
-            .collect();
-        let all_presets = presets.clone();
+        let all_presets = presets;
+        let quick_picker_presets = Self::quick_picker_model_presets(all_presets.as_slice());
+        let full_catalog_presets = Self::non_auto_model_presets(all_presets.as_slice());
         let is_ru = self.ui_language().is_ru();
         let replace_active = self.bottom_pane.active_view_id() == Some(MODEL_PICKER_VIEW_ID);
         let remembered_selected_idx = self
@@ -8812,24 +8852,25 @@ impl ChatWidget {
             .map(Self::model_picker_label)
             .unwrap_or_else(|| self.model_display_name().to_string());
         let provider_supports_reasoning = self.current_provider_supports_reasoning_controls();
+        if !self.current_model_presets_enabled() {
+            self.open_all_models_popup(full_catalog_presets);
+            return;
+        }
 
-        let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
-            .into_iter()
-            .partition(|preset| Self::is_auto_model(&preset.model));
+        let (mut auto_presets, _other_quick_picker_presets): (Vec<ModelPreset>, Vec<ModelPreset>) =
+            quick_picker_presets
+                .into_iter()
+                .partition(|preset| Self::is_auto_model(&preset.model));
 
         let (quick_items, all_models_presets, subtitle): (
             Vec<SelectionItem>,
             Vec<ModelPreset>,
             String,
         ) = if auto_presets.is_empty() {
-            if !self.current_model_presets_enabled() {
-                self.open_all_models_popup(all_presets);
-                return;
-            }
-
-            let provider_quick_presets = self.resolved_provider_model_presets(&all_presets);
+            let provider_quick_presets =
+                self.resolved_provider_model_presets(full_catalog_presets.as_slice());
             if provider_quick_presets.is_empty() {
-                self.open_all_models_popup(all_presets);
+                self.open_all_models_popup(full_catalog_presets);
                 return;
             }
 
@@ -8873,7 +8914,7 @@ impl ChatWidget {
 
             (
                 items,
-                all_presets,
+                full_catalog_presets,
                 if is_ru && provider_supports_reasoning {
                     "Быстрые пресеты текущего провайдера. После выбора откроется бюджет размышлений.".to_string()
                 } else if is_ru {
@@ -8921,7 +8962,7 @@ impl ChatWidget {
 
             (
                 items,
-                other_presets,
+                full_catalog_presets,
                 if is_ru {
                     "Сначала быстрые пресеты для старта, затем полный каталог с ручной настройкой модели и режима размышлений.".to_string()
                 } else {
@@ -8980,15 +9021,15 @@ impl ChatWidget {
 
             items.push(SelectionItem {
                 name: if is_ru {
-                    "Весь каталог".to_string()
+                    "Полный каталог моделей".to_string()
                 } else {
-                    "All models".to_string()
+                    "Full model catalog".to_string()
                 },
                 description,
                 search_value: Some(if is_ru {
-                    "весь каталог все модели reasoning".to_string()
+                    "полный каталог все модели manual reasoning".to_string()
                 } else {
-                    "all models full catalog reasoning".to_string()
+                    "full model catalog manual reasoning".to_string()
                 }),
                 is_current,
                 actions,
@@ -9075,6 +9116,22 @@ impl ChatWidget {
             || slug.contains(":latest")
             || slug.contains("/latest")
             || slug.contains("@latest")
+    }
+
+    fn quick_picker_model_presets(presets: &[ModelPreset]) -> Vec<ModelPreset> {
+        presets
+            .iter()
+            .filter(|preset| preset.show_in_picker)
+            .cloned()
+            .collect()
+    }
+
+    fn non_auto_model_presets(presets: &[ModelPreset]) -> Vec<ModelPreset> {
+        presets
+            .iter()
+            .filter(|preset| !Self::is_auto_model(preset.model.as_str()))
+            .cloned()
+            .collect()
     }
 
     fn provider_quick_presets(presets: &[ModelPreset]) -> Vec<(&'static str, ModelPreset)> {
@@ -9206,26 +9263,54 @@ impl ChatWidget {
         let remembered_selected_idx = self
             .bottom_pane
             .selected_index_for_active_view(ALL_MODELS_VIEW_ID);
-        let mut items: Vec<SelectionItem> = vec![SelectionItem {
-            name: if is_ru {
-                "← К быстрым пресетам".to_string()
-            } else {
-                "← Back to quick presets".to_string()
-            },
-            description: Some(if is_ru {
-                "Вернуться к быстрым режимам выбора модели.".to_string()
-            } else {
-                "Return to quick model presets.".to_string()
-            }),
-            search_value: Some(if is_ru {
-                "назад быстрые пресеты модели".to_string()
-            } else {
-                "back quick presets models".to_string()
-            }),
-            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelPopup))],
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
+        let full_catalog_presets =
+            Self::non_auto_model_presets(self.current_model_popup_catalog_models().as_slice());
+        let can_return_to_quick_presets =
+            self.has_quick_model_picker_path(full_catalog_presets.as_slice());
+        let mut items: Vec<SelectionItem> = Vec::new();
+        if can_return_to_quick_presets {
+            items.push(SelectionItem {
+                name: if is_ru {
+                    "← К быстрым пресетам".to_string()
+                } else {
+                    "← Back to quick presets".to_string()
+                },
+                description: Some(if is_ru {
+                    "Вернуться к быстрым режимам выбора модели.".to_string()
+                } else {
+                    "Return to quick model presets.".to_string()
+                }),
+                search_value: Some(if is_ru {
+                    "назад быстрые пресеты модели".to_string()
+                } else {
+                    "back quick presets models".to_string()
+                }),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelPopup))],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        } else {
+            items.push(SelectionItem {
+                name: if is_ru {
+                    "← Назад в настройки".to_string()
+                } else {
+                    "← Back to settings".to_string()
+                },
+                description: Some(if is_ru {
+                    "Вернуться к настройкам и профилям модели.".to_string()
+                } else {
+                    "Return to model settings and profiles.".to_string()
+                }),
+                search_value: Some(if is_ru {
+                    "назад настройки модели".to_string()
+                } else {
+                    "back settings model".to_string()
+                }),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
 
         for preset in presets.into_iter() {
             let description = self.model_preset_description(&preset);
@@ -9296,7 +9381,7 @@ impl ChatWidget {
         );
         let initial_selected_idx = remembered_selected_idx
             .or_else(|| items.iter().position(|item| item.is_current))
-            .or(Some(1));
+            .or(Some(usize::from(!items.is_empty() && can_return_to_quick_presets)));
         let params = SelectionViewParams {
             view_id: Some(ALL_MODELS_VIEW_ID),
             footer_hint: Some(
@@ -9447,14 +9532,9 @@ impl ChatWidget {
     ) {
         let is_ru = self.ui_language().is_ru();
         let reasoning_back_preset = self
-            .model_catalog
-            .try_list_models()
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.show_in_picker && preset.model == model)
-            });
+            .current_model_popup_catalog_models()
+            .into_iter()
+            .find(|preset| preset.model == model);
         let reasoning_phrase = match effort {
             Some(ReasoningEffortConfig::None) => {
                 if is_ru {
@@ -9769,19 +9849,10 @@ impl ChatWidget {
                 selection_choice
                     .and_then(|effort| choices.iter().position(|choice| choice.display == effort))
             });
-        let back_models = self
-            .model_catalog
-            .try_list_models()
-            .ok()
-            .map(|models| {
-                models
-                    .into_iter()
-                    .filter(|candidate| {
-                        candidate.show_in_picker && !Self::is_auto_model(candidate.model.as_str())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .filter(|models| !models.is_empty());
+        let back_models = {
+            let models = self.current_provider_catalog_models();
+            (!models.is_empty()).then_some(models)
+        };
         let mut items: Vec<SelectionItem> = Vec::new();
         if let Some(models) = back_models.clone() {
             items.push(SelectionItem {
@@ -10147,6 +10218,12 @@ impl ChatWidget {
         self.ui_preferences().model_presets_enabled
     }
 
+    fn current_provider_model_presets_configured(&self) -> bool {
+        self.ui_preferences()
+            .provider_model_presets
+            .contains_key(self.current_provider_model_preset_key().as_str())
+    }
+
     fn current_provider_model_preset_key(&self) -> String {
         self.config.model_provider_id.clone()
     }
@@ -10164,8 +10241,35 @@ impl ChatWidget {
             .try_list_models()
             .unwrap_or_default()
             .into_iter()
-            .filter(|preset| preset.show_in_picker)
+            .filter(|preset| !Self::is_auto_model(preset.model.as_str()))
+            .filter(|preset| !self.config.model_provider.is_openai() || preset.show_in_picker)
             .collect()
+    }
+
+    fn current_model_popup_catalog_models(&self) -> Vec<ModelPreset> {
+        if self.config.model_provider.is_openai() {
+            self.model_catalog
+                .try_list_models()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|preset| preset.show_in_picker)
+                .collect()
+        } else {
+            self.current_provider_catalog_models()
+        }
+    }
+
+    fn has_quick_model_picker_path(&self, full_catalog_presets: &[ModelPreset]) -> bool {
+        if !self.current_model_presets_enabled() {
+            return false;
+        }
+
+        Self::quick_picker_model_presets(self.current_model_popup_catalog_models().as_slice())
+            .iter()
+            .any(|preset| Self::is_auto_model(preset.model.as_str()))
+            || !self
+                .resolved_provider_model_presets(full_catalog_presets)
+                .is_empty()
     }
 
     fn preset_matches_model_slug(preset: &StoredModelPreset, model: &ModelPreset) -> bool {
@@ -10245,7 +10349,7 @@ impl ChatWidget {
                     .map(|model| (preset.clone(), model))
             })
             .collect::<Vec<_>>();
-        if resolved.is_empty() {
+        if resolved.is_empty() && !self.current_provider_model_presets_configured() {
             resolved = self
                 .derive_provider_model_presets(models)
                 .into_iter()
@@ -10263,7 +10367,7 @@ impl ChatWidget {
 
     fn editable_current_provider_model_presets(&self) -> Vec<StoredModelPreset> {
         let saved = self.saved_current_provider_model_presets();
-        if !saved.is_empty() {
+        if !saved.is_empty() || self.current_provider_model_presets_configured() {
             return saved;
         }
         self.derive_provider_model_presets(self.current_provider_catalog_models().as_slice())
@@ -11064,6 +11168,8 @@ impl ChatWidget {
     pub(crate) fn open_model_presets_settings_popup(&mut self) {
         let is_ru = self.ui_language().is_ru();
         let enabled = self.current_model_presets_enabled();
+        let has_quick_presets =
+            self.has_quick_model_picker_path(self.current_provider_catalog_models().as_slice());
         let provider_name = format!(
             "{} ({})",
             self.config.model_provider.name, self.config.model_provider_id
@@ -11107,9 +11213,21 @@ impl ChatWidget {
                     "Edit active provider presets".to_string()
                 },
                 description: Some(if is_ru {
-                    format!("Сейчас активен: {provider_name}")
+                    if has_quick_presets {
+                        format!("Сейчас активен: {provider_name}")
+                    } else {
+                        format!(
+                            "Сейчас активен: {provider_name}. Быстрых пресетов пока нет, поэтому /model открывает полный каталог."
+                        )
+                    }
                 } else {
-                    format!("Active provider: {provider_name}")
+                    if has_quick_presets {
+                        format!("Active provider: {provider_name}")
+                    } else {
+                        format!(
+                            "Active provider: {provider_name}. There are no quick presets yet, so /model opens the full catalog."
+                        )
+                    }
                 }),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::OpenCurrentProviderModelPresetEditor)
@@ -11209,7 +11327,19 @@ impl ChatWidget {
             } else {
                 "Active provider presets".to_string()
             }),
-            subtitle: Some(if is_ru {
+            subtitle: Some(if presets.is_empty() {
+                if is_ru {
+                    format!(
+                        "Провайдер: {} ({}). Быстрых пресетов сейчас нет: /model сразу откроет полный каталог, пока вы не добавите свои.",
+                        self.config.model_provider.name, self.config.model_provider_id
+                    )
+                } else {
+                    format!(
+                        "Provider: {} ({}). There are no quick presets yet, so /model opens the full catalog until you add one.",
+                        self.config.model_provider.name, self.config.model_provider_id
+                    )
+                }
+            } else if is_ru {
                 format!(
                     "Провайдер: {} ({}). Здесь можно добавить, переименовать, переназначить и удалить пресеты.",
                     self.config.model_provider.name, self.config.model_provider_id

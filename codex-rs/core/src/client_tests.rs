@@ -1,4 +1,8 @@
 use super::AuthRequestTelemetryContext;
+use super::ChatCompletionCalledFunction;
+use super::ChatCompletionGoogleExtraContent;
+use super::ChatCompletionToolCall;
+use super::ChatCompletionToolCallExtraContent;
 use super::ChatCompletionsMessage;
 use super::ChatCompletionsResponse;
 use super::ModelClient;
@@ -10,6 +14,7 @@ use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
 use super::build_chat_completions_messages;
 use super::chat_completions_response_to_events;
+use super::chat_completions_tool_call_response_item;
 use super::effective_wire_api;
 use super::encode_google_thought_signature;
 use super::normalize_request_model_for_provider;
@@ -21,6 +26,8 @@ use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::SessionSource;
@@ -28,6 +35,7 @@ use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
@@ -591,7 +599,7 @@ fn build_chat_completions_messages_maps_developer_role_to_system() {
 }
 
 #[test]
-fn build_chat_completions_messages_maps_developer_role_to_user_for_mistral() {
+fn build_chat_completions_messages_maps_developer_role_to_system_for_mistral() {
     let provider = mistral_provider();
     let messages = build_chat_completions_messages(
         &provider,
@@ -609,7 +617,7 @@ fn build_chat_completions_messages_maps_developer_role_to_user_for_mistral() {
     .expect("chat completions messages");
 
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[0].role, "system");
     assert_eq!(
         messages[0].content,
         Some(json!("system prompt\n\ndeveloper prompt"))
@@ -617,7 +625,7 @@ fn build_chat_completions_messages_maps_developer_role_to_user_for_mistral() {
 }
 
 #[test]
-fn build_chat_completions_messages_uses_user_instructions_for_mistral_tool_history() {
+fn build_chat_completions_messages_hoists_mistral_tool_history_instructions_to_leading_system() {
     let provider = mistral_provider();
     let messages = build_chat_completions_messages(
         &provider,
@@ -658,14 +666,11 @@ fn build_chat_completions_messages_uses_user_instructions_for_mistral_tool_histo
     )
     .expect("chat completions messages");
 
-    assert_eq!(messages[0].role, "user");
-    assert_eq!(messages[1].role, "assistant");
-    assert_eq!(messages[2].role, "tool");
-    assert_eq!(messages[3].role, "user");
-    assert!(
-        messages.iter().all(|message| message.role != "system"),
-        "Mistral/Gemini-compatible requests should avoid system-role replays: {messages:?}"
-    );
+    assert_eq!(messages[0].role, "system");
+    assert_eq!(messages[0].content, Some(json!("keep it terse")));
+    assert_eq!(messages[1].role, "user");
+    assert_eq!(messages[2].role, "assistant");
+    assert_eq!(messages[3].role, "tool");
 }
 
 #[test]
@@ -732,24 +737,20 @@ fn build_chat_completions_messages_preserves_mistral_user_turn_boundaries() {
 
     assert_eq!(
         user_messages,
-        vec![
-            json!("system prompt"),
-            json!("first ask"),
-            json!("second ask"),
-            json!("third ask"),
-        ]
+        vec![json!("first ask"), json!("second ask"), json!("third ask"),]
     );
     assert_eq!(
         messages
             .iter()
             .map(|message| message.role.as_str())
             .collect::<Vec<_>>(),
-        vec!["user", "user", "assistant", "user", "assistant", "user"]
+        vec!["system", "user", "assistant", "user", "assistant", "user"]
     );
+    assert_eq!(messages[0].content, Some(json!("system prompt")));
 }
 
 #[test]
-fn build_chat_completions_messages_rewrites_trailing_mistral_instructions_to_user_tail() {
+fn build_chat_completions_messages_hoists_trailing_mistral_instructions_to_leading_system() {
     let provider = mistral_provider();
     let messages = build_chat_completions_messages(
         &provider,
@@ -787,10 +788,10 @@ fn build_chat_completions_messages_rewrites_trailing_mistral_instructions_to_use
     .expect("chat completions messages");
 
     assert_eq!(messages.len(), 3);
-    assert_eq!(messages[0].role, "user");
-    assert_eq!(messages[1].role, "assistant");
-    assert_eq!(messages[2].role, "user");
-    assert_eq!(messages[2].content, Some(json!("keep it terse")));
+    assert_eq!(messages[0].role, "system");
+    assert_eq!(messages[0].content, Some(json!("keep it terse")));
+    assert_eq!(messages[1].role, "user");
+    assert_eq!(messages[2].role, "assistant");
 }
 
 #[test]
@@ -918,6 +919,144 @@ fn build_chat_completions_messages_preserves_gemini_thought_signature_for_tool_c
 }
 
 #[test]
+fn build_chat_completions_messages_replays_builtin_provider_tools_as_tool_history() {
+    let provider =
+        create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::ChatCompletions);
+    let action: codex_protocol::models::WebSearchAction = serde_json::from_value(json!({
+        "type": "search",
+        "query": "weather in kudrovo",
+    }))
+    .expect("web search action");
+    let messages = build_chat_completions_messages(
+        &provider,
+        "",
+        &[
+            ResponseItem::WebSearchCall {
+                id: Some("ws_1".to_string()),
+                status: Some("completed".to_string()),
+                action: Some(action),
+            },
+            ResponseItem::ImageGenerationCall {
+                id: "ig_1".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("a landing page hero image".to_string()),
+                result: "Zm9v".to_string(),
+            },
+        ],
+    )
+    .expect("chat completions messages");
+
+    assert_eq!(messages.len(), 4);
+    assert_eq!(
+        messages[0]
+            .tool_calls
+            .as_ref()
+            .and_then(|calls| calls.first())
+            .map(|call| call.function.name.as_str()),
+        Some("web_search")
+    );
+    assert_eq!(messages[1].role, "tool");
+    assert_eq!(messages[1].name.as_deref(), Some("web_search"));
+    assert_eq!(
+        messages[2]
+            .tool_calls
+            .as_ref()
+            .and_then(|calls| calls.first())
+            .map(|call| call.function.name.as_str()),
+        Some("image_generation")
+    );
+    assert_eq!(messages[3].role, "tool");
+    assert_eq!(messages[3].name.as_deref(), Some("image_generation"));
+    assert!(
+        messages[3]
+            .content
+            .as_ref()
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("[image generation result omitted during provider translation]"))
+    );
+}
+
+#[test]
+fn build_chat_completions_messages_batches_consecutive_tool_calls_into_one_assistant_turn() {
+    let provider =
+        create_oss_provider_with_base_url("https://api.openai.com/v1", WireApi::ChatCompletions);
+    let messages = build_chat_completions_messages(
+        &provider,
+        "",
+        &[
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                namespace: None,
+                arguments: "{\"command\":\"pwd\"}".to_string(),
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::CustomToolCall {
+                id: None,
+                status: None,
+                call_id: "call-2".to_string(),
+                name: "apply_patch".to_string(),
+                input: "*** Begin Patch\n*** End Patch\n".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                    "/root".to_string(),
+                ),
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id: "call-2".to_string(),
+                name: Some("apply_patch".to_string()),
+                output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                    "ok".to_string(),
+                ),
+            },
+        ],
+    )
+    .expect("chat completions messages");
+
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0].role, "assistant");
+    assert_eq!(
+        messages[0]
+            .tool_calls
+            .as_ref()
+            .map(std::vec::Vec::len),
+        Some(2)
+    );
+    assert_eq!(messages[1].role, "tool");
+    assert_eq!(messages[2].role, "tool");
+}
+
+#[test]
+fn chat_completions_tool_call_response_item_restores_custom_tool_calls() {
+    let item = chat_completions_tool_call_response_item(
+        ChatCompletionToolCall {
+            id: Some("call-1".to_string()),
+            kind: "function".to_string(),
+            function: ChatCompletionCalledFunction {
+                name: "apply_patch".to_string(),
+                arguments: "{\"input\":\"*** Begin Patch\\n*** End Patch\\n\"}".to_string(),
+            },
+            extra_content: None,
+        },
+        0,
+        &HashSet::from(["apply_patch".to_string()]),
+    );
+
+    assert_eq!(
+        item,
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-1".to_string(),
+            name: "apply_patch".to_string(),
+            input: "*** Begin Patch\n*** End Patch\n".to_string(),
+        }
+    );
+}
+
+#[test]
 fn chat_completions_response_preserves_gemini_thought_signature_on_tool_calls() {
     let response = ChatCompletionsResponse {
         id: Some("resp-1".to_string()),
@@ -941,6 +1080,11 @@ fn chat_completions_response_preserves_gemini_thought_signature_on_tool_calls() 
                         }),
                     }),
                 }]),
+                reasoning: None,
+                reasoning_details: None,
+                reasoning_content: None,
+                thinking: None,
+                thoughts: None,
             },
         }],
         usage: None,
@@ -956,6 +1100,64 @@ fn chat_completions_response_preserves_gemini_thought_signature_on_tool_calls() 
         .expect("function call id");
 
     assert_eq!(function_call, encode_google_thought_signature("sig-123"));
+}
+
+#[test]
+fn chat_completions_response_emits_reasoning_events_from_structured_content() {
+    let response = ChatCompletionsResponse {
+        id: Some("resp-1".to_string()),
+        model: Some("gemini-2.5-flash".to_string()),
+        choices: vec![super::ChatCompletionChoice {
+            message: ChatCompletionsMessage {
+                role: "assistant".to_string(),
+                content: Some(json!([
+                    {
+                        "type": "thinking",
+                        "text": "plan first"
+                    },
+                    {
+                        "type": "text",
+                        "text": "final answer"
+                    }
+                ])),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                reasoning: None,
+                reasoning_details: None,
+                reasoning_content: Some(json!("raw trace")),
+                thinking: None,
+                thoughts: None,
+            },
+        }],
+        usage: None,
+    };
+
+    let events = chat_completions_response_to_events(response).expect("events");
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        super::ResponseEvent::ServerReasoningIncluded(true)
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        super::ResponseEvent::ReasoningSummaryPartAdded { summary_index: 0 }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        super::ResponseEvent::ReasoningSummaryDelta { delta, summary_index: 0 }
+            if delta == "plan first"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        super::ResponseEvent::ReasoningContentDelta { delta, content_index: 0 }
+            if delta == "raw trace"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        super::ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. })
+            if matches!(content.as_slice(), [ContentItem::OutputText { text }] if text == "final answer")
+    )));
 }
 
 #[test]

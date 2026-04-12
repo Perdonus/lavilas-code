@@ -505,6 +505,99 @@ async fn custom_gemini_catalog_clears_default_reasoning_without_supported_levels
 }
 
 #[tokio::test]
+async fn custom_mistral_catalog_preserves_distinct_aliases_and_versions() {
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let provider = codex_model_provider_info::create_oss_provider_with_base_url(
+        "https://api.mistral.ai/v1",
+        WireApi::ChatCompletions,
+    );
+    let manager = ModelsManager::new_with_provider(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        Some(ModelsResponse {
+            models: vec![
+                remote_model(
+                    "mistral-medium-latest",
+                    "Mistral Medium Latest",
+                    /*priority*/ 0,
+                ),
+                remote_model(
+                    "mistral-medium-2508",
+                    "Mistral Medium 2508",
+                    /*priority*/ 1,
+                ),
+                remote_model(
+                    "mistral-vibe-cli-with-tools",
+                    "Mistral Vibe CLI",
+                    /*priority*/ 2,
+                ),
+                remote_model(
+                    "mistral-small-latest",
+                    "Mistral Small Latest",
+                    /*priority*/ 3,
+                ),
+            ],
+        }),
+        CollaborationModesConfig::default(),
+        provider,
+    );
+
+    let presets = manager.list_models(RefreshStrategy::Offline).await;
+    let models = presets
+        .iter()
+        .map(|preset| preset.model.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(models.len(), 4);
+    assert!(models.contains(&"mistral-medium-latest"));
+    assert!(models.contains(&"mistral-medium-2508"));
+    assert!(models.contains(&"mistral-vibe-cli-with-tools"));
+    assert!(models.contains(&"mistral-small-latest"));
+}
+
+#[tokio::test]
+async fn custom_mistral_small_catalog_restores_reasoning_and_tool_metadata() {
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let provider = codex_model_provider_info::create_oss_provider_with_base_url(
+        "https://api.mistral.ai/v1",
+        WireApi::ChatCompletions,
+    );
+    let mut model = remote_model(
+        "mistral-small-latest",
+        "Mistral Small",
+        /*priority*/ 0,
+    );
+    model.supported_reasoning_levels.clear();
+    model.default_reasoning_level = Some(ReasoningEffort::Medium);
+    model.supports_parallel_tool_calls = false;
+    model.supports_search_tool = false;
+    let manager = ModelsManager::new_with_provider(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        Some(ModelsResponse { models: vec![model] }),
+        CollaborationModesConfig::default(),
+        provider,
+    );
+
+    let info = manager
+        .get_model_info("mistral-small-latest", &ModelsManagerConfig::default())
+        .await;
+
+    assert!(info.supports_parallel_tool_calls);
+    assert!(info.supports_search_tool);
+    assert_eq!(info.default_reasoning_level, Some(ReasoningEffort::High));
+    assert_eq!(
+        info.supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>(),
+        vec![ReasoningEffort::None, ReasoningEffort::High]
+    );
+}
+
+#[tokio::test]
 async fn refresh_available_models_sorts_by_priority() {
     let server = MockServer::start().await;
     let remote_models = vec![
@@ -683,6 +776,63 @@ async fn refresh_available_models_preserves_remote_mistral_slug() {
     assert_eq!(mistral.display_name, "Mistral Large");
     assert_eq!(mistral.default_reasoning_effort, ReasoningEffort::None);
     assert!(mistral.supported_reasoning_efforts.is_empty());
+}
+
+#[tokio::test]
+async fn refresh_available_models_keeps_multiple_mistral_aliases_from_openai_compatible_catalog() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_raw(
+                    r#"{"object":"list","data":[{"id":"mistral-medium-latest","capabilities":{"chat_completion":false}},{"id":"mistral-medium-2508","capabilities":{"chat_completion":false}},{"id":"mistral-vibe-cli-with-tools","capabilities":{"chat_completion":false}},{"id":"mistral-small-latest","capabilities":{"chat_completion":true,"reasoning":true}}]}"#,
+                    "application/json",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("unused"));
+    let provider = provider_for_name(server.uri(), "Mistral", WireApi::ChatCompletions);
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        provider,
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("refresh succeeds");
+
+    let available = manager.list_models(RefreshStrategy::Offline).await;
+    let models = available
+        .iter()
+        .map(|model| model.model.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(models.contains(&"mistral-medium-latest"));
+    assert!(models.contains(&"mistral-medium-2508"));
+    assert!(models.contains(&"mistral-vibe-cli-with-tools"));
+    assert!(models.contains(&"mistral-small-latest"));
+
+    let mistral_small = available
+        .iter()
+        .find(|model| model.model == "mistral-small-latest")
+        .expect("mistral-small-latest should be listed");
+    assert_eq!(mistral_small.default_reasoning_effort, ReasoningEffort::High);
+    assert_eq!(
+        mistral_small
+            .supported_reasoning_efforts
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>(),
+        vec![ReasoningEffort::None, ReasoningEffort::High]
+    );
 }
 
 #[tokio::test]
