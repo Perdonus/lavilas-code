@@ -2391,7 +2391,7 @@ struct ChatCompletionChoice {
     message: ChatCompletionsMessage,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ChatCompletionsUsage {
     #[serde(default)]
     prompt_tokens: Option<i64>,
