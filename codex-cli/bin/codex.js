@@ -6,65 +6,23 @@ import { chmodSync, existsSync, readdirSync, statSync } from "fs";
 import { createRequire } from "node:module";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  PLATFORM_PACKAGE_BY_TARGET,
+  detectPackageManager,
+  getCodexBinaryName,
+  resolveTargetTriple,
+  selectVendorInstallation,
+  updateCommandForPackageManager,
+} from "./platform-resolver.js";
 
 // __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const packageDir = path.join(__dirname, "..");
 const require = createRequire(import.meta.url);
 
-const PLATFORM_PACKAGE_BY_TARGET = {
-  "x86_64-unknown-linux-musl": "@lavilas/codex-linux-x64",
-  "aarch64-unknown-linux-musl": "@lavilas/codex-linux-arm64",
-  "x86_64-apple-darwin": "@lavilas/codex-darwin-x64",
-  "aarch64-apple-darwin": "@lavilas/codex-darwin-arm64",
-  "x86_64-pc-windows-msvc": "@lavilas/codex-win32-x64",
-  "aarch64-pc-windows-msvc": "@lavilas/codex-win32-arm64",
-};
-
 const { platform, arch } = process;
-
-let targetTriple = null;
-switch (platform) {
-  case "linux":
-  case "android":
-    switch (arch) {
-      case "x64":
-        targetTriple = "x86_64-unknown-linux-musl";
-        break;
-      case "arm64":
-        targetTriple = "aarch64-unknown-linux-musl";
-        break;
-      default:
-        break;
-    }
-    break;
-  case "darwin":
-    switch (arch) {
-      case "x64":
-        targetTriple = "x86_64-apple-darwin";
-        break;
-      case "arm64":
-        targetTriple = "aarch64-apple-darwin";
-        break;
-      default:
-        break;
-    }
-    break;
-  case "win32":
-    switch (arch) {
-      case "x64":
-        targetTriple = "x86_64-pc-windows-msvc";
-        break;
-      case "arm64":
-        targetTriple = "aarch64-pc-windows-msvc";
-        break;
-      default:
-        break;
-    }
-    break;
-  default:
-    break;
-}
+const targetTriple = resolveTargetTriple(platform, arch);
 
 if (!targetTriple) {
   throw new Error(`Unsupported platform: ${platform} (${arch})`);
@@ -75,8 +33,8 @@ if (!platformPackage) {
   throw new Error(`Unsupported target triple: ${targetTriple}`);
 }
 
-const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
-const localVendorRoot = path.join(__dirname, "..", "vendor");
+const codexBinaryName = getCodexBinaryName(process.platform);
+const localVendorRoot = path.join(packageDir, "vendor");
 const localBinaryPath = path.join(
   localVendorRoot,
   targetTriple,
@@ -84,36 +42,24 @@ const localBinaryPath = path.join(
   codexBinaryName,
 );
 
-let vendorRoot;
-try {
-  const packageJsonPath = require.resolve(`${platformPackage}/package.json`);
-  vendorRoot = path.join(path.dirname(packageJsonPath), "vendor");
-} catch {
-  if (existsSync(localBinaryPath)) {
-    vendorRoot = localVendorRoot;
-  } else {
-    const packageManager = detectPackageManager();
-    const updateCommand =
-      packageManager === "bun"
-        ? "bun install -g @lavilas/codex@latest"
-        : "npm install -g @lavilas/codex@latest";
-    throw new Error(
-      `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
-    );
-  }
-}
+const selectedInstallation = selectVendorInstallation({
+  packageDir,
+  platformPackage,
+  targetTriple,
+  binaryName: codexBinaryName,
+  localVendorRoot,
+  requireResolve: (specifier) => require.resolve(specifier),
+});
 
-if (!vendorRoot) {
-  const packageManager = detectPackageManager();
-  const updateCommand =
-    packageManager === "bun"
-      ? "bun install -g @lavilas/codex@latest"
-      : "npm install -g @lavilas/codex@latest";
+if (!selectedInstallation) {
+  const packageManager = detectPackageManager({ installDir: __dirname });
+  const updateCommand = updateCommandForPackageManager(packageManager);
   throw new Error(
     `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
   );
 }
 
+const vendorRoot = selectedInstallation.vendorRoot;
 const archRoot = path.join(vendorRoot, targetTriple);
 const binaryPath = path.join(archRoot, "codex", codexBinaryName);
 
@@ -133,31 +79,6 @@ function getUpdatedPath(newDirs) {
   return updatedPath;
 }
 
-/**
- * Use heuristics to detect the package manager that was used to install Codex
- * in order to give the user a hint about how to update it.
- */
-function detectPackageManager() {
-  const userAgent = process.env.npm_config_user_agent || "";
-  if (/\bbun\//.test(userAgent)) {
-    return "bun";
-  }
-
-  const execPath = process.env.npm_execpath || "";
-  if (execPath.includes("bun")) {
-    return "bun";
-  }
-
-  if (
-    __dirname.includes(".bun/install/global") ||
-    __dirname.includes(".bun\\install\\global")
-  ) {
-    return "bun";
-  }
-
-  return userAgent ? "npm" : null;
-}
-
 const additionalDirs = [];
 const pathDir = path.join(archRoot, "path");
 if (existsSync(pathDir)) {
@@ -167,7 +88,7 @@ const updatedPath = getUpdatedPath(additionalDirs);
 
 const env = { ...process.env, PATH: updatedPath };
 const packageManagerEnvVar =
-  detectPackageManager() === "bun"
+  detectPackageManager({ installDir: __dirname }) === "bun"
     ? "CODEX_MANAGED_BY_BUN"
     : "CODEX_MANAGED_BY_NPM";
 env[packageManagerEnvVar] = "1";

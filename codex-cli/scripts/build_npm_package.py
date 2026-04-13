@@ -2,6 +2,7 @@
 """Stage and optionally package the @lavilas/codex npm module."""
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -402,6 +403,32 @@ def copy_native_binaries(
         if missing_targets:
             missing_list = ", ".join(missing_targets)
             raise RuntimeError(f"Missing target directories in vendor source: {missing_list}")
+
+    write_vendor_manifest(vendor_dest)
+
+
+def sha256_file(file_path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(file_path, "rb") as fh:
+        while chunk := fh.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_vendor_manifest(vendor_dest: Path) -> None:
+    files: dict[str, dict[str, str | int]] = {}
+    for file_path in sorted(vendor_dest.rglob("*")):
+        if not file_path.is_file():
+            continue
+        relative_path = file_path.relative_to(vendor_dest).as_posix()
+        files[relative_path] = {
+            "size": file_path.stat().st_size,
+            "sha256": sha256_file(file_path),
+        }
+
+    with open(vendor_dest / "manifest.json", "w", encoding="utf-8") as fh:
+        json.dump({"version": 1, "files": files}, fh, indent=2)
+        fh.write("\n")
 
 
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:

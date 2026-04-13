@@ -387,6 +387,18 @@ jobs:
 
           bash .github/scripts/wait_for_npm_package.sh --timeout 900 "${refs[@]}"
 
+      - name: Smoke test propagated linux x64 platform package tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/npm-platform-smoke"
+          rm -rf "$work"
+          mkdir -p "$work/unpack"
+          (cd "$work" && npm pack "@lavilas/codex-linux-x64@${{ steps.version.outputs.release_version }}" --silent >/dev/null)
+          tarball="$(echo "$work"/*.tgz)"
+          tar -xzf "$tarball" -C "$work/unpack"
+          "$work/unpack/package/vendor/x86_64-unknown-linux-musl/codex/codex" --version
+
       - name: Smoke test staged base package against propagated platform packages (linux x64)
         shell: bash
         run: |
@@ -400,6 +412,15 @@ jobs:
             "$prefix/lib/node_modules/@lavilas/codex"
           "$prefix/bin/codex" --version
           "$prefix/bin/lavilas" --version
+          pkg_root="$prefix/lib/node_modules/@lavilas/codex"
+          platform_root="$pkg_root/node_modules/@lavilas/codex-linux-x64"
+          rm -f "$platform_root/package.json"
+          "$prefix/bin/codex" --version
+          backup_root="$prefix/lib/node_modules/@lavilas/.codex-fallback"
+          rm -rf "$backup_root"
+          cp -a "$pkg_root" "$backup_root"
+          truncate -s 1024 "$platform_root/vendor/x86_64-unknown-linux-musl/codex/codex"
+          "$prefix/bin/codex" --version
 
       - name: Publish base package
         shell: bash
