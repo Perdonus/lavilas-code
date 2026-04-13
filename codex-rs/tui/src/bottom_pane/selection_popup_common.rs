@@ -36,6 +36,7 @@ pub(crate) struct GenericDisplayRow {
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
     pub category_tag: Option<String>,      // optional right-side category label
+    pub category_tags: Vec<String>,        // optional right-side badge labels
     pub disabled_reason: Option<String>,   // optional disabled message
     pub is_disabled: bool,
     pub wrap_indent: Option<usize>, // optional indent for wrapped lines
@@ -91,7 +92,7 @@ pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
         .style(user_message_style())
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(Color::Gray))
         .render(area, buf);
     menu_surface_inset(area)
 }
@@ -209,6 +210,7 @@ fn should_wrap_name_in_column(row: &GenericDisplayRow) -> bool {
         && row.match_indices.is_none()
         && row.display_shortcut.is_none()
         && row.category_tag.is_none()
+        && row.category_tags.is_empty()
         && row.name_prefix_spans.is_empty()
 }
 
@@ -300,6 +302,43 @@ fn wrap_row_lines(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<L
 
 fn selected_row_style() -> Style {
     Style::default().fg(Color::Black).bg(Color::Cyan).bold()
+}
+
+fn badge_style(label: &str) -> Style {
+    let normalized = label.to_ascii_lowercase();
+    if normalized.contains("fast") || normalized.contains("быстр") {
+        Style::default().fg(Color::Black).bg(Color::Green).bold()
+    } else if normalized.contains("latest")
+        || normalized.contains("основ")
+        || normalized.contains("актуал")
+    {
+        Style::default().fg(Color::Black).bg(Color::Yellow).bold()
+    } else if normalized.contains("tools") || normalized.contains("инстру") {
+        Style::default().fg(Color::Black).bg(Color::Cyan).bold()
+    } else if normalized.contains("current") || normalized.contains("текущ") {
+        Style::default().fg(Color::Black).bg(Color::White).bold()
+    } else if normalized.contains("default") || normalized.contains("умолч") {
+        Style::default().fg(Color::Black).bg(Color::Gray).bold()
+    } else if normalized.contains("openai")
+        || normalized.contains("mistral")
+        || normalized.contains("gemini")
+        || normalized.contains("claude")
+        || normalized.contains("anthropic")
+        || normalized.contains("groq")
+    {
+        Style::default().fg(Color::White).bg(Color::Blue).bold()
+    } else {
+        Style::default().fg(Color::White).bg(Color::DarkGray).bold()
+    }
+}
+
+fn badge_spans(tags: &[String]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for tag in tags.iter().filter(|tag| !tag.trim().is_empty()) {
+        spans.push(" ".into());
+        spans.push(Span::styled(format!(" {} ", tag.trim()), badge_style(tag)));
+    }
+    spans
 }
 
 fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disabled: bool) {
@@ -497,7 +536,9 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         }
         full_spans.push(desc.clone().dim());
     }
-    if let Some(tag) = row.category_tag.as_deref().filter(|tag| !tag.is_empty()) {
+    if !row.category_tags.is_empty() {
+        full_spans.extend(badge_spans(&row.category_tags));
+    } else if let Some(tag) = row.category_tag.as_deref().filter(|tag| !tag.is_empty()) {
         full_spans.push("  ".into());
         full_spans.push(tag.to_string().dim());
     }

@@ -10,6 +10,9 @@ use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_model_provider_info::compatibility_model_supports_parallel_tool_calls;
+use codex_model_provider_info::compatibility_model_supports_reasoning_effort;
+use codex_model_provider_info::compatibility_model_supports_search_tool;
 
 use crate::config::ModelsManagerConfig;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
@@ -22,18 +25,6 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 const COMPATIBILITY_VARIANT_SUFFIXES: [&str; 4] = ["-with-tools", "-tools", "-latest", "-fast"];
-const GEMINI_LEGACY_FLASH_MODEL: &str = "gemini-flash-latest";
-const GEMINI_LEGACY_FLASH_LITE_MODEL: &str = "gemini-flash-lite-latest";
-const GEMINI_LEGACY_PRO_MODEL: &str = "gemini-pro-latest";
-const GEMINI_CANONICAL_FLASH_MODEL: &str = "gemini-2.5-flash";
-const GEMINI_CANONICAL_FLASH_LITE_MODEL: &str = "gemini-2.5-flash-lite";
-const GEMINI_CANONICAL_PRO_MODEL: &str = "gemini-2.5-pro";
-const MISTRAL_LEGACY_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
-const MISTRAL_LEGACY_VIBE_CLI_LATEST_MODEL: &str = "mistral-vibe-cli-latest";
-const MISTRAL_LEGACY_VIBE_CLI_TOOLS_MODEL: &str = "mistral-vibe-cli-with-tools";
-const MISTRAL_LEGACY_VIBE_CLI_FAST_MODEL: &str = "mistral-vibe-cli-fast";
-const MISTRAL_CANONICAL_MEDIUM_MODEL: &str = "mistral-medium-latest";
-const MISTRAL_CANONICAL_FAST_MODEL: &str = "mistral-small-latest";
 const COMPATIBILITY_PROVIDER_HINTS: [&str; 16] = [
     "anthropic",
     "claude",
@@ -114,58 +105,15 @@ pub fn compatibility_model_info_from_slug(slug: &str) -> Option<ModelInfo> {
 }
 
 pub fn canonicalize_provider_model_slug(slug: &str) -> Option<String> {
-    canonicalize_mistral_variant_slug(slug)
+    codex_model_provider_info::canonicalize_provider_model_slug(slug)
 }
 
 pub fn normalize_provider_model_alias_slug(slug: &str) -> Option<String> {
-    let trimmed = slug.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let (prefix, tail) = trimmed
-        .rsplit_once('/')
-        .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
-    let normalized_tail = match tail.to_ascii_lowercase().as_str() {
-        GEMINI_LEGACY_FLASH_MODEL => GEMINI_CANONICAL_FLASH_MODEL,
-        GEMINI_LEGACY_FLASH_LITE_MODEL => GEMINI_CANONICAL_FLASH_LITE_MODEL,
-        GEMINI_LEGACY_PRO_MODEL => GEMINI_CANONICAL_PRO_MODEL,
-        _ => return None,
-    };
-
-    Some(match prefix {
-        Some(prefix) => format!("{prefix}/{normalized_tail}"),
-        None => normalized_tail.to_string(),
-    })
+    codex_model_provider_info::normalize_provider_model_alias_slug(slug)
 }
 
 pub fn normalize_provider_model_for_family(provider: &str, model: &str) -> String {
-    let trimmed = model.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    if provider.eq_ignore_ascii_case("gemini") {
-        let normalized = trimmed
-            .strip_prefix("models/")
-            .or_else(|| trimmed.strip_prefix("MODELS/"))
-            .map(str::trim)
-            .unwrap_or(trimmed);
-        if let Some(alias) = normalize_provider_model_alias_slug(normalized) {
-            return alias
-                .rsplit('/')
-                .next()
-                .unwrap_or(alias.as_str())
-                .to_string();
-        }
-        return normalized.to_ascii_lowercase();
-    }
-
-    if provider.eq_ignore_ascii_case("mistral") {
-        return trimmed.to_string();
-    }
-
-    trimmed.to_string()
+    codex_model_provider_info::normalize_provider_model_for_family(provider, model)
 }
 
 fn generic_model_info_from_slug(slug: &str, used_fallback_model_metadata: bool) -> ModelInfo {
@@ -252,36 +200,8 @@ fn title_case_slug_segment(segment: &str) -> String {
     }
 }
 
-fn slug_has_tool_variant(slug: &str) -> bool {
-    COMPATIBILITY_VARIANT_SUFFIXES[..2]
-        .iter()
-        .any(|suffix| slug.ends_with(suffix))
-}
-
 fn slug_supports_tool_use(slug: &str) -> bool {
-    if slug_has_tool_variant(slug)
-        || mistral_vibe_cli_terminal_segment(slug)
-        || canonicalize_mistral_variant_slug(slug).is_some()
-    {
-        return true;
-    }
-
-    compatibility_base_slug(slug).is_some_and(|base_slug| {
-        let base_slug = base_slug.to_ascii_lowercase();
-        [
-            "claude",
-            "codestral",
-            "codex",
-            "devstral",
-            "gemini",
-            "gpt",
-            "magistral",
-            "mistral",
-            "pixtral",
-        ]
-        .iter()
-        .any(|needle| base_slug.contains(needle))
-    })
+    compatibility_model_supports_parallel_tool_calls(slug)
 }
 
 pub fn compatibility_reasoning_presets_for_slug(slug: &str) -> Vec<ReasoningEffortPreset> {
@@ -306,9 +226,11 @@ pub fn compatibility_default_reasoning_level_for_slug(slug: &str) -> Option<Reas
 }
 
 pub fn enrich_compatibility_model_capabilities(model: &mut ModelInfo, slug: &str) {
-    let tool_use = slug_supports_tool_use(slug);
-    if tool_use {
+    if slug_supports_tool_use(slug) {
         model.supports_parallel_tool_calls = true;
+    }
+
+    if compatibility_model_supports_search_tool(slug) {
         model.supports_search_tool = true;
     }
 
@@ -325,60 +247,7 @@ pub fn enrich_compatibility_model_capabilities(model: &mut ModelInfo, slug: &str
 }
 
 fn slug_supports_reasoning_effort(slug: &str) -> bool {
-    let normalized = canonicalize_provider_model_slug(slug)
-        .or_else(|| normalize_provider_model_alias_slug(slug))
-        .unwrap_or_else(|| slug.trim().to_string());
-    let tail = normalized
-        .rsplit('/')
-        .next()
-        .unwrap_or(normalized.as_str())
-        .to_ascii_lowercase();
-
-    tail.starts_with("mistral-small")
-        || tail == MISTRAL_LEGACY_VIBE_CLI_FAST_MODEL
-        || tail.starts_with("magistral-")
-        || tail.starts_with("labs-leanstral-")
-}
-
-fn canonicalize_mistral_variant_slug(slug: &str) -> Option<String> {
-    let (prefix, terminal_segment) = match slug.rsplit_once('/') {
-        Some((prefix, terminal_segment)) => (Some(prefix), terminal_segment),
-        None => (None, slug),
-    };
-
-    let canonical_terminal =
-        if terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_FAST_MODEL) {
-            Some(MISTRAL_CANONICAL_FAST_MODEL)
-        } else if terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL)
-            || terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_LATEST_MODEL)
-            || terminal_segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_TOOLS_MODEL)
-        {
-            Some(MISTRAL_CANONICAL_MEDIUM_MODEL)
-        } else {
-            COMPATIBILITY_VARIANT_SUFFIXES.iter().find_map(|suffix| {
-                let base = terminal_segment.strip_suffix(suffix)?;
-                if !base.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL) {
-                    return None;
-                }
-
-                if suffix.eq_ignore_ascii_case("-fast") {
-                    Some(MISTRAL_CANONICAL_FAST_MODEL)
-                } else {
-                    Some(MISTRAL_CANONICAL_MEDIUM_MODEL)
-                }
-            })
-        }?;
-
-    Some(match prefix {
-        Some(prefix) => format!("{prefix}/{canonical_terminal}"),
-        None => canonical_terminal.to_string(),
-    })
-}
-
-fn mistral_vibe_cli_terminal_segment(slug: &str) -> bool {
-    slug.rsplit('/')
-        .next()
-        .is_some_and(|segment| segment.eq_ignore_ascii_case(MISTRAL_LEGACY_VIBE_CLI_MODEL))
+    compatibility_model_supports_reasoning_effort(slug)
 }
 
 fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {

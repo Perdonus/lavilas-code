@@ -226,6 +226,58 @@ fn canonicalize_provider_model_slug_preserves_namespace() {
 }
 
 #[test]
+fn normalize_provider_model_alias_slug_repairs_gemini_legacy_aliases() {
+    assert_eq!(
+        normalize_provider_model_alias_slug("gemini-flash-latest"),
+        Some("gemini-2.5-flash".to_string())
+    );
+    assert_eq!(
+        normalize_provider_model_alias_slug("models/gemini-pro-latest"),
+        Some("models/gemini-2.5-pro".to_string())
+    );
+}
+
+#[test]
+fn compatibility_tool_hints_cover_common_external_chat_models() {
+    assert!(compatibility_model_supports_parallel_tool_calls(
+        "claude-3.7-sonnet"
+    ));
+    assert!(compatibility_model_supports_parallel_tool_calls(
+        "mixtral-8x22b-latest"
+    ));
+    assert!(compatibility_model_supports_search_tool("gpt-4.1"));
+    assert!(!compatibility_model_supports_parallel_tool_calls(
+        "plain-random-model"
+    ));
+}
+
+#[test]
+fn generic_chat_completions_provider_uses_compatibility_tool_hints() {
+    let provider = ModelProviderInfo {
+        name: "OpenRouter".into(),
+        base_url: Some("https://openrouter.ai/api/v1".into()),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        wire_api: WireApi::ChatCompletions,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    assert!(provider.model_supports_parallel_tool_calls("claude-3.7-sonnet"));
+    assert!(provider.model_supports_search_tool("gpt-4.1"));
+    assert!(!provider.model_supports_parallel_tool_calls("plain-random-model"));
+}
+
+#[test]
 fn test_deserialize_websocket_connect_timeout() {
     let provider_toml = r#"
 name = "OpenAI"

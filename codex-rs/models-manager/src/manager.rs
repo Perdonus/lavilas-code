@@ -95,23 +95,63 @@ struct OpenAiCompatibleModelCapabilities {
     completion_chat: Option<bool>,
     #[serde(default)]
     chat_completion: Option<bool>,
+    #[serde(default, rename = "chat_completions")]
+    chat_completions: Option<bool>,
     #[serde(default)]
     reasoning: Option<bool>,
+    #[serde(default, rename = "reasoning_effort")]
+    reasoning_effort: Option<bool>,
+    #[serde(default, rename = "reasoningEffort")]
+    reasoning_effort_camel: Option<bool>,
     #[serde(default)]
     function_calling: Option<bool>,
     #[serde(default)]
     tools: Option<bool>,
     #[serde(default, rename = "tool_calls")]
     tool_calls: Option<bool>,
+    #[serde(default, rename = "parallel_tool_calls")]
+    parallel_tool_calls: Option<bool>,
+    #[serde(default, rename = "parallelToolCalls")]
+    parallel_tool_calls_camel: Option<bool>,
+    #[serde(default)]
+    search: Option<bool>,
+    #[serde(default, rename = "search_tool")]
+    search_tool: Option<bool>,
+    #[serde(default, rename = "searchTool")]
+    search_tool_camel: Option<bool>,
+    #[serde(default, rename = "web_search")]
+    web_search: Option<bool>,
+    #[serde(default, rename = "webSearch")]
+    web_search_camel: Option<bool>,
 }
 
 impl OpenAiCompatibleModelCapabilities {
     fn supports_chat_completions(&self) -> Option<bool> {
-        self.completion_chat.or(self.chat_completion)
+        self.completion_chat
+            .or(self.chat_completion)
+            .or(self.chat_completions)
+    }
+
+    fn supports_reasoning_effort(&self) -> Option<bool> {
+        self.reasoning
+            .or(self.reasoning_effort)
+            .or(self.reasoning_effort_camel)
     }
 
     fn supports_tool_use(&self) -> Option<bool> {
-        self.function_calling.or(self.tools).or(self.tool_calls)
+        self.function_calling
+            .or(self.tools)
+            .or(self.tool_calls)
+            .or(self.parallel_tool_calls)
+            .or(self.parallel_tool_calls_camel)
+    }
+
+    fn supports_search_tool(&self) -> Option<bool> {
+        self.search
+            .or(self.search_tool)
+            .or(self.search_tool_camel)
+            .or(self.web_search)
+            .or(self.web_search_camel)
     }
 }
 
@@ -334,68 +374,88 @@ fn apply_provider_catalog_capabilities(
     capabilities: Option<&OpenAiCompatibleModelCapabilities>,
 ) {
     model_info::enrich_compatibility_model_capabilities(model, capability_slug);
-    let catalog_reports_reasoning = capabilities.and_then(|caps| caps.reasoning) == Some(true);
+    let catalog_reports_tool_use =
+        capabilities.and_then(OpenAiCompatibleModelCapabilities::supports_tool_use) == Some(true);
+    let catalog_reports_search_tool =
+        capabilities.and_then(OpenAiCompatibleModelCapabilities::supports_search_tool)
+            == Some(true);
 
-    if capabilities
-        .and_then(OpenAiCompatibleModelCapabilities::supports_tool_use)
-        == Some(true)
-        || provider.model_supports_parallel_tool_calls(capability_slug)
-    {
+    if catalog_reports_tool_use || provider.model_supports_parallel_tool_calls(capability_slug) {
         model.supports_parallel_tool_calls = true;
     }
 
-    if capabilities
-        .and_then(OpenAiCompatibleModelCapabilities::supports_tool_use)
-        == Some(true)
+    if catalog_reports_search_tool
+        || catalog_reports_tool_use
         || provider.model_supports_search_tool(capability_slug)
     {
         model.supports_search_tool = true;
     }
 
-    if model.supported_reasoning_levels.is_empty()
-        && (provider.model_supports_chat_completions_reasoning_effort(capability_slug)
-            || (catalog_reports_reasoning && provider.supports_chat_completions_reasoning_effort()))
-    {
-        model.supported_reasoning_levels =
-            model_info::compatibility_reasoning_presets_for_slug(capability_slug);
-    }
-
-    if !model.supported_reasoning_levels.is_empty() {
-        let supported_efforts = model
-            .supported_reasoning_levels
-            .iter()
-            .map(|preset| preset.effort)
-            .collect::<Vec<_>>();
-        let default_effort_supported = model
-            .default_reasoning_level
-            .is_some_and(|effort| supported_efforts.contains(&effort));
-        if !default_effort_supported {
-            model.default_reasoning_level =
-                model_info::compatibility_default_reasoning_level_for_slug(capability_slug)
-                    .or_else(|| supported_efforts.first().copied());
-        }
-    }
+    harmonize_provider_reasoning_metadata(provider, capability_slug, model, capabilities);
 }
 
-fn strip_provider_reasoning_default_without_supported_levels(
+fn provider_supports_catalog_reasoning_effort(
     provider: &ModelProviderInfo,
+    capability_slug: &str,
+    capabilities: Option<&OpenAiCompatibleModelCapabilities>,
+) -> bool {
+    provider.model_supports_chat_completions_reasoning_effort(capability_slug)
+        || (capabilities
+            .and_then(OpenAiCompatibleModelCapabilities::supports_reasoning_effort)
+            == Some(true)
+            && provider.supports_chat_completions_reasoning_effort())
+}
+
+fn harmonize_provider_reasoning_metadata(
+    provider: &ModelProviderInfo,
+    capability_slug: &str,
     model: &mut ModelInfo,
+    capabilities: Option<&OpenAiCompatibleModelCapabilities>,
 ) {
-    if provider.uses_openai_responses_api() || !model.supported_reasoning_levels.is_empty() {
+    if provider.uses_openai_responses_api() {
         return;
     }
 
-    if provider.model_supports_chat_completions_reasoning_effort(model.slug.as_str()) {
-        model.supported_reasoning_levels =
-            model_info::compatibility_reasoning_presets_for_slug(model.slug.as_str());
-        if !model.supported_reasoning_levels.is_empty() {
-            model.default_reasoning_level =
-                model_info::compatibility_default_reasoning_level_for_slug(model.slug.as_str());
-            return;
+    let provider_has_model_specific_reasoning_contract =
+        provider.uses_mistral_api() || provider.uses_gemini_api();
+    let supports_reasoning_effort =
+        provider_supports_catalog_reasoning_effort(provider, capability_slug, capabilities);
+
+    if supports_reasoning_effort {
+        let compatibility_presets = model_info::compatibility_reasoning_presets_for_slug(
+            capability_slug,
+        );
+        if provider_has_model_specific_reasoning_contract || model.supported_reasoning_levels.is_empty()
+        {
+            model.supported_reasoning_levels = compatibility_presets;
         }
+
+        if !model.supported_reasoning_levels.is_empty() {
+            let supported_efforts = model
+                .supported_reasoning_levels
+                .iter()
+                .map(|preset| preset.effort)
+                .collect::<Vec<_>>();
+            let default_effort_supported = model
+                .default_reasoning_level
+                .is_some_and(|effort| supported_efforts.contains(&effort));
+            if provider_has_model_specific_reasoning_contract || !default_effort_supported {
+                model.default_reasoning_level =
+                    model_info::compatibility_default_reasoning_level_for_slug(capability_slug)
+                        .or_else(|| supported_efforts.first().copied());
+            }
+        }
+        return;
     }
 
-    model.default_reasoning_level = None;
+    if provider_has_model_specific_reasoning_contract {
+        model.supported_reasoning_levels.clear();
+    }
+
+    if provider_has_model_specific_reasoning_contract || model.supported_reasoning_levels.is_empty()
+    {
+        model.default_reasoning_level = None;
+    }
 }
 
 fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
@@ -448,7 +508,6 @@ fn enrich_provider_catalog_model(
         &mut model,
         catalog_model.capabilities.as_ref(),
     );
-    strip_provider_reasoning_default_without_supported_levels(provider, &mut model);
     model
 }
 
@@ -1037,7 +1096,6 @@ impl ModelsManager {
                 &mut model,
                 None,
             );
-            strip_provider_reasoning_default_without_supported_levels(provider, &mut model);
             sanitized.push(model);
         }
 

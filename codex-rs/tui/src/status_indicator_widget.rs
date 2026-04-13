@@ -32,7 +32,7 @@ use crate::wrapping::word_wrap_lines;
 pub(crate) const STATUS_DETAILS_DEFAULT_MAX_LINES: usize = 3;
 const DETAILS_PREFIX: &str = "  └ ";
 const STATUS_ELAPSED_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-const STATUS_SHIMMER_FRAME_INTERVAL: Duration = Duration::from_millis(125);
+const STATUS_SHIMMER_FRAME_INTERVAL: Duration = Duration::from_millis(200);
 const STATUS_BLINK_FRAME_INTERVAL: Duration = Duration::from_millis(600);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,7 @@ pub(crate) struct StatusIndicatorWidget {
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
     animations_enabled: bool,
+    animation_frame_interval: Option<Duration>,
 }
 
 // Format elapsed seconds into a compact human-friendly form used by the status line.
@@ -108,6 +109,13 @@ impl StatusIndicatorWidget {
         frame_requester: FrameRequester,
         animations_enabled: bool,
     ) -> Self {
+        let animation_frame_interval = animations_enabled.then(|| {
+            if stdout_supports_truecolor() {
+                STATUS_SHIMMER_FRAME_INTERVAL
+            } else {
+                STATUS_BLINK_FRAME_INTERVAL
+            }
+        });
         Self {
             header: String::from("Выполняю"),
             details: None,
@@ -121,6 +129,7 @@ impl StatusIndicatorWidget {
             app_event_tx,
             frame_requester,
             animations_enabled,
+            animation_frame_interval,
         }
     }
 
@@ -230,14 +239,8 @@ impl StatusIndicatorWidget {
 
         let elapsed = self.elapsed_duration_at(now);
         let elapsed_delay = duration_until_next_tick(elapsed, STATUS_ELAPSED_REFRESH_INTERVAL);
-        if !self.animations_enabled {
+        let Some(animation_interval) = self.animation_frame_interval else {
             return Some(elapsed_delay);
-        }
-
-        let animation_interval = if stdout_supports_truecolor() {
-            STATUS_SHIMMER_FRAME_INTERVAL
-        } else {
-            STATUS_BLINK_FRAME_INTERVAL
         };
         let animation_delay = duration_until_next_tick(elapsed, animation_interval);
         Some(elapsed_delay.min(animation_delay))
@@ -388,6 +391,43 @@ mod tests {
         );
         w.pause_timer_at(Instant::now());
         assert_eq!(w.next_frame_delay_at(Instant::now()), None);
+    }
+
+    #[test]
+    fn animated_status_prefers_next_animation_tick() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ true,
+        );
+        let baseline = Instant::now();
+        w.last_resume_at = baseline;
+        w.animation_frame_interval = Some(Duration::from_millis(200));
+
+        assert_eq!(
+            w.next_frame_delay_at(baseline + Duration::from_millis(50)),
+            Some(Duration::from_millis(150))
+        );
+    }
+
+    #[test]
+    fn non_animated_status_only_refreshes_for_elapsed_timer() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        let baseline = Instant::now();
+        w.last_resume_at = baseline;
+
+        assert_eq!(
+            w.next_frame_delay_at(baseline + Duration::from_millis(250)),
+            Some(Duration::from_millis(750))
+        );
     }
 
     #[test]

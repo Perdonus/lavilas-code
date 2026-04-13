@@ -88,6 +88,13 @@ pub(crate) enum AppEvent {
         event: GetHistoryEntryResponseEvent,
     },
 
+    /// Recompute the inactive-thread approvals summary shown in the footer.
+    ///
+    /// Queued through the app event loop so bursts of thread notifications can
+    /// coalesce into a single refresh instead of repeatedly walking all thread
+    /// stores inline.
+    RefreshPendingThreadApprovals,
+
     /// Start a new session.
     NewSession,
 

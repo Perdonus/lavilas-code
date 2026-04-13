@@ -190,6 +190,7 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
@@ -237,6 +238,18 @@ impl SteerInputError {
         }
     }
 }
+
+const EXTERNAL_CHAT_COMPLETIONS_WORKFLOW_MESSAGE: &str = r#"<external_chat_completions_workflow>
+You are running behind an external chat-completions-compatible provider. Compensate for weaker native orchestration by being extra explicit, tool-driven, and verification-heavy.
+
+Required workflow:
+1. Start with reconnaissance. Inspect the repository, identify the relevant files and code path, and understand current behavior before proposing or making edits.
+2. For local-machine questions, inspect the actual machine state first. Use commands or file reads to verify disk, memory, processes, config, shell/runtime, or workspace facts instead of guessing.
+3. Before each meaningful edit, think through the blast radius, the smallest safe change, and the concrete verification path.
+4. Use available tools proactively. Prefer searching, reading files, diffing, and running narrow commands over conversational speculation.
+5. Make changes in small steps. After each meaningful step, re-check the result against command output, file contents, or a focused validation path.
+6. If a tool call fails or the environment is noisy, simplify the step and retry with a narrower command instead of giving generic fallback advice.
+</external_chat_completions_workflow>"#;
 
 /// Notes from the previous real user turn.
 ///
@@ -907,6 +920,11 @@ impl TurnContext {
     pub(crate) fn apps_enabled(&self) -> bool {
         self.features
             .apps_enabled_cached(self.auth_manager.as_deref())
+    }
+
+    pub(crate) fn uses_external_chat_completions_provider(&self) -> bool {
+        self.provider.effective_wire_api() == WireApi::ChatCompletions
+            && !self.provider.uses_openai_responses_api()
     }
 
     pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
@@ -3767,6 +3785,9 @@ impl Session {
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
         {
             developer_sections.push(developer_instructions.to_string());
+        }
+        if turn_context.uses_external_chat_completions_provider() {
+            developer_sections.push(EXTERNAL_CHAT_COMPLETIONS_WORKFLOW_MESSAGE.to_string());
         }
         // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)

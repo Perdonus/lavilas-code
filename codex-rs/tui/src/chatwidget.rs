@@ -8588,6 +8588,146 @@ impl ChatWidget {
         }
     }
 
+    fn provider_badge_label(&self) -> String {
+        let provider_name = self.config.model_provider.name.trim();
+        let normalized = provider_name.to_ascii_lowercase();
+        let label = if normalized.contains("openai") {
+            "OpenAI"
+        } else if normalized.contains("mistral") {
+            "Mistral"
+        } else if normalized.contains("gemini") {
+            "Gemini"
+        } else if normalized.contains("anthropic") || normalized.contains("claude") {
+            "Claude"
+        } else if normalized.contains("groq") {
+            "Groq"
+        } else {
+            provider_name
+                .split_whitespace()
+                .next()
+                .filter(|value| !value.is_empty())
+                .unwrap_or(provider_name)
+        };
+        label.to_ascii_uppercase()
+    }
+
+    fn localized_model_picker_badge(&self, kind: &str) -> String {
+        match (self.ui_language(), kind) {
+            (UiLanguage::Ru, "fast") => "БЫСТРО".to_string(),
+            (UiLanguage::Ru, "latest") => "АКТУАЛЬНО".to_string(),
+            (UiLanguage::Ru, "tools") => "ИНСТРУМЕНТЫ".to_string(),
+            (UiLanguage::Ru, "current") => "ТЕКУЩАЯ".to_string(),
+            (UiLanguage::Ru, "default") => "ПО УМОЛЧАНИЮ".to_string(),
+            (_, "fast") => "FAST".to_string(),
+            (_, "latest") => "LATEST".to_string(),
+            (_, "tools") => "TOOLS".to_string(),
+            (_, "current") => "CURRENT".to_string(),
+            (_, "default") => "DEFAULT".to_string(),
+            (_, other) => other.to_ascii_uppercase(),
+        }
+    }
+
+    fn model_picker_tags(&self, preset: &ModelPreset, is_current: bool) -> Vec<String> {
+        let mut tags = Vec::new();
+        let mut seen = HashSet::new();
+        let mut push_tag = |value: String, tags: &mut Vec<String>| {
+            if seen.insert(value.clone()) {
+                tags.push(value);
+            }
+        };
+
+        push_tag(self.provider_badge_label(), &mut tags);
+        if Self::looks_like_fast_model(preset.model.as_str()) {
+            push_tag(self.localized_model_picker_badge("fast"), &mut tags);
+        }
+        if Self::looks_like_latest_model(preset.model.as_str()) {
+            push_tag(self.localized_model_picker_badge("latest"), &mut tags);
+        }
+        if Self::preset_supports_tool_workflows(preset) {
+            push_tag(self.localized_model_picker_badge("tools"), &mut tags);
+        }
+        if is_current {
+            push_tag(self.localized_model_picker_badge("current"), &mut tags);
+        }
+        if preset.is_default {
+            push_tag(self.localized_model_picker_badge("default"), &mut tags);
+        }
+        tags
+    }
+
+    fn quick_preset_tags(
+        &self,
+        kind: &str,
+        preset: &ModelPreset,
+        is_current: bool,
+    ) -> Vec<String> {
+        let mut tags = self.model_picker_tags(preset, is_current);
+        let quick_kind = match kind {
+            "fast" => Some(self.localized_model_picker_badge("fast")),
+            "latest" => Some(self.localized_model_picker_badge("latest")),
+            "tools" => Some(self.localized_model_picker_badge("tools")),
+            _ => None,
+        };
+        if let Some(quick_kind) = quick_kind
+            && !tags.iter().any(|tag| tag == &quick_kind)
+        {
+            tags.insert(1.min(tags.len()), quick_kind);
+        }
+        tags
+    }
+
+    fn model_picker_short_description(&self, preset: &ModelPreset, item_label: &str) -> Option<String> {
+        let mut parts = Vec::new();
+        if item_label != preset.model {
+            parts.push(preset.model.clone());
+        }
+        let reasoning_choices = Self::reasoning_picker_choice_count(preset);
+        if reasoning_choices > 1 {
+            if self.ui_language().is_ru() {
+                parts.push(format!("{reasoning_choices} режима размышлений"));
+            } else {
+                parts.push(format!("{reasoning_choices} reasoning modes"));
+            }
+        }
+        (!parts.is_empty()).then(|| parts.join(" · "))
+    }
+
+    fn model_picker_selected_description(
+        &self,
+        preset: &ModelPreset,
+        item_label: &str,
+    ) -> Option<String> {
+        let mut parts = Vec::new();
+        if item_label != preset.model {
+            parts.push(preset.model.clone());
+        }
+        if let Some(description) = self.model_preset_description(preset)
+            && !parts.iter().any(|part| part == &description)
+        {
+            parts.push(description);
+        }
+        if parts.is_empty() {
+            self.model_picker_short_description(preset, item_label)
+        } else {
+            Some(parts.join(" · "))
+        }
+    }
+
+    fn model_picker_search_value(
+        &self,
+        item_label: &str,
+        model: &str,
+        description: Option<&str>,
+        tags: &[String],
+    ) -> String {
+        let mut values = vec![item_label.to_string(), model.to_string()];
+        if let Some(description) = description.filter(|description| !description.is_empty()) {
+            values.push(description.to_string());
+        }
+        values.extend(tags.iter().cloned());
+        values.join(" ")
+    }
+
     fn localized_builtin_model_description(description: &str) -> Option<&'static str> {
         match description {
             "Broad world knowledge with strong general reasoning." => {
@@ -8845,10 +8985,19 @@ impl ChatWidget {
                     let item_label = stored_preset.name.clone();
                     let model_label = Self::model_picker_label(&preset);
                     let model = preset.model.clone();
+                    let is_current = model.as_str() == current_model;
+                    let tags = self.quick_preset_tags(stored_preset.id.as_str(), &preset, is_current);
                     let selected_effort = Self::selected_reasoning_effort_for_preset(&preset);
                     let should_prompt_plan_mode_scope = self
                         .should_prompt_plan_mode_reasoning_scope(model.as_str(), selected_effort);
-                    let search_value = format!("{item_label} {model_label} {model}");
+                    let selected_description = self
+                        .provider_quick_preset_description(stored_preset.id.as_str(), &preset);
+                    let search_value = self.model_picker_search_value(
+                        item_label.as_str(),
+                        model.as_str(),
+                        Some(selected_description.as_str()),
+                        tags.as_slice(),
+                    );
                     let actions: Vec<SelectionAction> =
                         if Self::reasoning_picker_choice_count(&preset) <= 1 {
                             Self::model_selection_actions(
@@ -8866,9 +9015,11 @@ impl ChatWidget {
                         };
                     SelectionItem {
                         name: item_label,
-                        selected_description: Some(model_label),
+                        description: Some(model_label),
+                        selected_description: Some(selected_description),
+                        category_tags: tags,
                         search_value: Some(search_value),
-                        is_current: model.as_str() == current_model,
+                        is_current,
                         is_default: preset.is_default,
                         actions,
                         dismiss_on_select: true,
@@ -8895,12 +9046,18 @@ impl ChatWidget {
             let items = auto_presets
                 .into_iter()
                 .map(|preset| {
-                    let description = self.model_preset_description(&preset);
                     let item_label = Self::model_picker_label(&preset);
                     let model = preset.model.clone();
-                    let search_value = description.as_ref().map_or_else(
-                        || format!("{item_label} {model}"),
-                        |desc| format!("{item_label} {model} {desc}"),
+                    let is_current = model.as_str() == current_model;
+                    let description = self.model_picker_short_description(&preset, item_label.as_str());
+                    let selected_description =
+                        self.model_picker_selected_description(&preset, item_label.as_str());
+                    let tags = self.model_picker_tags(&preset, is_current);
+                    let search_value = self.model_picker_search_value(
+                        item_label.as_str(),
+                        model.as_str(),
+                        selected_description.as_deref().or(description.as_deref()),
+                        tags.as_slice(),
                     );
                     let should_prompt_plan_mode_scope = self
                         .should_prompt_plan_mode_reasoning_scope(
@@ -8915,8 +9072,10 @@ impl ChatWidget {
                     SelectionItem {
                         name: item_label,
                         description,
+                        selected_description,
+                        category_tags: tags,
                         search_value: Some(search_value),
-                        is_current: model.as_str() == current_model,
+                        is_current,
                         is_default: preset.is_default,
                         actions,
                         dismiss_on_select: true,
@@ -9020,6 +9179,7 @@ impl ChatWidget {
             items,
             header,
             is_searchable: true,
+            dense_rows: true,
             search_placeholder: Some(if is_ru {
                 "Найти модель или пресет".to_string()
             } else {
@@ -9228,10 +9388,7 @@ impl ChatWidget {
         let remembered_selected_idx = self
             .bottom_pane
             .selected_index_for_active_view(ALL_MODELS_VIEW_ID);
-        let full_catalog_presets =
-            Self::non_auto_model_presets(self.current_model_popup_catalog_models().as_slice());
-        let can_return_to_quick_presets =
-            self.has_quick_model_picker_path(full_catalog_presets.as_slice());
+        let can_return_to_quick_presets = self.has_quick_model_picker_path(presets.as_slice());
         let mut items: Vec<SelectionItem> = Vec::new();
         if can_return_to_quick_presets {
             items.push(SelectionItem {
@@ -9278,13 +9435,18 @@ impl ChatWidget {
         }
 
         for preset in presets.into_iter() {
-            let description = self.model_preset_description(&preset);
             let item_label = Self::model_picker_label(&preset);
             let is_current = preset.model.as_str() == self.current_model();
+            let description = self.model_picker_short_description(&preset, item_label.as_str());
+            let selected_description =
+                self.model_picker_selected_description(&preset, item_label.as_str());
+            let tags = self.model_picker_tags(&preset, is_current);
             let single_supported_effort = Self::reasoning_picker_choice_count(&preset) <= 1;
-            let search_value = description.as_ref().map_or_else(
-                || format!("{} {}", item_label, preset.model),
-                |desc| format!("{} {} {}", item_label, preset.model, desc),
+            let search_value = self.model_picker_search_value(
+                item_label.as_str(),
+                preset.model.as_str(),
+                selected_description.as_deref().or(description.as_deref()),
+                tags.as_slice(),
             );
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -9296,6 +9458,8 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: item_label,
                 description,
+                selected_description,
+                category_tags: tags,
                 search_value: Some(search_value),
                 is_current,
                 is_default: preset.is_default,
@@ -9364,6 +9528,7 @@ impl ChatWidget {
             items,
             header,
             is_searchable: true,
+            dense_rows: true,
             search_placeholder: Some(if is_ru {
                 "Найти модель в каталоге".to_string()
             } else {
@@ -10224,16 +10389,19 @@ impl ChatWidget {
         }
     }
 
-    fn has_quick_model_picker_path(&self, full_catalog_presets: &[ModelPreset]) -> bool {
+    fn has_quick_model_picker_path(&self, available_presets: &[ModelPreset]) -> bool {
         if !self.current_model_presets_enabled() {
             return false;
         }
 
-        Self::quick_picker_model_presets(self.current_model_popup_catalog_models().as_slice())
-            .iter()
-            .any(|preset| Self::is_auto_model(preset.model.as_str()))
+        let quick_picker_presets = Self::quick_picker_model_presets(available_presets);
+        let (auto_presets, _non_auto_quick_presets): (Vec<ModelPreset>, Vec<ModelPreset>) =
+            quick_picker_presets
+                .into_iter()
+                .partition(|preset| Self::is_auto_model(preset.model.as_str()));
+        !auto_presets.is_empty()
             || !self
-                .resolved_provider_model_presets(full_catalog_presets)
+                .resolved_provider_model_presets(Self::non_auto_model_presets(available_presets).as_slice())
                 .is_empty()
     }
 

@@ -12,6 +12,8 @@
 //! [“Actors with Tokio”](https://ryhl.io/blog/actors-with-tokio/), with a
 //! dedicated scheduler task and lightweight request handles.
 
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -29,7 +31,8 @@ use super::frame_rate_limiter::FrameRateLimiter;
 /// from anywhere in the TUI code.
 #[derive(Clone, Debug)]
 pub struct FrameRequester {
-    frame_schedule_tx: mpsc::UnboundedSender<Instant>,
+    frame_schedule_tx: mpsc::UnboundedSender<()>,
+    shared_schedule: Arc<SharedFrameSchedule>,
 }
 
 impl FrameRequester {
@@ -38,21 +41,29 @@ impl FrameRequester {
     /// The provided `draw_tx` is used to notify the TUI event loop of scheduled draws.
     pub fn new(draw_tx: broadcast::Sender<()>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let scheduler = FrameScheduler::new(rx, draw_tx);
+        let shared_schedule = Arc::new(SharedFrameSchedule::default());
+        let scheduler = FrameScheduler::new(rx, draw_tx, Arc::clone(&shared_schedule));
         tokio::spawn(scheduler.run());
         Self {
             frame_schedule_tx: tx,
+            shared_schedule,
         }
     }
 
     /// Schedule a frame draw as soon as possible.
     pub fn schedule_frame(&self) {
-        let _ = self.frame_schedule_tx.send(Instant::now());
+        self.schedule_frame_at(Instant::now());
     }
 
     /// Schedule a frame draw to occur after the specified duration.
     pub fn schedule_frame_in(&self, dur: Duration) {
-        let _ = self.frame_schedule_tx.send(Instant::now() + dur);
+        self.schedule_frame_at(Instant::now() + dur);
+    }
+
+    fn schedule_frame_at(&self, requested: Instant) {
+        if self.shared_schedule.schedule(requested) {
+            let _ = self.frame_schedule_tx.send(());
+        }
     }
 }
 
@@ -63,7 +74,55 @@ impl FrameRequester {
         let (tx, _rx) = mpsc::unbounded_channel();
         FrameRequester {
             frame_schedule_tx: tx,
+            shared_schedule: Arc::new(SharedFrameSchedule::default()),
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct SharedFrameSchedule {
+    requested_deadline: Mutex<Option<Instant>>,
+}
+
+impl SharedFrameSchedule {
+    /// Record the earliest requested deadline that still needs to wake the scheduler.
+    fn schedule(&self, requested: Instant) -> bool {
+        let mut deadline = self
+            .requested_deadline
+            .lock()
+            .expect("frame schedule mutex poisoned");
+        match *deadline {
+            Some(current) if current <= requested => false,
+            _ => {
+                *deadline = Some(requested);
+                true
+            }
+        }
+    }
+
+    fn next_deadline(&self, rate_limiter: &FrameRateLimiter) -> Option<Instant> {
+        let requested = *self
+            .requested_deadline
+            .lock()
+            .expect("frame schedule mutex poisoned");
+        requested.map(|deadline| rate_limiter.clamp_deadline(deadline))
+    }
+
+    fn clear_due_deadline(
+        &self,
+        rate_limiter: &FrameRateLimiter,
+        now: Instant,
+    ) -> Option<Instant> {
+        let mut requested = self
+            .requested_deadline
+            .lock()
+            .expect("frame schedule mutex poisoned");
+        let deadline = (*requested).map(|deadline| rate_limiter.clamp_deadline(deadline))?;
+        if deadline > now {
+            return None;
+        }
+        *requested = None;
+        Some(deadline)
     }
 }
 
@@ -71,20 +130,26 @@ impl FrameRequester {
 ///
 /// This type is internal to `FrameRequester` and is spawned as a task to handle scheduling logic.
 ///
-/// To avoid wasted redraw work, draw notifications are clamped to a maximum of 120 FPS (see
+/// To avoid wasted redraw work, draw notifications are clamped to a maximum of 60 FPS (see
 /// [`FrameRateLimiter`]).
 struct FrameScheduler {
-    receiver: mpsc::UnboundedReceiver<Instant>,
+    receiver: mpsc::UnboundedReceiver<()>,
     draw_tx: broadcast::Sender<()>,
+    shared_schedule: Arc<SharedFrameSchedule>,
     rate_limiter: FrameRateLimiter,
 }
 
 impl FrameScheduler {
     /// Create a new FrameScheduler with the provided receiver and draw notification sender.
-    fn new(receiver: mpsc::UnboundedReceiver<Instant>, draw_tx: broadcast::Sender<()>) -> Self {
+    fn new(
+        receiver: mpsc::UnboundedReceiver<()>,
+        draw_tx: broadcast::Sender<()>,
+        shared_schedule: Arc<SharedFrameSchedule>,
+    ) -> Self {
         Self {
             receiver,
             draw_tx,
+            shared_schedule,
             rate_limiter: FrameRateLimiter::default(),
         }
     }
@@ -94,31 +159,36 @@ impl FrameScheduler {
     /// This method runs indefinitely until all senders are dropped. A single draw notification
     /// is sent for multiple requests scheduled before the next draw deadline.
     async fn run(mut self) {
-        const ONE_YEAR: Duration = Duration::from_secs(60 * 60 * 24 * 365);
-        let mut next_deadline: Option<Instant> = None;
+        let mut receiver_closed = false;
         loop {
-            let target = next_deadline.unwrap_or_else(|| Instant::now() + ONE_YEAR);
+            let Some(target) = self.shared_schedule.next_deadline(&self.rate_limiter) else {
+                if receiver_closed {
+                    break;
+                }
+
+                if self.receiver.recv().await.is_none() {
+                    receiver_closed = true;
+                }
+                continue;
+            };
+
             let deadline = tokio::time::sleep_until(target.into());
             tokio::pin!(deadline);
 
             tokio::select! {
-                draw_at = self.receiver.recv() => {
-                    let Some(draw_at) = draw_at else {
-                        // All senders dropped; exit the scheduler.
-                        break
-                    };
-                    let draw_at = self.rate_limiter.clamp_deadline(draw_at);
-                    next_deadline = Some(next_deadline.map_or(draw_at, |cur| cur.min(draw_at)));
-
-                    // Do not send a draw immediately here. By continuing the loop,
-                    // we recompute the sleep target so the draw fires once via the
-                    // sleep branch, coalescing multiple requests into a single draw.
-                    continue;
+                wake = self.receiver.recv(), if !receiver_closed => {
+                    if wake.is_none() {
+                        receiver_closed = true;
+                    }
                 }
                 _ = &mut deadline => {
-                    if next_deadline.is_some() {
-                        next_deadline = None;
-                        self.rate_limiter.mark_emitted(target);
+                    let emitted_at = Instant::now();
+                    if self
+                        .shared_schedule
+                        .clear_due_deadline(&self.rate_limiter, emitted_at)
+                        .is_some()
+                    {
+                        self.rate_limiter.mark_emitted(emitted_at);
                         let _ = self.draw_tx.send(());
                     }
                 }
@@ -232,7 +302,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
-    async fn test_limits_draw_notifications_to_120fps() {
+    async fn test_limits_draw_notifications_to_60fps() {
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
         let requester = FrameRequester::new(draw_tx);
 
@@ -250,7 +320,7 @@ mod tests {
         let early = draw_rx.recv().timeout(Duration::from_millis(1)).await;
         assert!(
             early.is_err(),
-            "draw fired too early; expected max 120fps (min interval {MIN_FRAME_INTERVAL:?})"
+            "draw fired too early; expected max 60fps (min interval {MIN_FRAME_INTERVAL:?})"
         );
 
         time::advance(MIN_FRAME_INTERVAL).await;
@@ -282,7 +352,7 @@ mod tests {
         let too_early = draw_rx.recv().timeout(Duration::from_millis(1)).await;
         assert!(
             too_early.is_err(),
-            "draw fired too early; expected max 120fps (min interval {MIN_FRAME_INTERVAL:?})"
+            "draw fired too early; expected max 60fps (min interval {MIN_FRAME_INTERVAL:?})"
         );
 
         time::advance(MIN_FRAME_INTERVAL).await;

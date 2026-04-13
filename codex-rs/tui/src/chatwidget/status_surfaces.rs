@@ -14,7 +14,7 @@ pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =
     ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Time between spinner frame advances in the terminal title.
-pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
+pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Compact runtime states that can be rendered into the terminal title.
 ///
@@ -220,9 +220,11 @@ impl ChatWidget {
         let should_animate_spinner =
             self.should_animate_terminal_title_spinner_with_selections(selections);
         if self.last_terminal_title == title {
-            if should_animate_spinner {
+            if should_animate_spinner
+                && let Some(delay) = self.terminal_title_next_frame_delay_at(now)
+            {
                 self.frame_requester
-                    .schedule_frame_in(TERMINAL_TITLE_SPINNER_INTERVAL);
+                    .schedule_frame_in(delay);
             }
             return;
         }
@@ -247,9 +249,11 @@ impl ChatWidget {
             }
         }
 
-        if should_animate_spinner {
+        if should_animate_spinner
+            && let Some(delay) = self.terminal_title_next_frame_delay_at(now)
+        {
             self.frame_requester
-                .schedule_frame_in(TERMINAL_TITLE_SPINNER_INTERVAL);
+                .schedule_frame_in(delay);
         }
     }
 
@@ -679,6 +683,30 @@ impl ChatWidget {
         }
 
         Some(self.terminal_title_spinner_frame_at(now).to_string())
+    }
+
+    fn terminal_title_next_frame_delay_at(&self, now: Instant) -> Option<Duration> {
+        if !self.terminal_title_has_active_progress() {
+            return None;
+        }
+
+        let interval_nanos = TERMINAL_TITLE_SPINNER_INTERVAL.as_nanos();
+        if interval_nanos == 0 {
+            return Some(Duration::ZERO);
+        }
+
+        let elapsed_nanos = now
+            .saturating_duration_since(self.terminal_title_animation_origin)
+            .as_nanos();
+        let remainder = elapsed_nanos % interval_nanos;
+        let wait_nanos = if remainder == 0 {
+            interval_nanos
+        } else {
+            interval_nanos - remainder
+        };
+        Some(Duration::from_nanos(
+            u64::try_from(wait_nanos).unwrap_or(u64::MAX),
+        ))
     }
 
     fn terminal_title_spinner_frame_at(&self, now: Instant) -> &'static str {

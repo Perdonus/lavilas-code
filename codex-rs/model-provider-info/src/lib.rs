@@ -36,6 +36,12 @@ const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 const GEMINI_API_HOST: &str = "generativelanguage.googleapis.com";
 const GEMINI_PROVIDER_NAME: &str = "gemini";
+const GEMINI_LEGACY_FLASH_MODEL: &str = "gemini-flash-latest";
+const GEMINI_LEGACY_FLASH_LITE_MODEL: &str = "gemini-flash-lite-latest";
+const GEMINI_LEGACY_PRO_MODEL: &str = "gemini-pro-latest";
+const GEMINI_CANONICAL_FLASH_MODEL: &str = "gemini-2.5-flash";
+const GEMINI_CANONICAL_FLASH_LITE_MODEL: &str = "gemini-2.5-flash-lite";
+const GEMINI_CANONICAL_PRO_MODEL: &str = "gemini-2.5-pro";
 const MISTRAL_API_HOST: &str = "api.mistral.ai";
 const MISTRAL_VIBE_CLI_MODEL: &str = "mistral-vibe-cli";
 const MISTRAL_VIBE_CLI_LATEST_MODEL: &str = "mistral-vibe-cli-latest";
@@ -45,6 +51,22 @@ const MISTRAL_CANONICAL_MEDIUM_MODEL: &str = "mistral-medium-latest";
 const MISTRAL_CANONICAL_FAST_MODEL: &str = "mistral-small-latest";
 const PROVIDER_MODEL_COMPATIBILITY_SUFFIXES: [&str; 4] =
     ["-with-tools", "-tools", "-latest", "-fast"];
+const COMPATIBILITY_TOOL_FAMILY_HINTS: [&str; 14] = [
+    "claude",
+    "codex",
+    "codestral",
+    "deepseek",
+    "devstral",
+    "gemini",
+    "gpt",
+    "magistral",
+    "mistral",
+    "mixtral",
+    "open-codestral",
+    "open-mistral",
+    "pixtral",
+    "qwen",
+];
 const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
@@ -83,6 +105,86 @@ pub fn canonicalize_provider_model_slug(slug: &str) -> Option<String> {
         Some(prefix) => format!("{prefix}/{canonical_terminal}"),
         None => canonical_terminal.to_string(),
     })
+}
+
+pub fn normalize_provider_model_alias_slug(slug: &str) -> Option<String> {
+    let trimmed = slug.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (prefix, tail) = trimmed
+        .rsplit_once('/')
+        .map_or((None, trimmed), |(prefix, tail)| (Some(prefix), tail));
+    let normalized_tail = match tail.to_ascii_lowercase().as_str() {
+        GEMINI_LEGACY_FLASH_MODEL => GEMINI_CANONICAL_FLASH_MODEL,
+        GEMINI_LEGACY_FLASH_LITE_MODEL => GEMINI_CANONICAL_FLASH_LITE_MODEL,
+        GEMINI_LEGACY_PRO_MODEL => GEMINI_CANONICAL_PRO_MODEL,
+        _ => return None,
+    };
+
+    Some(match prefix {
+        Some(prefix) => format!("{prefix}/{normalized_tail}"),
+        None => normalized_tail.to_string(),
+    })
+}
+
+pub fn normalize_provider_model_for_family(provider: &str, model: &str) -> String {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if provider.eq_ignore_ascii_case(GEMINI_PROVIDER_NAME) {
+        let normalized = trimmed
+            .strip_prefix("models/")
+            .or_else(|| trimmed.strip_prefix("MODELS/"))
+            .map(str::trim)
+            .unwrap_or(trimmed);
+        if let Some(alias) = normalize_provider_model_alias_slug(normalized) {
+            return alias
+                .rsplit('/')
+                .next()
+                .unwrap_or(alias.as_str())
+                .to_string();
+        }
+        return normalized.to_ascii_lowercase();
+    }
+
+    if provider.eq_ignore_ascii_case("mistral") {
+        return trimmed.to_string();
+    }
+
+    trimmed.to_string()
+}
+
+pub fn compatibility_model_supports_reasoning_effort(model: &str) -> bool {
+    let tail = provider_model_tail(model);
+    tail.starts_with("mistral-small")
+        || tail == MISTRAL_VIBE_CLI_FAST_MODEL
+        || tail.starts_with("magistral-")
+        || tail.starts_with("labs-leanstral-")
+}
+
+pub fn compatibility_model_supports_parallel_tool_calls(model: &str) -> bool {
+    if model_has_explicit_tool_variant(model) || model_tail_is_mistral_vibe_cli(model) {
+        return true;
+    }
+
+    let tail = provider_model_tail(model);
+    if tail.starts_with("gemini-") || mistral_model_family_supports_tool_use(tail.as_str()) {
+        return true;
+    }
+
+    compatibility_tool_hint_base(model).is_some_and(|base| {
+        COMPATIBILITY_TOOL_FAMILY_HINTS
+            .iter()
+            .any(|hint| base.contains(hint))
+    })
+}
+
+pub fn compatibility_model_supports_search_tool(model: &str) -> bool {
+    compatibility_model_supports_parallel_tool_calls(model)
 }
 
 /// Wire protocol that the provider speaks.
@@ -410,32 +512,20 @@ impl ModelProviderInfo {
         }
 
         if self.uses_mistral_api() {
-            let tail = provider_model_tail(model);
-            return tail.starts_with("mistral-small")
-                || tail == "mistral-vibe-cli-fast"
-                || tail.starts_with("magistral-")
-                || tail.starts_with("labs-leanstral-");
+            return compatibility_model_supports_reasoning_effort(model);
         }
 
         self.supports_chat_completions_reasoning_effort()
     }
 
     pub fn model_supports_parallel_tool_calls(&self, model: &str) -> bool {
-        let tail = provider_model_tail(model);
-
-        if self.uses_gemini_api() {
-            return tail.starts_with("gemini-");
-        }
-
-        if self.uses_mistral_api() {
-            return mistral_model_family_supports_tool_use(tail.as_str());
-        }
-
-        false
+        matches!(self.effective_wire_api(), WireApi::ChatCompletions)
+            && compatibility_model_supports_parallel_tool_calls(model)
     }
 
     pub fn model_supports_search_tool(&self, model: &str) -> bool {
-        self.model_supports_parallel_tool_calls(model)
+        matches!(self.effective_wire_api(), WireApi::ChatCompletions)
+            && compatibility_model_supports_search_tool(model)
     }
 
     pub fn effective_wire_api(&self) -> WireApi {
@@ -475,12 +565,44 @@ impl ModelProviderInfo {
 }
 
 fn provider_model_tail(model: &str) -> String {
-    canonicalize_provider_model_slug(model)
+    normalize_provider_model_alias_slug(model)
+        .or_else(|| canonicalize_provider_model_slug(model))
         .unwrap_or_else(|| model.trim().to_string())
         .rsplit('/')
         .next()
         .unwrap_or(model.trim())
         .to_ascii_lowercase()
+}
+
+fn model_has_explicit_tool_variant(model: &str) -> bool {
+    let tail = model.trim().rsplit('/').next().unwrap_or(model.trim());
+    PROVIDER_MODEL_COMPATIBILITY_SUFFIXES[..2]
+        .iter()
+        .any(|suffix| tail.ends_with(suffix))
+}
+
+fn model_tail_is_mistral_vibe_cli(model: &str) -> bool {
+    model.trim()
+        .rsplit('/')
+        .next()
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(MISTRAL_VIBE_CLI_MODEL))
+}
+
+fn compatibility_tool_hint_base(model: &str) -> Option<String> {
+    let normalized = normalize_provider_model_alias_slug(model)
+        .or_else(|| canonicalize_provider_model_slug(model))
+        .unwrap_or_else(|| model.trim().to_string());
+    let tail = normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized.as_str())
+        .to_ascii_lowercase();
+    let base = PROVIDER_MODEL_COMPATIBILITY_SUFFIXES
+        .iter()
+        .find_map(|suffix| tail.strip_suffix(suffix))
+        .filter(|base| !base.is_empty())
+        .unwrap_or(tail.as_str());
+    (!base.is_empty()).then_some(base.to_string())
 }
 
 fn mistral_model_family_supports_tool_use(tail: &str) -> bool {

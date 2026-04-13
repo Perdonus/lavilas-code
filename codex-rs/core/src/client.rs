@@ -111,6 +111,7 @@ use tracing::warn;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::api_bridge::CoreAuthProvider;
@@ -119,6 +120,8 @@ use codex_client::HttpTransport;
 use codex_client::sse_stream;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
+use codex_instructions::AGENTS_MD_FRAGMENT;
+use codex_instructions::SKILL_FRAGMENT;
 use codex_login::api_bridge::auth_provider_from_auth;
 use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
@@ -2605,7 +2608,10 @@ fn build_chat_completions_messages_with_tools(
                 if !text.is_empty() {
                     let is_instruction_message = role.eq_ignore_ascii_case("developer")
                         || role.eq_ignore_ascii_case("system");
-                    if is_instruction_message {
+                    let is_contextual_instruction_message =
+                        role.eq_ignore_ascii_case("user")
+                            && content_items_are_chat_completions_contextual_instruction(content);
+                    if is_instruction_message || is_contextual_instruction_message {
                         instruction_segments.push(text);
                     } else {
                         let normalized_role = normalize_chat_completions_role(provider, role);
@@ -2864,6 +2870,23 @@ fn build_chat_completions_messages_with_tools(
     }
 
     Ok(messages)
+}
+
+fn is_chat_completions_contextual_instruction_text(text: &str) -> bool {
+    AGENTS_MD_FRAGMENT.matches_text(text)
+        || ENVIRONMENT_CONTEXT_FRAGMENT.matches_text(text)
+        || SKILL_FRAGMENT.matches_text(text)
+}
+
+fn content_items_are_chat_completions_contextual_instruction(content: &[ContentItem]) -> bool {
+    !content.is_empty()
+        && content.iter().all(|item| {
+            matches!(
+                item,
+                ContentItem::InputText { text }
+                    if is_chat_completions_contextual_instruction_text(text)
+            )
+        })
 }
 
 fn flush_chat_completions_pending_tool_calls(

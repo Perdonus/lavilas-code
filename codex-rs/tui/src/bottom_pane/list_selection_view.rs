@@ -11,6 +11,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -122,6 +124,7 @@ pub(crate) struct SelectionItem {
     pub display_shortcut: Option<KeyBinding>,
     pub description: Option<String>,
     pub selected_description: Option<String>,
+    pub category_tags: Vec<String>,
     pub is_current: bool,
     pub is_default: bool,
     pub is_disabled: bool,
@@ -150,6 +153,7 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
+    pub dense_rows: bool,
     pub col_width_mode: ColumnWidthMode,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
@@ -192,6 +196,7 @@ impl Default for SelectionViewParams {
             items: Vec::new(),
             is_searchable: false,
             search_placeholder: None,
+            dense_rows: false,
             col_width_mode: ColumnWidthMode::AutoVisible,
             header: Box::new(()),
             initial_selected_idx: None,
@@ -222,6 +227,7 @@ pub(crate) struct ListSelectionView {
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
+    dense_rows: bool,
     col_width_mode: ColumnWidthMode,
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
@@ -282,6 +288,7 @@ impl ListSelectionView {
             } else {
                 None
             },
+            dense_rows: params.dense_rows,
             col_width_mode: params.col_width_mode,
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
@@ -378,10 +385,14 @@ impl ListSelectionView {
                     let is_selected = self.state.selected_idx == Some(visible_idx);
                     let prefix = if is_selected { '›' } else { ' ' };
                     let name = item.name.as_str();
-                    let marker = if item.is_current {
-                        " (текущий)"
-                    } else if item.is_default {
-                        " (по умолчанию)"
+                    let marker = if item.category_tags.is_empty() {
+                        if item.is_current {
+                            " (текущий)"
+                        } else if item.is_default {
+                            " (по умолчанию)"
+                        } else {
+                            ""
+                        }
                     } else {
                         ""
                     };
@@ -413,6 +424,7 @@ impl ListSelectionView {
                         match_indices: None,
                         description,
                         category_tag: None,
+                        category_tags: item.category_tags.clone(),
                         wrap_indent,
                         is_disabled,
                         disabled_reason: item.disabled_reason.clone(),
@@ -561,6 +573,10 @@ impl ListSelectionView {
         total_width.saturating_sub(2)
     }
 
+    fn dense_rows_height(&self, rows_len: usize) -> u16 {
+        rows_len.min(MAX_POPUP_ROWS).max(1) as u16
+    }
+
     fn clear_to_terminal_bg(buf: &mut Buffer, area: Rect) {
         let buf_area = buf.area();
         let min_x = area.x.max(buf_area.x);
@@ -605,6 +621,67 @@ impl ListSelectionView {
         self.stacked_side_content
             .as_deref()
             .unwrap_or_else(|| self.side_content.as_ref())
+    }
+
+    fn render_separator(area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(Color::DarkGray),
+        ))
+        .render(
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1,
+            },
+            buf,
+        );
+    }
+
+    fn render_search_bar(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let mut spans = vec![Span::styled(
+            " ⌕ ",
+            Style::default().fg(Color::Black).bg(Color::Gray).bold(),
+        )];
+        if self.search_query.is_empty() {
+            spans.push(" ".into());
+            spans.push(
+                self.search_placeholder
+                    .as_ref()
+                    .map(|placeholder| Span::styled(placeholder.clone(), Style::default().dim()))
+                    .unwrap_or_else(|| Span::raw("")),
+            );
+        } else {
+            spans.push(" ".into());
+            spans.push(Span::styled(
+                self.search_query.clone(),
+                Style::default().fg(Color::White).bold(),
+            ));
+        }
+
+        let counter = if self.search_query.is_empty() {
+            format!("{}", self.filtered_indices.len())
+        } else {
+            format!("{}/{}", self.filtered_indices.len(), self.items.len())
+        };
+        let left_width = Line::from(spans.clone()).width();
+        let right_width = counter.width();
+        let available_width = area.width as usize;
+        if left_width + right_width + 1 < available_width {
+            spans.push(" ".repeat(available_width - left_width - right_width).into());
+        } else {
+            spans.push(" ".into());
+        }
+        spans.push(Span::styled(counter, Style::default().dim()));
+        Line::from(spans).render(area, buf);
     }
 
     /// Returns `Some(side_width)` when the content area is wide enough for a
@@ -866,26 +943,30 @@ impl Renderable for ListSelectionView {
 
         // Measure wrapped height for up to MAX_POPUP_ROWS items.
         let rows = self.build_rows();
-        let rows_height = match self.col_width_mode {
-            ColumnWidthMode::AutoVisible => measure_rows_height(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-            ),
-            ColumnWidthMode::AutoAllRows => measure_rows_height_stable_col_widths(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-            ),
-            ColumnWidthMode::Fixed => measure_rows_height_with_col_width_mode(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-                ColumnWidthMode::Fixed,
-            ),
+        let rows_height = if self.dense_rows {
+            self.dense_rows_height(rows.len())
+        } else {
+            match self.col_width_mode {
+                ColumnWidthMode::AutoVisible => measure_rows_height(
+                    &rows,
+                    &self.state,
+                    MAX_POPUP_ROWS,
+                    effective_rows_width.saturating_add(1),
+                ),
+                ColumnWidthMode::AutoAllRows => measure_rows_height_stable_col_widths(
+                    &rows,
+                    &self.state,
+                    MAX_POPUP_ROWS,
+                    effective_rows_width.saturating_add(1),
+                ),
+                ColumnWidthMode::Fixed => measure_rows_height_with_col_width_mode(
+                    &rows,
+                    &self.state,
+                    MAX_POPUP_ROWS,
+                    effective_rows_width.saturating_add(1),
+                    ColumnWidthMode::Fixed,
+                ),
+            }
         };
 
         let mut height = self.header.desired_height(inner_width);
@@ -949,34 +1030,42 @@ impl Renderable for ListSelectionView {
 
         let header_height = self.header.desired_height(inner_width);
         let rows = self.build_rows();
-        let rows_height = match self.col_width_mode {
-            ColumnWidthMode::AutoVisible => measure_rows_height(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-            ),
-            ColumnWidthMode::AutoAllRows => measure_rows_height_stable_col_widths(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-            ),
-            ColumnWidthMode::Fixed => measure_rows_height_with_col_width_mode(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-                ColumnWidthMode::Fixed,
-            ),
+        let rows_height = if self.dense_rows {
+            self.dense_rows_height(rows.len())
+        } else {
+            match self.col_width_mode {
+                ColumnWidthMode::AutoVisible => measure_rows_height(
+                    &rows,
+                    &self.state,
+                    MAX_POPUP_ROWS,
+                    effective_rows_width.saturating_add(1),
+                ),
+                ColumnWidthMode::AutoAllRows => measure_rows_height_stable_col_widths(
+                    &rows,
+                    &self.state,
+                    MAX_POPUP_ROWS,
+                    effective_rows_width.saturating_add(1),
+                ),
+                ColumnWidthMode::Fixed => measure_rows_height_with_col_width_mode(
+                    &rows,
+                    &self.state,
+                    MAX_POPUP_ROWS,
+                    effective_rows_width.saturating_add(1),
+                    ColumnWidthMode::Fixed,
+                ),
+            }
         };
-        let visible_row_heights = visible_row_line_counts(
-            &rows,
-            &self.state,
-            MAX_POPUP_ROWS,
-            effective_rows_width.saturating_add(1),
-            self.col_width_mode,
-        );
+        let visible_row_heights = if self.dense_rows {
+            vec![1; rows.len().min(MAX_POPUP_ROWS)]
+        } else {
+            visible_row_line_counts(
+                &rows,
+                &self.state,
+                MAX_POPUP_ROWS,
+                effective_rows_width.saturating_add(1),
+                self.col_width_mode,
+            )
+        };
 
         // Stacked (fallback) side content height — only used when not side-by-side.
         let stacked_side_h = if side_w.is_none() {
@@ -986,7 +1075,8 @@ impl Renderable for ListSelectionView {
         };
         let stacked_gap = if stacked_side_h > 0 { 1 } else { 0 };
 
-        let [header_area, _, search_area, list_area, _, stacked_side_area] = Layout::vertical([
+        let [header_area, header_rule_area, search_area, list_area, list_rule_area, stacked_side_area] =
+            Layout::vertical([
             Constraint::Max(header_height),
             Constraint::Max(1),
             Constraint::Length(if self.is_searchable { 1 } else { 0 }),
@@ -1008,19 +1098,11 @@ impl Renderable for ListSelectionView {
         } else {
             self.header.render(header_area, buf);
         }
+        Self::render_separator(header_rule_area, buf);
 
         // -- Search bar --
         if self.is_searchable {
-            Line::from(self.search_query.clone()).render(search_area, buf);
-            let query_span: Span<'static> = if self.search_query.is_empty() {
-                self.search_placeholder
-                    .as_ref()
-                    .map(|placeholder| placeholder.clone().dim())
-                    .unwrap_or_else(|| "".into())
-            } else {
-                self.search_query.clone().into()
-            };
-            Line::from(query_span).render(search_area, buf);
+            self.render_search_bar(search_area, buf);
         }
 
         // -- List rows --
@@ -1036,33 +1118,44 @@ impl Renderable for ListSelectionView {
                 list_render_area: render_area,
                 visible_row_heights,
             };
-            match self.col_width_mode {
-                ColumnWidthMode::AutoVisible => render_rows(
+            if self.dense_rows {
+                render_rows_single_line(
                     render_area,
                     buf,
                     &rows,
                     &self.state,
                     render_area.height as usize,
                     "нет совпадений",
-                ),
-                ColumnWidthMode::AutoAllRows => render_rows_stable_col_widths(
-                    render_area,
-                    buf,
-                    &rows,
-                    &self.state,
-                    render_area.height as usize,
-                    "нет совпадений",
-                ),
-                ColumnWidthMode::Fixed => render_rows_with_col_width_mode(
-                    render_area,
-                    buf,
-                    &rows,
-                    &self.state,
-                    render_area.height as usize,
-                    "нет совпадений",
-                    ColumnWidthMode::Fixed,
-                ),
-            };
+                );
+            } else {
+                match self.col_width_mode {
+                    ColumnWidthMode::AutoVisible => render_rows(
+                        render_area,
+                        buf,
+                        &rows,
+                        &self.state,
+                        render_area.height as usize,
+                        "нет совпадений",
+                    ),
+                    ColumnWidthMode::AutoAllRows => render_rows_stable_col_widths(
+                        render_area,
+                        buf,
+                        &rows,
+                        &self.state,
+                        render_area.height as usize,
+                        "нет совпадений",
+                    ),
+                    ColumnWidthMode::Fixed => render_rows_with_col_width_mode(
+                        render_area,
+                        buf,
+                        &rows,
+                        &self.state,
+                        render_area.height as usize,
+                        "нет совпадений",
+                        ColumnWidthMode::Fixed,
+                    ),
+                };
+            }
         } else {
             *self.mouse_layout.borrow_mut() = SelectionMouseLayout {
                 content_area: outer_content_area,
@@ -1070,6 +1163,7 @@ impl Renderable for ListSelectionView {
                 visible_row_heights,
             };
         }
+        Self::render_separator(list_rule_area, buf);
 
         // -- Side content (preview panel) --
         if let Some(sw) = side_w {
@@ -2052,5 +2146,69 @@ mod tests {
         let cell = &buf[(area.x + width - 1, area.y)];
         assert_eq!(cell.symbol(), " ");
         assert_eq!(cell.style().bg, Some(Color::Reset));
+    }
+
+    #[test]
+    fn dense_rows_render_category_tags_without_legacy_suffixes() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Каталог моделей".to_string()),
+                dense_rows: true,
+                items: vec![SelectionItem {
+                    name: "mistral-small-latest".to_string(),
+                    description: Some("2 режима размышлений".to_string()),
+                    category_tags: vec![
+                        "MISTRAL".to_string(),
+                        "FAST".to_string(),
+                        "CURRENT".to_string(),
+                    ],
+                    is_current: true,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let rendered = render_lines_with_width(&view, /*width*/ 72);
+        assert!(rendered.contains("MISTRAL"), "missing provider tag:\n{rendered}");
+        assert!(rendered.contains("FAST"), "missing speed tag:\n{rendered}");
+        assert!(
+            rendered.contains("CURRENT"),
+            "missing current tag:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("(текущий)"),
+            "legacy current suffix should not be rendered when tags exist:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn searchable_view_renders_compact_search_bar() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Поиск".to_string()),
+                is_searchable: true,
+                search_placeholder: Some("Найти модель".to_string()),
+                items: vec![SelectionItem {
+                    name: "mistral-small-latest".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            tx,
+        );
+        view.set_search_query("mistral".to_string());
+
+        let rendered = render_lines_with_width(&view, /*width*/ 48);
+        assert!(rendered.contains("⌕"), "missing search marker:\n{rendered}");
+        assert!(rendered.contains("mistral"), "missing query:\n{rendered}");
+        assert!(rendered.contains("1/1"), "missing result counter:\n{rendered}");
     }
 }

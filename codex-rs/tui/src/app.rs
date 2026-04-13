@@ -125,7 +125,9 @@ use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::model_info::canonicalize_provider_model_slug;
+use codex_models_manager::model_info::compatibility_default_reasoning_level_for_slug;
 use codex_models_manager::model_info::compatibility_model_info_from_slug;
+use codex_models_manager::model_info::compatibility_reasoning_presets_for_slug;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_models_manager::model_info::normalize_provider_model_alias_slug;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -301,6 +303,30 @@ struct OpenAiCompatibleModelCapabilities {
     completion_chat: Option<bool>,
     #[serde(default)]
     chat_completion: Option<bool>,
+    #[serde(default)]
+    reasoning: Option<bool>,
+    #[serde(default)]
+    function_calling: Option<bool>,
+    #[serde(default)]
+    tools: Option<bool>,
+    #[serde(default, rename = "tool_calls")]
+    tool_calls: Option<bool>,
+}
+
+impl OpenAiCompatibleModelCapabilities {
+    fn supports_chat_completions(&self) -> Option<bool> {
+        self.completion_chat.or(self.chat_completion)
+    }
+
+    fn supports_tool_use(&self) -> Option<bool> {
+        self.function_calling.or(self.tools).or(self.tool_calls)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OpenAiCompatibleCatalogModel {
+    slug: String,
+    capabilities: Option<OpenAiCompatibleModelCapabilities>,
 }
 
 fn candidate_model_slug_matches(requested_slug: &str, candidate_slug: &str) -> bool {
@@ -389,6 +415,13 @@ fn openai_compatible_model_slug(
     provider: Option<&ModelProviderInfo>,
     value: OpenAiCompatibleModelObject,
 ) -> Option<String> {
+    openai_compatible_catalog_model(provider, value).map(|model| model.slug)
+}
+
+fn openai_compatible_catalog_model(
+    provider: Option<&ModelProviderInfo>,
+    value: OpenAiCompatibleModelObject,
+) -> Option<OpenAiCompatibleCatalogModel> {
     let OpenAiCompatibleModelObject {
         id,
         slug,
@@ -428,11 +461,10 @@ fn openai_compatible_model_slug(
     }
 
     if !provider.is_some_and(ModelProviderInfo::uses_mistral_api)
-        && capabilities.as_ref().and_then(|capabilities| {
-            capabilities
-                .completion_chat
-                .or(capabilities.chat_completion)
-        }) == Some(false)
+        && capabilities
+            .as_ref()
+            .and_then(OpenAiCompatibleModelCapabilities::supports_chat_completions)
+            == Some(false)
     {
         return None;
     }
@@ -455,37 +487,40 @@ fn openai_compatible_model_slug(
         }
     }
 
-    Some(normalized_slug)
+    Some(OpenAiCompatibleCatalogModel {
+        slug: normalized_slug,
+        capabilities,
+    })
 }
 
-fn collect_openai_compatible_model_slugs(
+fn collect_openai_compatible_catalog_models(
     provider: Option<&ModelProviderInfo>,
     entries: impl IntoIterator<Item = OpenAiCompatibleModelEntry>,
-) -> Vec<String> {
+) -> Vec<OpenAiCompatibleCatalogModel> {
     let mut seen = HashSet::new();
     let mut models = Vec::new();
 
     for entry in entries {
-        let slug = match entry {
-            OpenAiCompatibleModelEntry::String(value) => {
-                Some(normalize_provider_catalog_slug(provider, value.as_str()))
-            }
+        let model = match entry {
+            OpenAiCompatibleModelEntry::String(value) => Some(OpenAiCompatibleCatalogModel {
+                slug: normalize_provider_catalog_slug(provider, value.as_str()),
+                capabilities: None,
+            }),
             OpenAiCompatibleModelEntry::Object(value) => {
-                openai_compatible_model_slug(provider, value)
+                openai_compatible_catalog_model(provider, value)
             }
         };
-        let Some(slug) =
-            slug.map(|value| normalize_provider_catalog_slug(provider, value.as_str()))
-        else {
+        let Some(mut model) = model else {
             continue;
         };
-        if slug.is_empty()
-            || !provider_catalog_slug_allowed(provider, slug.as_str())
-            || !seen.insert(slug.clone())
+        model.slug = normalize_provider_catalog_slug(provider, model.slug.as_str());
+        if model.slug.is_empty()
+            || !provider_catalog_slug_allowed(provider, model.slug.as_str())
+            || !seen.insert(model.slug.clone())
         {
             continue;
         }
-        models.push(slug);
+        models.push(model);
     }
 
     models
@@ -522,6 +557,7 @@ fn enrich_provider_catalog_model(
     requested_slug: &str,
     index: usize,
     bundled_models: &[ModelInfo],
+    capabilities: Option<&OpenAiCompatibleModelCapabilities>,
 ) -> ModelInfo {
     let requested_slug = requested_slug.trim();
     let presented_slug = requested_slug.to_string();
@@ -549,6 +585,32 @@ fn enrich_provider_catalog_model(
     model.visibility = ModelVisibility::List;
     model.supported_in_api = true;
     model.priority = i32::try_from(index).unwrap_or(i32::MAX);
+    if let Some(provider) = provider {
+        if capabilities
+            .and_then(OpenAiCompatibleModelCapabilities::supports_tool_use)
+            == Some(true)
+        {
+            model.supports_parallel_tool_calls = true;
+            model.supports_search_tool = true;
+        }
+
+        let catalog_reports_reasoning = capabilities.and_then(|caps| caps.reasoning) == Some(true);
+        if model.supported_reasoning_levels.is_empty()
+            && (provider.model_supports_chat_completions_reasoning_effort(model.slug.as_str())
+                || (catalog_reports_reasoning
+                    && provider.supports_chat_completions_reasoning_effort()))
+        {
+            model.supported_reasoning_levels =
+                compatibility_reasoning_presets_for_slug(model.slug.as_str());
+            if !model.supported_reasoning_levels.is_empty() {
+                model.default_reasoning_level =
+                    compatibility_default_reasoning_level_for_slug(model.slug.as_str())
+                        .or_else(|| {
+                            model.supported_reasoning_levels.first().map(|preset| preset.effort)
+                        });
+            }
+        }
+    }
     strip_provider_reasoning_default_without_supported_levels(provider, &mut model);
     model
 }
@@ -601,16 +663,17 @@ fn parse_provider_model_catalog_with_provider(
         return Ok(models);
     }
 
-    let slugs = if let Ok(envelope) = serde_json::from_slice::<OpenAiCompatibleModelsEnvelope>(body)
+    let catalog_models =
+        if let Ok(envelope) = serde_json::from_slice::<OpenAiCompatibleModelsEnvelope>(body)
     {
         let entries = if !envelope.data.is_empty() {
             envelope.data
         } else {
             envelope.models
         };
-        collect_openai_compatible_model_slugs(provider, entries)
+        collect_openai_compatible_catalog_models(provider, entries)
     } else if let Ok(entries) = serde_json::from_slice::<Vec<OpenAiCompatibleModelEntry>>(body) {
-        collect_openai_compatible_model_slugs(provider, entries)
+        collect_openai_compatible_catalog_models(provider, entries)
     } else {
         return Err(color_eyre::eyre::eyre!(
             "provider /models response is not compatible with Codex or OpenAI model listings"
@@ -620,11 +683,17 @@ fn parse_provider_model_catalog_with_provider(
     let bundled_models = bundled_models_response()
         .map(|response| response.models)
         .unwrap_or_default();
-    Ok(slugs
+    Ok(catalog_models
         .into_iter()
         .enumerate()
-        .map(|(index, slug)| {
-            enrich_provider_catalog_model(provider, slug.as_str(), index, &bundled_models)
+        .map(|(index, catalog_model)| {
+            enrich_provider_catalog_model(
+                provider,
+                catalog_model.slug.as_str(),
+                index,
+                &bundled_models,
+                catalog_model.capabilities.as_ref(),
+            )
         })
         .collect())
 }
@@ -1650,6 +1719,7 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    pending_thread_approvals_refresh_queued: bool,
 }
 
 #[derive(Default)]
@@ -3074,7 +3144,7 @@ impl App {
             let submitted = self.chat_widget.submit_op(op);
             if submitted && let Some(op) = replay_state_op.as_ref() {
                 self.note_active_thread_outbound_op(op).await;
-                self.refresh_pending_thread_approvals().await;
+                self.queue_pending_thread_approvals_refresh();
             }
         }
 
@@ -3516,7 +3586,7 @@ impl App {
         {
             if ThreadEventStore::op_can_change_pending_replay_state(&op) {
                 self.note_thread_outbound_op(thread_id, &op).await;
-                self.refresh_pending_thread_approvals().await;
+                self.queue_pending_thread_approvals_refresh();
             }
             return Ok(());
         }
@@ -4077,7 +4147,7 @@ impl App {
             Ok(()) => {
                 if ThreadEventStore::op_can_change_pending_replay_state(op) {
                     self.note_thread_outbound_op(thread_id, op).await;
-                    self.refresh_pending_thread_approvals().await;
+                    self.queue_pending_thread_approvals_refresh();
                 }
                 Ok(true)
             }
@@ -4119,6 +4189,15 @@ impl App {
         self.chat_widget.set_pending_thread_approvals(threads);
     }
 
+    fn queue_pending_thread_approvals_refresh(&mut self) {
+        if self.pending_thread_approvals_refresh_queued {
+            return;
+        }
+
+        self.pending_thread_approvals_refresh_queued = true;
+        self.app_event_tx.send(AppEvent::RefreshPendingThreadApprovals);
+    }
+
     async fn enqueue_thread_notification(
         &mut self,
         thread_id: ThreadId,
@@ -4158,7 +4237,7 @@ impl App {
                 }
             }
         }
-        self.refresh_pending_thread_approvals().await;
+        self.queue_pending_thread_approvals_refresh();
         Ok(())
     }
 
@@ -4279,7 +4358,7 @@ impl App {
                 }
             }
         }
-        self.refresh_pending_thread_approvals().await;
+        self.queue_pending_thread_approvals_refresh();
         Ok(())
     }
 
@@ -5477,6 +5556,7 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_thread_approvals_refresh_queued: false,
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -6007,6 +6087,11 @@ impl App {
             AppEvent::ThreadHistoryEntryResponse { thread_id, event } => {
                 self.enqueue_thread_history_entry_response(thread_id, event)
                     .await?;
+            }
+            AppEvent::RefreshPendingThreadApprovals => {
+                self.pending_thread_approvals_refresh_queued = false;
+                self.refresh_pending_thread_approvals().await;
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
@@ -8588,6 +8673,40 @@ mod tests {
     }
 
     #[test]
+    fn parse_provider_model_catalog_restores_tool_capabilities_from_openai_compatible_catalog(
+    ) -> Result<()> {
+        let provider = ModelProviderInfo {
+            name: "Compatible".to_string(),
+            base_url: Some("https://example.com/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::ChatCompletions,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+
+        let models = parse_provider_model_catalog_with_provider(
+            br#"{"data":[{"id":"compat-coder-1","capabilities":{"chat_completion":true,"function_calling":true}}]}"#,
+            Some(&provider),
+        )?;
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "compat-coder-1");
+        assert!(models[0].supports_parallel_tool_calls);
+        assert!(models[0].supports_search_tool);
+        Ok(())
+    }
+
+    #[test]
     fn chat_completions_provider_presets_do_not_invent_reasoning_choices_for_mistral() {
         let provider = ModelProviderInfo {
             name: "Mistral".to_string(),
@@ -10856,6 +10975,24 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn queue_pending_thread_approvals_refresh_coalesces_bursts() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        app.queue_pending_thread_approvals_refresh();
+        app.queue_pending_thread_approvals_refresh();
+        app.queue_pending_thread_approvals_refresh();
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::RefreshPendingThreadApprovals)
+        );
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "refresh requests should coalesce into a single queued app event"
+        );
+    }
+
+    #[tokio::test]
     async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
         let mut app = make_test_app().await;
         let main_thread_id =
@@ -11651,6 +11788,7 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_thread_approvals_refresh_queued: false,
             pending_local_profile_creates: HashMap::new(),
             pending_custom_command_prefix_requests: HashSet::new(),
             pending_model_preset_inputs: HashMap::new(),
@@ -11711,6 +11849,7 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                pending_thread_approvals_refresh_queued: false,
                 pending_local_profile_creates: HashMap::new(),
                 pending_custom_command_prefix_requests: HashSet::new(),
                 pending_model_preset_inputs: HashMap::new(),

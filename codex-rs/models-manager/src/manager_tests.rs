@@ -505,6 +505,36 @@ async fn custom_gemini_catalog_clears_default_reasoning_without_supported_levels
 }
 
 #[tokio::test]
+async fn custom_gemini_catalog_strips_stale_reasoning_levels_from_remote_metadata() {
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let provider = codex_model_provider_info::create_oss_provider_with_base_url(
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        WireApi::ChatCompletions,
+    );
+    let manager = ModelsManager::new_with_provider(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        Some(ModelsResponse {
+            models: vec![remote_model(
+                "models/gemini-2.5-flash",
+                "Gemini Flash",
+                /*priority*/ 0,
+            )],
+        }),
+        CollaborationModesConfig::default(),
+        provider,
+    );
+
+    let info = manager
+        .get_model_info("gemini-2.5-flash", &ModelsManagerConfig::default())
+        .await;
+
+    assert_eq!(info.default_reasoning_level, None);
+    assert!(info.supported_reasoning_levels.is_empty());
+}
+
+#[tokio::test]
 async fn custom_mistral_catalog_preserves_distinct_aliases_and_versions() {
     let codex_home = tempdir().expect("temp dir");
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -587,6 +617,42 @@ async fn custom_mistral_small_catalog_restores_reasoning_and_tool_metadata() {
 
     assert!(info.supports_parallel_tool_calls);
     assert!(info.supports_search_tool);
+    assert_eq!(info.default_reasoning_level, Some(ReasoningEffort::High));
+    assert_eq!(
+        info.supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>(),
+        vec![ReasoningEffort::None, ReasoningEffort::High]
+    );
+}
+
+#[tokio::test]
+async fn custom_mistral_small_catalog_rewrites_stale_reasoning_levels_to_provider_contract() {
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let provider = codex_model_provider_info::create_oss_provider_with_base_url(
+        "https://api.mistral.ai/v1",
+        WireApi::ChatCompletions,
+    );
+    let manager = ModelsManager::new_with_provider(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        Some(ModelsResponse {
+            models: vec![remote_model(
+                "mistral-small-latest",
+                "Mistral Small",
+                /*priority*/ 0,
+            )],
+        }),
+        CollaborationModesConfig::default(),
+        provider,
+    );
+
+    let info = manager
+        .get_model_info("mistral-small-latest", &ModelsManagerConfig::default())
+        .await;
+
     assert_eq!(info.default_reasoning_level, Some(ReasoningEffort::High));
     assert_eq!(
         info.supported_reasoning_levels
@@ -787,6 +853,45 @@ async fn refresh_available_models_accepts_openai_compatible_catalog() {
             .iter()
             .any(|option| option.effort == ReasoningEffort::XHigh)
     );
+}
+
+#[tokio::test]
+async fn refresh_available_models_reads_alternative_capability_field_names() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_raw(
+                    r#"{"object":"list","data":[{"id":"custom-model","capabilities":{"chat_completions":true,"parallelToolCalls":true,"searchTool":true}}]}"#,
+                    "application/json",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("unused"));
+    let provider = provider_for_name(server.uri(), "Custom", WireApi::ChatCompletions);
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        provider,
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("refresh succeeds");
+
+    let info = manager
+        .get_model_info("custom-model", &ModelsManagerConfig::default())
+        .await;
+
+    assert!(info.supports_parallel_tool_calls);
+    assert!(info.supports_search_tool);
 }
 
 #[tokio::test]

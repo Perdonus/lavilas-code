@@ -20,6 +20,8 @@ use super::encode_google_thought_signature;
 use super::normalize_request_model_for_provider;
 use codex_api::api_bridge::CoreAuthProvider;
 use codex_app_server_protocol::AuthMode;
+use codex_instructions::AGENTS_MD_FRAGMENT;
+use codex_instructions::SKILL_FRAGMENT;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
@@ -37,6 +39,8 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
+
+use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
@@ -744,6 +748,70 @@ fn build_chat_completions_messages_preserves_mistral_user_turn_boundaries() {
         vec!["system", "user", "assistant", "user", "assistant", "user"]
     );
     assert_eq!(messages[0].content, Some(json!("system prompt")));
+}
+
+#[test]
+fn build_chat_completions_messages_hoists_contextual_user_scaffolding_to_leading_system() {
+    let provider = mistral_provider();
+    let messages = build_chat_completions_messages(
+        &provider,
+        "system prompt",
+        &[
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: AGENTS_MD_FRAGMENT.wrap("Follow repo policy.".to_string()),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: ENVIRONMENT_CONTEXT_FRAGMENT.wrap(
+                        "<cwd>/root/project</cwd>".to_string(),
+                    ),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: SKILL_FRAGMENT.wrap("Use local tools first.".to_string()),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "actual request".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ],
+    )
+    .expect("chat completions messages");
+
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].role, "system");
+    let system_text = messages[0]
+        .content
+        .as_ref()
+        .and_then(Value::as_str)
+        .expect("system content");
+    assert!(system_text.contains("system prompt"));
+    assert!(system_text.contains("# AGENTS.md instructions for"));
+    assert!(system_text.contains("<environment_context>"));
+    assert!(system_text.contains("<skill>"));
+    assert_eq!(messages[1].role, "user");
+    assert_eq!(messages[1].content, Some(json!("actual request")));
 }
 
 #[test]

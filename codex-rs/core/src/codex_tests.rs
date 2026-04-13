@@ -17,6 +17,7 @@ use codex_features::Features;
 use codex_login::CodexAuth;
 use codex_mcp::mcp_connection_manager::ToolInfo;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
 use codex_protocol::AgentPath;
@@ -4398,6 +4399,52 @@ async fn build_initial_context_prepends_model_switch_message() {
         panic!("expected developer text");
     };
     assert!(text.contains("<model_switch>"));
+}
+
+#[tokio::test]
+async fn build_initial_context_includes_external_chat_completions_workflow_for_external_provider()
+{
+    let (session, mut turn_context) = make_session_and_context().await;
+    let mut provider = ModelProviderInfo::create_openai_provider(None);
+    provider.name = "Mistral".to_string();
+    provider.base_url = Some("https://api.mistral.ai/v1".to_string());
+    provider.experimental_bearer_token = Some("test-token".to_string());
+    provider.requires_openai_auth = false;
+    provider.supports_websockets = false;
+    provider.wire_api = WireApi::ChatCompletions;
+    turn_context.provider = provider;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("<external_chat_completions_workflow>")),
+        "expected external workflow message, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("Start with reconnaissance")),
+        "expected stricter recon guidance, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_external_chat_completions_workflow_for_native_openai_provider()
+{
+    let (session, turn_context) = make_session_and_context().await;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+
+    assert!(
+        developer_texts
+            .iter()
+            .all(|text| !text.contains("<external_chat_completions_workflow>")),
+        "did not expect external workflow message for native openai path, got {developer_texts:?}"
+    );
 }
 
 #[tokio::test]

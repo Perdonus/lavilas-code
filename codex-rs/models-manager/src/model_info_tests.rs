@@ -157,3 +157,19 @@ fn compatibility_model_info_supports_real_mistral_families() {
         vec![ReasoningEffort::None, ReasoningEffort::High]
     );
 }
+
+#[test]
+fn compatibility_model_info_inherits_common_external_tool_hints() {
+    let claude = compatibility_model_info_from_slug("claude-3.7-sonnet")
+        .expect("claude should produce compatibility metadata");
+    assert_eq!(claude.slug, "claude-3.7-sonnet");
+    assert!(claude.supports_parallel_tool_calls);
+    assert!(claude.supports_search_tool);
+    assert!(!claude.used_fallback_model_metadata);
+
+    let mixtral = compatibility_model_info_from_slug("mixtral-8x22b-latest")
+        .expect("mixtral should produce compatibility metadata");
+    assert_eq!(mixtral.display_name, "Mixtral 8x22b");
+    assert!(mixtral.supports_parallel_tool_calls);
+    assert!(mixtral.supports_search_tool);
+}
