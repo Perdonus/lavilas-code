@@ -119,6 +119,7 @@ impl SkillPopup {
                     display_shortcut: None,
                     description,
                     category_tag: None,
+                    category_tags: Vec::new(),
                     is_disabled: false,
                     disabled_reason: None,
                     wrap_indent: None,

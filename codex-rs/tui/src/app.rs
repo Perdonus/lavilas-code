@@ -297,7 +297,7 @@ struct OpenAiCompatibleModelObject {
     archived: Option<bool>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct OpenAiCompatibleModelCapabilities {
     #[serde(default)]
     completion_chat: Option<bool>,
