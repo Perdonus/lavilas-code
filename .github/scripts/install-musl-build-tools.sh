@@ -16,6 +16,35 @@ if [[ -n "${APT_INSTALL_ARGS:-}" ]]; then
   apt_install_args=(${APT_INSTALL_ARGS})
 fi
 
+download_with_retry() {
+  local output_path="$1"
+  shift
+
+  local url
+  for url in "$@"; do
+    rm -f "${output_path}"
+    if curl \
+      --fail \
+      --silent \
+      --show-error \
+      --location \
+      --retry 8 \
+      --retry-all-errors \
+      --retry-delay 2 \
+      --retry-max-time 180 \
+      --connect-timeout 15 \
+      "${url}" \
+      -o "${output_path}"; then
+      return 0
+    fi
+
+    echo "download failed from ${url}; trying next source if available" >&2
+  done
+
+  echo "failed to download required artifact to ${output_path}" >&2
+  return 1
+}
+
 sudo apt-get update "${apt_update_args[@]}"
 sudo apt-get install -y "${apt_install_args[@]}" ca-certificates curl musl-tools pkg-config libcap-dev g++ clang libc++-dev libc++abi-dev lld xz-utils
 
@@ -35,7 +64,10 @@ esac
 libcap_version="2.75"
 libcap_sha256="de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632"
 libcap_tarball_name="libcap-${libcap_version}.tar.xz"
-libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+libcap_download_urls=(
+  "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+  "https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+)
 
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
 if command -v "${arch}-linux-musl-gcc" >/dev/null; then
@@ -61,7 +93,7 @@ if [[ ! -f "${libcap_prefix}/lib/libcap.a" ]]; then
   mkdir -p "${libcap_src_root}" "${libcap_prefix}/lib" "${libcap_prefix}/include/sys" "${libcap_prefix}/include/linux" "${libcap_pkgconfig_dir}"
   libcap_tarball="${libcap_root}/${libcap_tarball_name}"
 
-  curl -fsSL "${libcap_download_url}" -o "${libcap_tarball}"
+  download_with_retry "${libcap_tarball}" "${libcap_download_urls[@]}"
   echo "${libcap_sha256}  ${libcap_tarball}" | sha256sum -c -
 
   tar -xJf "${libcap_tarball}" -C "${libcap_src_root}"
