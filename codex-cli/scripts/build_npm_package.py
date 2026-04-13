@@ -240,10 +240,12 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
     if package == "codex":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
-        rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
-        if rg_manifest.exists():
-            shutil.copy2(rg_manifest, bin_dir / "rg")
+        for bin_src in (CODEX_CLI_ROOT / "bin").iterdir():
+            if not bin_src.is_file():
+                continue
+            if bin_src.name.endswith(".test.js"):
+                continue
+            shutil.copy2(bin_src, bin_dir / bin_src.name)
 
         readme_src = REPO_ROOT / "README.md"
         if readme_src.exists():
