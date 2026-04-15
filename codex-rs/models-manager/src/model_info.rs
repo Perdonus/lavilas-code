@@ -1,4 +1,5 @@
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
@@ -228,6 +229,7 @@ pub fn compatibility_default_reasoning_level_for_slug(slug: &str) -> Option<Reas
 pub fn enrich_compatibility_model_capabilities(model: &mut ModelInfo, slug: &str) {
     if slug_supports_tool_use(slug) {
         model.supports_parallel_tool_calls = true;
+        model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     }
 
     if compatibility_model_supports_search_tool(slug) {

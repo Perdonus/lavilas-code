@@ -1109,7 +1109,7 @@ impl Renderable for ListSelectionView {
         // -- List rows --
         if list_area.height > 0 {
             let render_area = Rect {
-                x: list_area.x.saturating_sub(2),
+                x: list_area.x.saturating_sub(1),
                 y: list_area.y,
                 width: effective_rows_width.max(1),
                 height: list_area.height,

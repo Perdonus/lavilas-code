@@ -39,7 +39,7 @@ pub(crate) struct AccountProviderSpec {
     pub(crate) requires_base_url: bool,
 }
 
-const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
+const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 16] = [
     AccountProviderSpec {
         id: "codex_oauth",
         name_en: "Codex OAuth",
@@ -65,6 +65,16 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         name_en: "OpenRouter",
         name_ru: "OpenRouter",
         base_url: "https://openrouter.ai/api/v1",
+        wire_api: "chat_completions",
+        api_key_optional: false,
+        builtin_model_provider_id: None,
+        requires_base_url: false,
+    },
+    AccountProviderSpec {
+        id: "anthropic",
+        name_en: "Anthropic",
+        name_ru: "Anthropic",
+        base_url: "https://api.anthropic.com/v1",
         wire_api: "chat_completions",
         api_key_optional: false,
         builtin_model_provider_id: None,
@@ -101,6 +111,76 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
         requires_base_url: false,
     },
     AccountProviderSpec {
+        id: "deepseek",
+        name_en: "DeepSeek",
+        name_ru: "DeepSeek",
+        base_url: "https://api.deepseek.com/v1",
+        wire_api: "chat_completions",
+        api_key_optional: false,
+        builtin_model_provider_id: None,
+        requires_base_url: false,
+    },
+    AccountProviderSpec {
+        id: "xai",
+        name_en: "xAI",
+        name_ru: "xAI",
+        base_url: "https://api.x.ai/v1",
+        wire_api: "chat_completions",
+        api_key_optional: false,
+        builtin_model_provider_id: None,
+        requires_base_url: false,
+    },
+    AccountProviderSpec {
+        id: "together",
+        name_en: "Together AI",
+        name_ru: "Together AI",
+        base_url: "https://api.together.xyz/v1",
+        wire_api: "chat_completions",
+        api_key_optional: false,
+        builtin_model_provider_id: None,
+        requires_base_url: false,
+    },
+    AccountProviderSpec {
+        id: "fireworks",
+        name_en: "Fireworks AI",
+        name_ru: "Fireworks AI",
+        base_url: "https://api.fireworks.ai/inference/v1",
+        wire_api: "chat_completions",
+        api_key_optional: false,
+        builtin_model_provider_id: None,
+        requires_base_url: false,
+    },
+    AccountProviderSpec {
+        id: "cerebras",
+        name_en: "Cerebras",
+        name_ru: "Cerebras",
+        base_url: "https://api.cerebras.ai/v1",
+        wire_api: "chat_completions",
+        api_key_optional: false,
+        builtin_model_provider_id: None,
+        requires_base_url: false,
+    },
+    AccountProviderSpec {
+        id: "sambanova",
+        name_en: "SambaNova",
+        name_ru: "SambaNova",
+        base_url: "https://api.sambanova.ai/v1",
+        wire_api: "chat_completions",
+        api_key_optional: false,
+        builtin_model_provider_id: None,
+        requires_base_url: false,
+    },
+    AccountProviderSpec {
+        id: "perplexity",
+        name_en: "Perplexity",
+        name_ru: "Perplexity",
+        base_url: "https://api.perplexity.ai",
+        wire_api: "chat_completions",
+        api_key_optional: false,
+        builtin_model_provider_id: None,
+        requires_base_url: false,
+    },
+    AccountProviderSpec {
         id: "ollama",
         name_en: "Ollama",
         name_ru: "Ollama",
@@ -112,8 +192,8 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 8] = [
     },
     AccountProviderSpec {
         id: "custom",
-        name_en: "Custom OpenAI-compatible API",
-        name_ru: "Кастомный OpenAI-compatible API",
+        name_en: "Custom provider",
+        name_ru: "Свой провайдер",
         base_url: "",
         wire_api: "chat_completions",
         api_key_optional: false,
@@ -834,7 +914,6 @@ pub(crate) fn build_create_profile_request(
         _ => format!("Enter the API key for {display_name}."),
     };
     let base_url_prompt = match account_provider_spec(provider) {
-        Some(spec) if spec.builtin_model_provider_id.is_some() => None,
         Some(spec) if spec.requires_base_url && is_ru => Some(
             "Введите base URL OpenAI-compatible API. Это поле обязательно для кастомного провайдера."
                 .to_string(),
@@ -843,15 +922,8 @@ pub(crate) fn build_create_profile_request(
             "Enter the OpenAI-compatible API base URL. This is required for the custom provider."
                 .to_string(),
         ),
-        Some(spec) if is_ru => Some(format!(
-            "Base URL API. Можно оставить пустым, тогда будет использовано значение по умолчанию: `{}`.",
-            spec.base_url
-        )),
-        Some(spec) => Some(format!(
-            "API base URL. Leave it empty to use the default: `{}`.",
-            spec.base_url
-        )),
         None => None,
+        Some(_) => None,
     };
 
     let mut questions = vec![
@@ -1310,5 +1382,62 @@ mod tests {
 
         let err = build_custom_model_provider_info(&profile, spec).expect_err("missing base url");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn create_profile_request_hides_base_url_for_fixed_provider() {
+        let request = build_create_profile_request(
+            "req-1".to_string(),
+            "mistral",
+            Some("mistral-profile"),
+            /*is_ru*/ true,
+        );
+
+        assert!(
+            request
+                .questions
+                .iter()
+                .all(|question| question.id != BASE_URL_QUESTION_ID),
+            "fixed providers should not prompt for base URL"
+        );
+    }
+
+    #[test]
+    fn create_profile_request_keeps_base_url_for_custom_provider() {
+        let request = build_create_profile_request(
+            "req-2".to_string(),
+            "custom",
+            Some("custom-profile"),
+            /*is_ru*/ true,
+        );
+
+        assert!(
+            request
+                .questions
+                .iter()
+                .any(|question| question.id == BASE_URL_QUESTION_ID),
+            "custom providers should still prompt for base URL"
+        );
+    }
+
+    #[test]
+    fn create_or_update_stored_profile_uses_fixed_provider_endpoint_and_saves_key() {
+        let codex_home = tempdir().expect("tempdir");
+        let (_profile_key, stored, _path) = create_or_update_stored_profile(
+            codex_home.path(),
+            "anthropic",
+            "anthropic-profile",
+            None,
+            Some(" secret ".to_string()),
+        )
+        .expect("stored profile");
+
+        assert_eq!(stored.provider, "anthropic");
+        assert_eq!(stored.base_url.as_deref(), Some("https://api.anthropic.com/v1"));
+        assert_eq!(stored.experimental_bearer_token.as_deref(), Some("secret"));
+        assert_eq!(
+            stored.model_provider_id.as_deref(),
+            Some("anthropic-profile-provider")
+        );
     }
 }

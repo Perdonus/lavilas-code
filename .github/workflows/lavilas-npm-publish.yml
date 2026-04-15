@@ -410,17 +410,19 @@ jobs:
           node -e \
             "require.resolve('@lavilas/codex-linux-x64/package.json', { paths: [process.argv[1]] })" \
             "$prefix/lib/node_modules/@lavilas/codex"
-          "$prefix/bin/codex" --version
           "$prefix/bin/lavilas" --version
+          test ! -e "$prefix/bin/codex"
           pkg_root="$prefix/lib/node_modules/@lavilas/codex"
           platform_root="$pkg_root/node_modules/@lavilas/codex-linux-x64"
           rm -f "$platform_root/package.json"
-          "$prefix/bin/codex" --version
+          "$prefix/bin/lavilas" --version
+          test ! -e "$prefix/bin/codex"
           backup_root="$prefix/lib/node_modules/@lavilas/.codex-fallback"
           rm -rf "$backup_root"
           cp -a "$pkg_root" "$backup_root"
           truncate -s 1024 "$platform_root/vendor/x86_64-unknown-linux-musl/codex/codex"
-          "$prefix/bin/codex" --version
+          "$prefix/bin/lavilas" --version
+          test ! -e "$prefix/bin/codex"
 
       - name: Publish base package
         shell: bash
@@ -459,5 +461,5 @@ jobs:
           prefix="$RUNNER_TEMP/npm-smoke"
           rm -rf "$prefix"
           npm install -g --prefix "$prefix" "@lavilas/codex@${{ steps.version.outputs.release_version }}"
-          "$prefix/bin/codex" --version
           "$prefix/bin/lavilas" --version
+          test ! -e "$prefix/bin/codex"

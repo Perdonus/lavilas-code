@@ -10399,9 +10399,17 @@ impl ChatWidget {
             quick_picker_presets
                 .into_iter()
                 .partition(|preset| Self::is_auto_model(preset.model.as_str()));
+        if self.current_provider_model_presets_configured()
+            && self.saved_current_provider_model_presets().is_empty()
+            && auto_presets.is_empty()
+        {
+            return false;
+        }
+
+        let non_auto_presets = Self::non_auto_model_presets(available_presets);
         !auto_presets.is_empty()
             || !self
-                .resolved_provider_model_presets(Self::non_auto_model_presets(available_presets).as_slice())
+                .resolved_provider_model_presets(non_auto_presets.as_slice())
                 .is_empty()
     }
 
@@ -11988,10 +11996,10 @@ impl ChatWidget {
                     "Add account".to_string()
                 },
                 description: Some(if is_ru {
-                    "Открыть визуальную форму создания аккаунта: провайдер, имя профиля, API-ключ и base URL."
+                    "Открыть визуальную форму создания аккаунта: провайдер, имя профиля и ключ доступа. Для своего провайдера дополнительно запрашивается base URL."
                     .to_string()
                 } else {
-                    "Open the visual account-creation flow: provider, profile name, API key, and base URL."
+                    "Open the visual account-creation flow: provider, profile name, and access key. The custom provider additionally asks for a base URL."
                     .to_string()
                 }),
                 search_value: Some(if is_ru {
@@ -12203,9 +12211,20 @@ impl ChatWidget {
         items.extend(supported_account_providers().iter().copied().map(|provider| {
             let provider_id = provider.id.to_string();
             let display_name = provider_display_name(provider.id, is_ru);
-            SelectionItem {
-                name: display_name,
-                description: Some(if is_ru {
+            let description = if provider.id == "codex_oauth" {
+                if is_ru {
+                    format!(
+                        "Откроется форма имени профиля и стандартного входа Codex/OpenAI. Модель по умолчанию: {}",
+                        default_profile_model_for_provider(provider.id)
+                    )
+                } else {
+                    format!(
+                        "Opens the standard Codex/OpenAI sign-in flow with a profile name. Default model: {}",
+                        default_profile_model_for_provider(provider.id)
+                    )
+                }
+            } else if provider.requires_base_url {
+                if is_ru {
                     format!(
                         "Откроется форма имени, API-ключа и base URL. Модель по умолчанию: {}",
                         default_profile_model_for_provider(provider.id)
@@ -12215,7 +12234,21 @@ impl ChatWidget {
                         "Opens a form for the profile name, API key, and base URL. Default model: {}",
                         default_profile_model_for_provider(provider.id)
                     )
-                }),
+                }
+            } else if is_ru {
+                format!(
+                    "Откроется форма имени профиля и API-ключа. Endpoint провайдера зафиксирован. Модель по умолчанию: {}",
+                    default_profile_model_for_provider(provider.id)
+                )
+            } else {
+                format!(
+                    "Opens a form for the profile name and API key. The provider endpoint is fixed. Default model: {}",
+                    default_profile_model_for_provider(provider.id)
+                )
+            };
+            SelectionItem {
+                name: display_name,
+                description: Some(description),
                 search_value: Some(format!(
                     "{} {} {}",
                     provider.id,
@@ -12241,9 +12274,9 @@ impl ChatWidget {
                 "Add account".to_string()
             }),
             subtitle: Some(if is_ru {
-                "Выберите провайдера, затем введите имя профиля, API-ключ и base URL".to_string()
+                "Выберите провайдера. У фиксированных провайдеров вводятся имя профиля и ключ, а свой провайдер дополнительно просит base URL.".to_string()
             } else {
-                "Choose a provider, then enter the profile name, API key, and base URL".to_string()
+                "Choose a provider. Fixed providers only ask for a profile name and key, while the custom provider also asks for a base URL.".to_string()
             }),
             footer_hint: Some(standard_popup_hint_line()),
             items,

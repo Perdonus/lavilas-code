@@ -1,9 +1,12 @@
 use crate::error::TransportError;
 use crate::request::Request;
+use http::HeaderMap;
 use rand::Rng;
 use std::future::Future;
 use std::time::Duration;
 use tokio::time::sleep;
+
+const DEFAULT_RATE_LIMIT_DELAY: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -46,6 +49,27 @@ pub fn backoff(base: Duration, attempt: u64) -> Duration {
     Duration::from_millis((raw as f64 * jitter) as u64)
 }
 
+fn parse_retry_after(headers: Option<&HeaderMap>) -> Option<Duration> {
+    let raw = headers
+        .and_then(|headers| headers.get(http::header::RETRY_AFTER))
+        .and_then(|value| value.to_str().ok())?;
+    let seconds = raw.trim().parse::<u64>().ok()?;
+    Some(Duration::from_secs(seconds))
+}
+
+fn retry_delay_for_error(policy: &RetryPolicy, err: &TransportError, attempt: u64) -> Duration {
+    match err {
+        TransportError::Http {
+            status,
+            headers,
+            ..
+        } if status.as_u16() == 429 => {
+            parse_retry_after(headers.as_ref()).unwrap_or(DEFAULT_RATE_LIMIT_DELAY)
+        }
+        _ => backoff(policy.base_delay, attempt),
+    }
+}
+
 pub async fn run_with_retry<T, F, Fut>(
     policy: RetryPolicy,
     mut make_req: impl FnMut() -> Request,
@@ -64,10 +88,64 @@ where
                     .retry_on
                     .should_retry(&err, attempt, policy.max_attempts) =>
             {
-                sleep(backoff(policy.base_delay, attempt + 1)).await;
+                sleep(retry_delay_for_error(&policy, &err, attempt + 1)).await;
             }
             Err(err) => return Err(err),
         }
     }
     Err(TransportError::RetryLimit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::HeaderValue;
+    use http::StatusCode;
+
+    #[test]
+    fn retry_delay_for_429_prefers_retry_after_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::RETRY_AFTER, HeaderValue::from_static("7"));
+        let err = TransportError::Http {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            url: None,
+            headers: Some(headers),
+            body: None,
+        };
+        let policy = RetryPolicy {
+            max_attempts: 4,
+            base_delay: Duration::from_millis(200),
+            retry_on: RetryOn {
+                retry_429: true,
+                retry_5xx: true,
+                retry_transport: true,
+            },
+        };
+
+        assert_eq!(retry_delay_for_error(&policy, &err, 1), Duration::from_secs(7));
+    }
+
+    #[test]
+    fn retry_delay_for_429_defaults_to_thirty_seconds_without_header() {
+        let err = TransportError::Http {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            url: None,
+            headers: None,
+            body: None,
+        };
+        let policy = RetryPolicy {
+            max_attempts: 4,
+            base_delay: Duration::from_millis(200),
+            retry_on: RetryOn {
+                retry_429: true,
+                retry_5xx: true,
+                retry_transport: true,
+            },
+        };
+
+        assert_eq!(
+            retry_delay_for_error(&policy, &err, 1),
+            Duration::from_secs(30)
+        );
+    }
 }

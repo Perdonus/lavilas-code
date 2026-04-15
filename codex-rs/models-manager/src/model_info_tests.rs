@@ -1,5 +1,6 @@
 use super::*;
 use crate::ModelsManagerConfig;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 
@@ -165,6 +166,7 @@ fn compatibility_model_info_inherits_common_external_tool_hints() {
     assert_eq!(claude.slug, "claude-3.7-sonnet");
     assert!(claude.supports_parallel_tool_calls);
     assert!(claude.supports_search_tool);
+    assert_eq!(claude.apply_patch_tool_type, Some(ApplyPatchToolType::Freeform));
     assert!(!claude.used_fallback_model_metadata);
 
     let mixtral = compatibility_model_info_from_slug("mixtral-8x22b-latest")
@@ -172,4 +174,5 @@ fn compatibility_model_info_inherits_common_external_tool_hints() {
     assert_eq!(mixtral.display_name, "Mixtral 8x22b");
     assert!(mixtral.supports_parallel_tool_calls);
     assert!(mixtral.supports_search_tool);
+    assert_eq!(mixtral.apply_patch_tool_type, Some(ApplyPatchToolType::Freeform));
 }

@@ -53,4 +53,4 @@ jobs:
           node-version: 22
       - name: Validate npm package identity
         run: |
-          node -e "const p=require('./package.json'); if(p.name!=='@lavilas/codex') { throw new Error('package name mismatch: '+p.name) } ; if(!/^\d+\.\d+\.\d+/.test(p.version)){ throw new Error('invalid version '+p.version)}; console.log('ok', p.name, p.version)"
+          node -e "const p=require('./package.json'); if(p.name!=='@lavilas/codex') { throw new Error('package name mismatch: '+p.name) } ; if(!/^\d+\.\d+\.\d+/.test(p.version)){ throw new Error('invalid version '+p.version)}; const bins=Object.keys(p.bin||{}); if(bins.length!==1 || bins[0]!=='lavilas' || p.bin.lavilas!=='bin/codex.js'){ throw new Error('expected only lavilas bin, got '+JSON.stringify(p.bin)) }; console.log('ok', p.name, p.version, bins.join(','))"

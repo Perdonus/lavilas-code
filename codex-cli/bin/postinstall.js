@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,30 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageDir = path.join(__dirname, "..");
 const require = createRequire(import.meta.url);
+
+function removeLegacyGlobalBinLinks() {
+  if (process.env.npm_config_global !== "true") {
+    return;
+  }
+
+  const prefix = process.env.npm_config_prefix;
+  if (!prefix) {
+    return;
+  }
+
+  const binDir = process.platform === "win32" ? prefix : path.join(prefix, "bin");
+  const legacyNames = process.platform === "win32"
+    ? ["codex", "codex.cmd", "codex.ps1", "кодекс", "кодекс.cmd", "кодекс.ps1", "лавилас", "лавилас.cmd", "лавилас.ps1"]
+    : ["codex", "кодекс", "лавилас"];
+
+  for (const entry of legacyNames) {
+    try {
+      rmSync(path.join(binDir, entry), { force: true });
+    } catch {
+      // Ignore cleanup failures and keep the install itself healthy.
+    }
+  }
+}
 
 if (!packageDir.includes(`${path.sep}node_modules${path.sep}`)) {
   process.exit(0);
@@ -93,3 +117,5 @@ if (result.status !== 0) {
   }
   process.exit(result.status ?? 1);
 }
+
+removeLegacyGlobalBinLinks();

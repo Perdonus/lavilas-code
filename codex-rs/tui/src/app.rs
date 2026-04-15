@@ -2238,14 +2238,26 @@ impl App {
             }
         };
         if provider_spec.builtin_model_provider_id.is_none() && catalog_models.is_empty() {
-            let message = if self.ui_language_is_ru() {
+            let message = if provider_spec.requires_base_url {
+                if self.ui_language_is_ru() {
+                    format!(
+                        "Не удалось получить каталог моделей для `{profile_key}`. Проверьте API-ключ, base URL и доступность `{}`.",
+                        catalog_path.display()
+                    )
+                } else {
+                    format!(
+                        "Failed to resolve a model catalog for `{profile_key}`. Check the API key, base URL, and `{}`.",
+                        catalog_path.display()
+                    )
+                }
+            } else if self.ui_language_is_ru() {
                 format!(
-                    "Не удалось получить каталог моделей для `{profile_key}`. Проверьте API-ключ, base URL и доступность `{}`.",
+                    "Не удалось получить каталог моделей для `{profile_key}`. Проверьте API-ключ и доступность `{}`.",
                     catalog_path.display()
                 )
             } else {
                 format!(
-                    "Failed to resolve a model catalog for `{profile_key}`. Check the API key, base URL, and `{}`.",
+                    "Failed to resolve a model catalog for `{profile_key}`. Check the API key and `{}`.",
                     catalog_path.display()
                 )
             };

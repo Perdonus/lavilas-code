@@ -1650,6 +1650,44 @@ async fn all_models_popup_hides_back_to_quick_presets_when_quick_presets_are_dis
 }
 
 #[tokio::test]
+async fn all_models_popup_hides_back_to_quick_presets_when_provider_presets_are_configured_empty() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
+    chat.thread_id = Some(ThreadId::new());
+    crate::ui_preferences::save_provider_model_presets(
+        chat.config.codex_home.as_path(),
+        chat.config.model_provider_id.as_str(),
+        &[],
+    )
+    .expect("save empty presets");
+
+    let preset = ModelPreset {
+        id: "test-visible-model".to_string(),
+        model: "test-visible-model".to_string(),
+        display_name: "test-visible-model".to_string(),
+        description: "test-visible-model description".to_string(),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+
+    chat.open_all_models_popup(vec![preset]);
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        !popup.contains("К быстрым пресетам") && !popup.contains("Back to quick presets"),
+        "expected quick preset back path to disappear for an explicitly empty provider preset list:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn server_overloaded_error_does_not_switch_models() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.set_model("gpt-5.2-codex");
