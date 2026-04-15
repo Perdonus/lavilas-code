@@ -658,6 +658,104 @@ fn build_chat_completions_request_applies_cached_openrouter_prompt_tokens_cap() 
 }
 
 #[test]
+fn trim_chat_completions_prompt_to_prompt_cap_compacts_openrouter_base_instructions() {
+    let provider = openrouter_provider();
+    let original_instructions = "very long base instructions ".repeat(1200);
+    let input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "latest question".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+
+    let (instructions, trimmed_input) = super::trim_chat_completions_prompt_to_prompt_cap(
+        &provider,
+        input.clone(),
+        &BaseInstructions {
+            text: original_instructions,
+        },
+        Some(167),
+    );
+
+    assert_eq!(instructions, super::OPENROUTER_COMPACT_BASE_INSTRUCTIONS);
+    assert_eq!(trimmed_input, input);
+}
+
+#[test]
+fn trim_chat_completions_prompt_to_prompt_cap_keeps_original_instructions_for_non_openrouter() {
+    let provider =
+        create_oss_provider_with_base_url("https://example.com/v1", WireApi::ChatCompletions);
+    let original_instructions = "very long base instructions ".repeat(1200);
+    let input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "latest question".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+
+    let (instructions, trimmed_input) = super::trim_chat_completions_prompt_to_prompt_cap(
+        &provider,
+        input.clone(),
+        &BaseInstructions {
+            text: original_instructions.clone(),
+        },
+        Some(167),
+    );
+
+    assert_eq!(instructions, original_instructions);
+    assert_eq!(trimmed_input, input);
+}
+
+#[test]
+fn build_chat_completions_request_compacts_openrouter_base_instructions_when_history_trim_is_not_enough(
+) {
+    let provider = openrouter_provider();
+    let client = test_model_client_with_provider(provider.clone());
+    client.remember_chat_completions_prompt_tokens_cap(&provider, "openai/gpt-4.1", 167);
+
+    let prompt = super::Prompt {
+        base_instructions: BaseInstructions {
+            text: "very long base instructions ".repeat(1200),
+        },
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "latest question".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+        tools: vec![],
+        parallel_tool_calls: false,
+        personality: None,
+        output_schema: None,
+    };
+    let mut model_info = test_model_info();
+    model_info.slug = "openai/gpt-4.1".to_string();
+
+    let request = client
+        .new_session()
+        .build_chat_completions_request(&prompt, &model_info, None)
+        .expect("chat completions request");
+
+    assert_eq!(request.messages.len(), 2);
+    assert_eq!(request.messages[0].role, "system");
+    assert_eq!(
+        request.messages[0].content,
+        Some(json!(super::OPENROUTER_COMPACT_BASE_INSTRUCTIONS))
+    );
+    assert_eq!(request.messages[1].role, "user");
+    assert_eq!(request.messages[1].content, Some(json!("latest question")));
+}
+
+#[test]
 fn chat_completions_response_strips_hidden_reasoning_tags() {
     let response = ChatCompletionsResponse {
         id: Some("resp-1".to_string()),

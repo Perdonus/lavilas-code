@@ -269,6 +269,7 @@ const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const CUSTOM_SETTINGS_VIEW_ID: &str = "custom-settings";
 const LANGUAGE_PICKER_VIEW_ID: &str = "language-picker";
 const SELECTION_HIGHLIGHT_VIEW_ID: &str = "selection-highlight-picker";
+const SELECTION_HIGHLIGHT_COLOR_VIEW_ID: &str = "selection-highlight-color-picker";
 const COMMAND_PREFIX_VIEW_ID: &str = "command-prefix-picker";
 const COMMAND_VISIBILITY_VIEW_ID: &str = "command-visibility-picker";
 const PROFILES_MANAGER_VIEW_ID: &str = "profiles-manager";
@@ -355,7 +356,9 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::bottom_pane::prompt_args::command_prefix;
 use crate::bottom_pane::prompt_args::set_command_prefix;
+use crate::bottom_pane::set_selection_highlight_fill;
 use crate::bottom_pane::set_selection_highlight_preset;
+use crate::bottom_pane::set_selection_highlight_text_formats;
 use crate::bottom_pane::slash_commands;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text;
@@ -392,6 +395,8 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::ui_preferences::SelectionHighlightPreset;
+use crate::ui_preferences::SelectionHighlightTextFormat;
+use crate::ui_preferences::SelectionHighlightTextFormats;
 use crate::ui_preferences::StoredModelPreset;
 use crate::ui_preferences::UiLanguage;
 use crate::ui_preferences::default_profile_model as default_profile_model_for_provider;
@@ -402,7 +407,9 @@ use crate::ui_preferences::save_command_prefix as save_ui_command_prefix;
 use crate::ui_preferences::save_hidden_commands as save_ui_hidden_commands;
 use crate::ui_preferences::save_model_presets_enabled as save_ui_model_presets_enabled;
 use crate::ui_preferences::save_provider_model_presets as save_ui_provider_model_presets;
+use crate::ui_preferences::save_selection_highlight_fill as save_ui_selection_highlight_fill;
 use crate::ui_preferences::save_selection_highlight_preset as save_ui_selection_highlight_preset;
+use crate::ui_preferences::save_selection_highlight_text_formats as save_ui_selection_highlight_text_formats;
 use crate::ui_preferences::save_ui_language;
 use crate::ui_preferences::settings_path as ui_settings_path;
 mod interrupts;
@@ -10352,6 +10359,22 @@ impl ChatWidget {
         self.ui_preferences().selection_highlight_preset
     }
 
+    fn current_selection_highlight_fill(&self) -> bool {
+        self.ui_preferences().selection_highlight_fill
+    }
+
+    fn current_selection_highlight_text_formats(&self) -> SelectionHighlightTextFormats {
+        self.ui_preferences().selection_highlight_text_formats
+    }
+
+    fn selection_highlight_settings_view_active_id(&self) -> Option<&'static str> {
+        match self.bottom_pane.active_view_id() {
+            Some(SELECTION_HIGHLIGHT_VIEW_ID) => Some(SELECTION_HIGHLIGHT_VIEW_ID),
+            Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID) => Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID),
+            _ => None,
+        }
+    }
+
     fn selection_highlight_label_for_locale(
         preset: SelectionHighlightPreset,
         is_ru: bool,
@@ -10376,22 +10399,115 @@ impl ChatWidget {
     ) -> &'static str {
         match (is_ru, preset) {
             (true, SelectionHighlightPreset::Light) => {
-                "Белый фон и чёрный текст. Новый основной вариант."
+                "Белый/чёрный. Основной спокойный вариант."
             }
-            (true, SelectionHighlightPreset::Graphite) => "Тёмно-серый фон и белый текст.",
-            (true, SelectionHighlightPreset::Amber) => "Жёлтый фон и чёрный текст.",
-            (true, SelectionHighlightPreset::Mint) => "Светло-зелёный фон и чёрный текст.",
-            (true, SelectionHighlightPreset::Rose) => "Светло-розовый фон и чёрный текст.",
+            (true, SelectionHighlightPreset::Graphite) => "Тёмный графитовый контраст.",
+            (true, SelectionHighlightPreset::Amber) => "Пастельный янтарный акцент.",
+            (true, SelectionHighlightPreset::Mint) => "Пастельный мятный акцент.",
+            (true, SelectionHighlightPreset::Rose) => "Пастельный розовый акцент.",
             (false, SelectionHighlightPreset::Light) => {
-                "White background with black text. The new default."
+                "White/black. The calm default option."
             }
-            (false, SelectionHighlightPreset::Graphite) => {
-                "Dark graphite background with white text."
-            }
-            (false, SelectionHighlightPreset::Amber) => "Amber background with black text.",
-            (false, SelectionHighlightPreset::Mint) => "Light green background with black text.",
-            (false, SelectionHighlightPreset::Rose) => "Soft rose background with black text.",
+            (false, SelectionHighlightPreset::Graphite) => "Dark graphite contrast.",
+            (false, SelectionHighlightPreset::Amber) => "Pastel amber accent.",
+            (false, SelectionHighlightPreset::Mint) => "Pastel mint accent.",
+            (false, SelectionHighlightPreset::Rose) => "Pastel rose accent.",
         }
+    }
+
+    fn selection_highlight_fill_label_for_locale(fill: bool, is_ru: bool) -> &'static str {
+        match (is_ru, fill) {
+            (true, true) => "Включено",
+            (true, false) => "Выключено",
+            (false, true) => "On",
+            (false, false) => "Off",
+        }
+    }
+
+    fn selection_highlight_format_label_for_locale(
+        format: SelectionHighlightTextFormat,
+        is_ru: bool,
+    ) -> &'static str {
+        match (is_ru, format) {
+            (true, SelectionHighlightTextFormat::Bold) => "Жирный",
+            (true, SelectionHighlightTextFormat::Semibold) => "Полужирный",
+            (true, SelectionHighlightTextFormat::Italic) => "Курсив",
+            (true, SelectionHighlightTextFormat::Underlined) => "Подчёркнутый",
+            (true, SelectionHighlightTextFormat::Mono) => "Моно",
+            (false, SelectionHighlightTextFormat::Bold) => "Bold",
+            (false, SelectionHighlightTextFormat::Semibold) => "Semi-bold",
+            (false, SelectionHighlightTextFormat::Italic) => "Italic",
+            (false, SelectionHighlightTextFormat::Underlined) => "Underlined",
+            (false, SelectionHighlightTextFormat::Mono) => "Monospace",
+        }
+    }
+
+    fn selection_highlight_format_description_for_locale(
+        format: SelectionHighlightTextFormat,
+        enabled: bool,
+        is_ru: bool,
+    ) -> String {
+        let state = Self::selection_highlight_fill_label_for_locale(enabled, is_ru);
+        match (is_ru, format) {
+            (true, SelectionHighlightTextFormat::Bold) => {
+                format!("{state}. Добавляет плотное начертание выбранной строке.")
+            }
+            (true, SelectionHighlightTextFormat::Semibold) => {
+                format!("{state}. Чуть усиливает тон цвета без тяжёлой заливки.")
+            }
+            (true, SelectionHighlightTextFormat::Italic) => {
+                format!("{state}. Дает наклон активному тексту.")
+            }
+            (true, SelectionHighlightTextFormat::Underlined) => {
+                format!("{state}. Подчеркивает активную строку.")
+            }
+            (true, SelectionHighlightTextFormat::Mono) => {
+                format!("{state}. Переключает выбранный пункт в code-подобный вид.")
+            }
+            (false, SelectionHighlightTextFormat::Bold) => {
+                format!("{state}. Adds a heavier selected-row weight.")
+            }
+            (false, SelectionHighlightTextFormat::Semibold) => {
+                format!("{state}. Slightly strengthens the color tone.")
+            }
+            (false, SelectionHighlightTextFormat::Italic) => {
+                format!("{state}. Tilts the active row text.")
+            }
+            (false, SelectionHighlightTextFormat::Underlined) => {
+                format!("{state}. Underlines the active row.")
+            }
+            (false, SelectionHighlightTextFormat::Mono) => {
+                format!("{state}. Switches the active row to a code-like look.")
+            }
+        }
+    }
+
+    fn current_selection_highlight_summary(&self) -> String {
+        let is_ru = self.ui_language().is_ru();
+        let mode = if self.current_selection_highlight_fill() {
+            if is_ru { "заливка" } else { "fill" }
+        } else if is_ru {
+            "текст"
+        } else {
+            "text"
+        };
+        let mut parts = vec![Self::selection_highlight_label_for_locale(
+            self.current_selection_highlight_preset(),
+            is_ru,
+        )
+        .to_string(), mode.to_string()];
+        let formats = self.current_selection_highlight_text_formats();
+        if !formats.is_empty() {
+            let labels = SelectionHighlightTextFormat::all()
+                .into_iter()
+                .filter(|format| formats.contains(*format))
+                .map(|format| {
+                    Self::selection_highlight_format_label_for_locale(format, is_ru).to_string()
+                })
+                .collect::<Vec<_>>();
+            parts.push(labels.join(", "));
+        }
+        parts.join(" · ")
     }
 
     fn current_model_presets_enabled(&self) -> bool {
@@ -10590,6 +10706,8 @@ impl ChatWidget {
         let preferences = self.ui_preferences();
         set_command_prefix(preferences.command_prefix);
         set_selection_highlight_preset(preferences.selection_highlight_preset);
+        set_selection_highlight_fill(preferences.selection_highlight_fill);
+        set_selection_highlight_text_formats(preferences.selection_highlight_text_formats);
         slash_commands::set_hidden_command_keys(preferences.hidden_commands);
     }
 
@@ -10667,7 +10785,98 @@ impl ChatWidget {
                 )),
             );
         }
-        self.request_redraw();
+        if self.selection_highlight_settings_view_active_id().is_some() {
+            self.open_selection_highlight_picker_popup();
+        } else {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn apply_selection_highlight_fill(&mut self, fill: bool) {
+        let is_ru = self.ui_language().is_ru();
+        if let Err(err) = save_ui_selection_highlight_fill(self.config.codex_home.as_path(), fill) {
+            let message = if is_ru {
+                format!("Не удалось сохранить режим заливки: {err}")
+            } else {
+                format!("Failed to save selection fill mode: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+
+        set_selection_highlight_fill(fill);
+        if is_ru {
+            let state = if fill {
+                "Заливка выделения включена."
+            } else {
+                "Заливка выделения выключена."
+            };
+            let detail = if fill {
+                "Теперь активный пункт подсвечивается фоном."
+            } else {
+                "Теперь выделение красит только текст без фоновой подложки."
+            };
+            self.add_info_message(state.to_string(), Some(detail.to_string()));
+        } else {
+            let state = if fill {
+                "Selection fill enabled."
+            } else {
+                "Selection fill disabled."
+            };
+            let detail = if fill {
+                "Active rows now use a background fill."
+            } else {
+                "Active rows now recolor text without a background fill."
+            };
+            self.add_info_message(state.to_string(), Some(detail.to_string()));
+        }
+
+        if self.selection_highlight_settings_view_active_id().is_some() {
+            self.open_selection_highlight_picker_popup();
+        } else {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn toggle_selection_highlight_text_format(
+        &mut self,
+        format: SelectionHighlightTextFormat,
+    ) {
+        let is_ru = self.ui_language().is_ru();
+        let updated = self.current_selection_highlight_text_formats().with_toggled(format);
+        if let Err(err) =
+            save_ui_selection_highlight_text_formats(self.config.codex_home.as_path(), updated)
+        {
+            let message = if is_ru {
+                format!("Не удалось сохранить формат выделения: {err}")
+            } else {
+                format!("Failed to save selection text formatting: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+
+        set_selection_highlight_text_formats(updated);
+        let label = Self::selection_highlight_format_label_for_locale(format, is_ru);
+        let enabled = updated.contains(format);
+        let state = Self::selection_highlight_fill_label_for_locale(enabled, is_ru);
+        if is_ru {
+            self.add_info_message(
+                format!("Формат выделения обновлён: {label}."),
+                Some(format!("Состояние: {state}.")),
+            );
+        } else {
+            self.add_info_message(
+                format!("Selection formatting updated: {label}."),
+                Some(format!("State: {state}.")),
+            );
+        }
+
+        if self.selection_highlight_settings_view_active_id().is_some() {
+            self.open_selection_highlight_picker_popup();
+        } else {
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn apply_command_prefix(&mut self, prefix: char) {
@@ -10765,10 +10974,7 @@ impl ChatWidget {
         let hidden_count = self.current_hidden_command_count();
         let lang_label = self.ui_language_label(self.ui_language());
         let is_ru = self.ui_language().is_ru();
-        let highlight_label = Self::selection_highlight_label_for_locale(
-            self.current_selection_highlight_preset(),
-            is_ru,
-        );
+        let highlight_summary = self.current_selection_highlight_summary();
         let replace_active = self.bottom_pane.active_view_id() == Some(CUSTOM_SETTINGS_VIEW_ID);
         let initial_selected_idx = self
             .bottom_pane
@@ -10923,11 +11129,11 @@ impl ChatWidget {
                 },
                 description: Some(if is_ru {
                     format!(
-                        "Сейчас: {highlight_label}. Меняет цвет активного пункта во всех всплывающих списках и настройках."
+                        "Сейчас: {highlight_summary}. Цвет, заливка и формат текста активного пункта."
                     )
                 } else {
                     format!(
-                        "Current: {highlight_label}. Controls the active-row color in popups and settings."
+                        "Current: {highlight_summary}. Controls color, fill, and text styling for active rows."
                     )
                 }),
                 search_value: Some(if is_ru {
@@ -11215,19 +11421,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_selection_highlight_picker_popup(&mut self) {
-        let current = self.current_selection_highlight_preset();
+        let current_fill = self.current_selection_highlight_fill();
+        let current_formats = self.current_selection_highlight_text_formats();
         let is_ru = self.ui_language().is_ru();
-        let replace_active = self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_VIEW_ID);
-        let remembered_selected_idx = self
-            .bottom_pane
-            .selected_index_for_active_view(SELECTION_HIGHLIGHT_VIEW_ID);
-        let presets = [
-            SelectionHighlightPreset::Light,
-            SelectionHighlightPreset::Graphite,
-            SelectionHighlightPreset::Amber,
-            SelectionHighlightPreset::Mint,
-            SelectionHighlightPreset::Rose,
-        ];
+        let replace_active = self.selection_highlight_settings_view_active_id();
+        let initial_selected_idx = match replace_active {
+            Some(SELECTION_HIGHLIGHT_VIEW_ID) => self
+                .bottom_pane
+                .selected_index_for_active_view(SELECTION_HIGHLIGHT_VIEW_ID),
+            Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID) => Some(2),
+            _ => Some(1),
+        };
 
         let mut items = vec![SelectionItem {
             name: if is_ru {
@@ -11246,6 +11450,170 @@ impl ChatWidget {
                 "back settings".to_string()
             }),
             actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Заливка".to_string()
+            } else {
+                "Fill".to_string()
+            },
+            description: Some(if is_ru {
+                if current_fill {
+                    "Включена. Активный пункт подсвечивается фоном.".to_string()
+                } else {
+                    "Выключена. Выделение красит только текст.".to_string()
+                }
+            } else if current_fill {
+                "On. Active rows use a background fill.".to_string()
+            } else {
+                "Off. Selection recolors text only.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "заливка фон текст highlight fill".to_string()
+            } else {
+                "fill background text selection highlight".to_string()
+            }),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::SetSelectionHighlightFill {
+                    enabled: !current_fill,
+                });
+            })],
+            dismiss_on_select: false,
+            ..Default::default()
+        });
+
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Цвет".to_string()
+            } else {
+                "Color".to_string()
+            },
+            description: Some(if is_ru {
+                format!(
+                    "Сейчас: {}. Отдельный выбор спокойной палитры.",
+                    Self::selection_highlight_label_for_locale(
+                        self.current_selection_highlight_preset(),
+                        is_ru
+                    )
+                )
+            } else {
+                format!(
+                    "Current: {}. Choose the highlight palette separately.",
+                    Self::selection_highlight_label_for_locale(
+                        self.current_selection_highlight_preset(),
+                        is_ru
+                    )
+                )
+            }),
+            search_value: Some(if is_ru {
+                "цвет палитра pastel rose mint amber light graphite".to_string()
+            } else {
+                "color palette pastel rose mint amber light graphite".to_string()
+            }),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenSelectionHighlightColorPicker)
+            })],
+            dismiss_on_select: false,
+            ..Default::default()
+        });
+
+        items.extend(
+            SelectionHighlightTextFormat::all()
+                .into_iter()
+                .map(|format| {
+                    let enabled = current_formats.contains(format);
+                    SelectionItem {
+                        name: Self::selection_highlight_format_label_for_locale(format, is_ru)
+                            .to_string(),
+                        description: Some(Self::selection_highlight_format_description_for_locale(
+                            format, enabled, is_ru,
+                        )),
+                        search_value: Some(if is_ru {
+                            format!(
+                                "{} формат текста выделение",
+                                Self::selection_highlight_format_label_for_locale(format, is_ru)
+                            )
+                        } else {
+                            format!(
+                                "{} text formatting selection",
+                                Self::selection_highlight_format_label_for_locale(format, is_ru)
+                            )
+                        }),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::ToggleSelectionHighlightTextFormat { format });
+                        })],
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    }
+                }),
+        );
+
+        let params = SelectionViewParams {
+            view_id: Some(SELECTION_HIGHLIGHT_VIEW_ID),
+            title: Some(if is_ru {
+                "Выделение в списках".to_string()
+            } else {
+                "Selection highlight".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Настройте заливку, цвет и формат активного пункта. Изменения применяются сразу."
+                    .to_string()
+            } else {
+                "Adjust fill, color, and active-row text styling. Changes apply immediately."
+                    .to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            ..Default::default()
+        };
+
+        if let Some(active_view_id) = replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(active_view_id, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_selection_highlight_color_picker_popup(&mut self) {
+        let current = self.current_selection_highlight_preset();
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = match self.bottom_pane.active_view_id() {
+            Some(SELECTION_HIGHLIGHT_VIEW_ID) => Some(SELECTION_HIGHLIGHT_VIEW_ID),
+            Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID) => Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID),
+            _ => None,
+        };
+        let presets = [
+            SelectionHighlightPreset::Light,
+            SelectionHighlightPreset::Graphite,
+            SelectionHighlightPreset::Amber,
+            SelectionHighlightPreset::Mint,
+            SelectionHighlightPreset::Rose,
+        ];
+
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад к параметрам выделения".to_string()
+            } else {
+                "← Back to selection highlight".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к режиму заливки и форматированию текста.".to_string()
+            } else {
+                "Return to fill mode and text formatting.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад выделение цвет".to_string()
+            } else {
+                "back selection color".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))],
             dismiss_on_select: true,
             ..Default::default()
         }];
@@ -11268,39 +11636,40 @@ impl ChatWidget {
             is_current: current == preset,
             actions: vec![Box::new(move |tx| {
                 tx.send(AppEvent::SetSelectionHighlightPreset { preset });
-                tx.send(AppEvent::OpenCustomSettings);
             })],
-            dismiss_on_select: true,
+            dismiss_on_select: false,
             ..Default::default()
         }));
-        let initial_selected_idx = remembered_selected_idx
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(SELECTION_HIGHLIGHT_COLOR_VIEW_ID)
             .or_else(|| items.iter().position(|item| item.is_current))
             .or(Some(1));
 
         let params = SelectionViewParams {
-            view_id: Some(SELECTION_HIGHLIGHT_VIEW_ID),
+            view_id: Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID),
             title: Some(if is_ru {
-                "Выделение в списках".to_string()
+                "Цвет выделения".to_string()
             } else {
-                "Selection highlight".to_string()
+                "Selection color".to_string()
             }),
             subtitle: Some(if is_ru {
-                "Выберите цвет активного пункта для всплывающих списков, настроек и похожих меню."
+                "Пастельные и контрастные варианты для активного пункта."
                     .to_string()
             } else {
-                "Choose the active-row color for popups, settings, and similar menus.".to_string()
+                "Pastel and contrast variants for active rows.".to_string()
             }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,
-            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))),
             ..Default::default()
         };
 
-        if replace_active {
+        if let Some(active_view_id) = replace_active {
             let _ = self
                 .bottom_pane
-                .replace_selection_view_if_active(SELECTION_HIGHLIGHT_VIEW_ID, params);
+                .replace_selection_view_if_active(active_view_id, params);
         } else {
             self.bottom_pane.show_selection_view(params);
         }

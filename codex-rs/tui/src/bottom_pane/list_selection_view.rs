@@ -748,6 +748,11 @@ impl ListSelectionView {
             self.fire_selection_changed();
         }
     }
+
+    fn handle_search_backspace(&mut self) {
+        self.search_query.pop();
+        self.apply_filter();
+    }
 }
 
 impl BottomPaneView for ListSelectionView {
@@ -823,8 +828,22 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Backspace,
                 ..
             } if self.is_searchable => {
-                self.search_query.pop();
-                self.apply_filter();
+                self.handle_search_backspace();
+            }
+            KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{0008}'),
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{007f}'),
+                ..
+            } if self.is_searchable => {
+                self.handle_search_backspace();
             }
             KeyEvent {
                 code: KeyCode::Esc, ..
@@ -1605,6 +1624,40 @@ mod tests {
         assert!(
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn ctrl_h_deletes_search_query_text() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![SelectionItem {
+                    name: "Read Only".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+        );
+        view.set_search_query("filter".to_string());
+
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('h'),
+            KeyModifiers::CONTROL,
+        ));
+
+        let rendered = render_lines(&view);
+        assert!(
+            rendered.contains("filte"),
+            "expected Ctrl+H to delete one character from search query, got {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("filter"),
+            "expected old search query to disappear after Ctrl+H, got {rendered:?}"
         );
     }
 

@@ -6336,8 +6336,19 @@ impl App {
             AppEvent::OpenSelectionHighlightPicker => {
                 self.chat_widget.open_selection_highlight_picker_popup();
             }
+            AppEvent::OpenSelectionHighlightColorPicker => {
+                self.chat_widget
+                    .open_selection_highlight_color_picker_popup();
+            }
             AppEvent::SetSelectionHighlightPreset { preset } => {
                 self.chat_widget.apply_selection_highlight_preset(preset);
+            }
+            AppEvent::SetSelectionHighlightFill { enabled } => {
+                self.chat_widget.apply_selection_highlight_fill(enabled);
+            }
+            AppEvent::ToggleSelectionHighlightTextFormat { format } => {
+                self.chat_widget
+                    .toggle_selection_highlight_text_format(format);
             }
             AppEvent::OpenCommandPrefixPicker => {
                 self.chat_widget.open_command_prefix_picker_popup();

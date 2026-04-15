@@ -78,10 +78,138 @@ impl SelectionHighlightPreset {
     }
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionHighlightTextFormat {
+    Bold = 1 << 0,
+    Semibold = 1 << 1,
+    Italic = 1 << 2,
+    Underlined = 1 << 3,
+    Mono = 1 << 4,
+}
+
+impl SelectionHighlightTextFormat {
+    pub(crate) fn from_code(code: &str) -> Option<Self> {
+        match code.trim().to_ascii_lowercase().as_str() {
+            "bold" => Some(Self::Bold),
+            "semibold" => Some(Self::Semibold),
+            "italic" => Some(Self::Italic),
+            "underlined" => Some(Self::Underlined),
+            "mono" => Some(Self::Mono),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::Bold => "bold",
+            Self::Semibold => "semibold",
+            Self::Italic => "italic",
+            Self::Underlined => "underlined",
+            Self::Mono => "mono",
+        }
+    }
+
+    pub(crate) const fn bit(self) -> u8 {
+        self as u8
+    }
+
+    pub(crate) const fn all() -> [Self; 5] {
+        [
+            Self::Bold,
+            Self::Semibold,
+            Self::Italic,
+            Self::Underlined,
+            Self::Mono,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SelectionHighlightTextFormats {
+    bits: u8,
+}
+
+impl SelectionHighlightTextFormats {
+    const ALL_BITS: u8 = SelectionHighlightTextFormat::Bold.bit()
+        | SelectionHighlightTextFormat::Semibold.bit()
+        | SelectionHighlightTextFormat::Italic.bit()
+        | SelectionHighlightTextFormat::Underlined.bit()
+        | SelectionHighlightTextFormat::Mono.bit();
+
+    pub(crate) const fn empty() -> Self {
+        Self { bits: 0 }
+    }
+
+    pub(crate) const fn bits(self) -> u8 {
+        self.bits
+    }
+
+    pub(crate) const fn from_bits(bits: u8) -> Self {
+        Self {
+            bits: bits & Self::ALL_BITS,
+        }
+    }
+
+    pub(crate) const fn contains(self, format: SelectionHighlightTextFormat) -> bool {
+        self.bits & format.bit() != 0
+    }
+
+    pub(crate) const fn with_toggled(self, format: SelectionHighlightTextFormat) -> Self {
+        Self::from_bits(self.bits ^ format.bit())
+    }
+
+    pub(crate) const fn is_empty(self) -> bool {
+        self.bits == 0
+    }
+
+    pub(crate) fn from_setting_value(value: Option<&serde_json::Value>) -> Self {
+        let Some(value) = value else {
+            return Self::empty();
+        };
+
+        if let Some(values) = value.as_array() {
+            let bits = values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(SelectionHighlightTextFormat::from_code)
+                .fold(0u8, |acc, format| acc | format.bit());
+            return Self::from_bits(bits);
+        }
+
+        if let Some(object) = value.as_object() {
+            let bits = SelectionHighlightTextFormat::all()
+                .into_iter()
+                .filter(|format| {
+                    object
+                        .get(format.code())
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .fold(0u8, |acc, format| acc | format.bit());
+            return Self::from_bits(bits);
+        }
+
+        Self::empty()
+    }
+
+    pub(crate) fn to_setting_value(self) -> serde_json::Value {
+        serde_json::Value::Array(
+            SelectionHighlightTextFormat::all()
+                .into_iter()
+                .filter(|format| self.contains(*format))
+                .map(|format| serde_json::Value::String(format.code().to_string()))
+                .collect(),
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UiPreferences {
     pub(crate) language: UiLanguage,
     pub(crate) selection_highlight_preset: SelectionHighlightPreset,
+    pub(crate) selection_highlight_fill: bool,
+    pub(crate) selection_highlight_text_formats: SelectionHighlightTextFormats,
     pub(crate) command_prefix: char,
     pub(crate) hidden_commands: Vec<String>,
     pub(crate) model_presets_enabled: bool,
@@ -93,6 +221,8 @@ impl Default for UiPreferences {
         Self {
             language: UiLanguage::Ru,
             selection_highlight_preset: SelectionHighlightPreset::Light,
+            selection_highlight_fill: true,
+            selection_highlight_text_formats: SelectionHighlightTextFormats::empty(),
             command_prefix: '/',
             hidden_commands: Vec::new(),
             model_presets_enabled: true,
@@ -280,6 +410,13 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
         .and_then(serde_json::Value::as_str)
         .map(SelectionHighlightPreset::from_code)
         .unwrap_or(SelectionHighlightPreset::Light);
+    let selection_highlight_fill = value
+        .get("selection_highlight_fill")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let selection_highlight_text_formats = SelectionHighlightTextFormats::from_setting_value(
+        value.get("selection_highlight_text_formats"),
+    );
     let command_prefix = value
         .get("command_prefix")
         .and_then(serde_json::Value::as_str)
@@ -325,6 +462,8 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
     UiPreferences {
         language,
         selection_highlight_preset,
+        selection_highlight_fill,
+        selection_highlight_text_formats,
         command_prefix,
         hidden_commands,
         model_presets_enabled,
@@ -348,6 +487,25 @@ pub(crate) fn save_selection_highlight_preset(
         codex_home,
         "selection_highlight_preset",
         serde_json::Value::String(preset.code().to_string()),
+    )
+}
+
+pub(crate) fn save_selection_highlight_fill(codex_home: &Path, fill: bool) -> io::Result<()> {
+    persist_setting(
+        codex_home,
+        "selection_highlight_fill",
+        serde_json::Value::Bool(fill),
+    )
+}
+
+pub(crate) fn save_selection_highlight_text_formats(
+    codex_home: &Path,
+    formats: SelectionHighlightTextFormats,
+) -> io::Result<()> {
+    persist_setting(
+        codex_home,
+        "selection_highlight_text_formats",
+        formats.to_setting_value(),
     )
 }
 
@@ -854,6 +1012,8 @@ fn supported_reasoning_levels(levels: &[&str]) -> Vec<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::SelectionHighlightPreset;
+    use super::SelectionHighlightTextFormat;
+    use super::SelectionHighlightTextFormats;
     use super::UiLanguage;
     use super::default_profile_model;
     use super::ensure_profile_model_catalog;
@@ -862,7 +1022,9 @@ mod tests {
     use super::save_command_prefix;
     use super::save_hidden_commands;
     use super::save_provider_model_presets;
+    use super::save_selection_highlight_fill;
     use super::save_selection_highlight_preset;
+    use super::save_selection_highlight_text_formats;
     use super::save_ui_language;
     use tempfile::tempdir;
 
@@ -872,6 +1034,14 @@ mod tests {
         save_ui_language(codex_home.path(), UiLanguage::En).expect("save language");
         save_selection_highlight_preset(codex_home.path(), SelectionHighlightPreset::Graphite)
             .expect("save highlight preset");
+        save_selection_highlight_fill(codex_home.path(), false).expect("save highlight fill");
+        save_selection_highlight_text_formats(
+            codex_home.path(),
+            SelectionHighlightTextFormats::empty()
+                .with_toggled(SelectionHighlightTextFormat::Bold)
+                .with_toggled(SelectionHighlightTextFormat::Italic),
+        )
+        .expect("save highlight formats");
         save_command_prefix(codex_home.path(), '!').expect("save prefix");
         save_hidden_commands(
             codex_home.path(),
@@ -884,6 +1054,22 @@ mod tests {
         assert_eq!(
             preferences.selection_highlight_preset,
             SelectionHighlightPreset::Graphite
+        );
+        assert!(!preferences.selection_highlight_fill);
+        assert!(
+            preferences
+                .selection_highlight_text_formats
+                .contains(SelectionHighlightTextFormat::Bold)
+        );
+        assert!(
+            preferences
+                .selection_highlight_text_formats
+                .contains(SelectionHighlightTextFormat::Italic)
+        );
+        assert!(
+            !preferences
+                .selection_highlight_text_formats
+                .contains(SelectionHighlightTextFormat::Mono)
         );
         assert_eq!(preferences.command_prefix, '!');
         assert_eq!(preferences.hidden_commands, vec!["model", "profiles"]);

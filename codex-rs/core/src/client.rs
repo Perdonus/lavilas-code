@@ -155,6 +155,16 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 const GOOGLE_THOUGHT_SIGNATURE_PREFIX: &str = "google-thought-signature:";
 const OPENROUTER_API_HOST: &str = "openrouter.ai";
+const OPENROUTER_COMPACT_BASE_INSTRUCTIONS: &str = concat!(
+    "You are Lavilas Codex, a terminal coding assistant. ",
+    "Help with coding and repository tasks. ",
+    "Use available tools when needed, inspect relevant files before changing them, ",
+    "be concise, and do not invent results."
+);
+const OPENROUTER_MINIMAL_BASE_INSTRUCTIONS: &str =
+    "You are Lavilas Codex. Help with coding tasks, use tools when needed, and be accurate.";
+const OPENROUTER_TINY_BASE_INSTRUCTIONS: &str =
+    "Coding assistant. Use tools if needed. Be accurate.";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -1234,7 +1244,8 @@ impl ModelClientSession {
         let runtime_config = self.client.runtime_config();
         let request_model =
             normalize_request_model_for_provider(&runtime_config.provider, &model_info.slug);
-        let input = trim_chat_completions_input_to_prompt_cap(
+        let (instructions, input) = trim_chat_completions_prompt_to_prompt_cap(
+            &runtime_config.provider,
             prompt.get_formatted_input(),
             &prompt.base_instructions,
             self.client.cached_chat_completions_prompt_tokens_cap(
@@ -1245,7 +1256,7 @@ impl ModelClientSession {
         let chat_completions_tool_names = serializable_chat_completions_tool_names(&prompt.tools)?;
         let messages = build_chat_completions_messages_with_tools(
             &runtime_config.provider,
-            &prompt.base_instructions.text,
+            &instructions,
             &input,
             Some(&chat_completions_tool_names),
         )?;
@@ -3084,22 +3095,92 @@ fn build_chat_completions_messages_with_tools(
     Ok(messages)
 }
 
-fn trim_chat_completions_input_to_prompt_cap(
+fn trim_chat_completions_prompt_to_prompt_cap(
+    provider: &ModelProviderInfo,
     input: Vec<ResponseItem>,
     base_instructions: &codex_protocol::models::BaseInstructions,
     prompt_tokens_cap: Option<u32>,
-) -> Vec<ResponseItem> {
+) -> (String, Vec<ResponseItem>) {
     let Some(prompt_tokens_cap) = prompt_tokens_cap else {
-        return input;
+        return (base_instructions.text.clone(), input);
     };
     let prompt_tokens_cap = i64::from(prompt_tokens_cap);
     if prompt_tokens_cap <= 0 {
-        return input;
+        return (base_instructions.text.clone(), input);
     }
 
-    let mut history = ContextManager::new();
-    history.replace(input);
+    let instruction_candidates =
+        prompt_cap_base_instruction_candidates(provider, base_instructions.text.as_str());
+    let mut fallback_candidate: Option<(String, Vec<ResponseItem>, i64)> = None;
 
+    for instructions in instruction_candidates {
+        let mut history = ContextManager::new();
+        history.replace(input.clone());
+
+        let candidate_base_instructions = codex_protocol::models::BaseInstructions {
+            text: instructions.clone(),
+        };
+        trim_chat_completions_history_to_prompt_cap(
+            &mut history,
+            &candidate_base_instructions,
+            prompt_tokens_cap,
+        );
+
+        let estimated_tokens = estimate_chat_completions_prompt_tokens(
+            &history,
+            &candidate_base_instructions,
+        );
+        let trimmed_input = history.raw_items().to_vec();
+        if estimated_tokens <= prompt_tokens_cap {
+            return (instructions, trimmed_input);
+        }
+
+        match fallback_candidate.as_ref() {
+            Some((_, _, best_estimate)) if *best_estimate <= estimated_tokens => {}
+            _ => fallback_candidate = Some((instructions, trimmed_input, estimated_tokens)),
+        }
+    }
+
+    fallback_candidate
+        .map(|(instructions, trimmed_input, _)| (instructions, trimmed_input))
+        .unwrap_or((base_instructions.text.clone(), input))
+}
+
+fn prompt_cap_base_instruction_candidates(
+    provider: &ModelProviderInfo,
+    base_instructions: &str,
+) -> Vec<String> {
+    let mut candidates = vec![base_instructions.to_string()];
+
+    if provider_uses_openrouter_api(provider) {
+        for candidate in [
+            OPENROUTER_COMPACT_BASE_INSTRUCTIONS,
+            OPENROUTER_MINIMAL_BASE_INSTRUCTIONS,
+            OPENROUTER_TINY_BASE_INSTRUCTIONS,
+        ] {
+            if !candidates.iter().any(|existing| existing == candidate) {
+                candidates.push(candidate.to_string());
+            }
+        }
+    }
+
+    candidates
+}
+
+fn estimate_chat_completions_prompt_tokens(
+    history: &ContextManager,
+    base_instructions: &codex_protocol::models::BaseInstructions,
+) -> i64 {
+    history
+        .estimate_token_count_with_base_instructions(base_instructions)
+        .unwrap_or(i64::MAX)
+}
+
+fn trim_chat_completions_history_to_prompt_cap(
+    history: &mut ContextManager,
+    base_instructions: &codex_protocol::models::BaseInstructions,
+    prompt_tokens_cap: i64,
+) {
     while history
         .estimate_token_count_with_base_instructions(base_instructions)
         .is_some_and(|estimated_tokens| estimated_tokens > prompt_tokens_cap)
@@ -3114,8 +3195,6 @@ fn trim_chat_completions_input_to_prompt_cap(
         }
         history.remove_first_item();
     }
-
-    history.raw_items().to_vec()
 }
 
 fn is_chat_completions_contextual_instruction_text(text: &str) -> bool {

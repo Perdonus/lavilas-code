@@ -31,6 +31,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
 use crate::ui_preferences::SelectionHighlightPreset;
+use crate::ui_preferences::SelectionHighlightTextFormat;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -355,9 +356,22 @@ pub(crate) enum AppEvent {
     /// Open selection highlight color picker.
     OpenSelectionHighlightPicker,
 
+    /// Open the nested selection highlight color palette picker.
+    OpenSelectionHighlightColorPicker,
+
     /// Persist the selection highlight preset used in popups.
     SetSelectionHighlightPreset {
         preset: SelectionHighlightPreset,
+    },
+
+    /// Persist whether selection styling fills the background or recolors text only.
+    SetSelectionHighlightFill {
+        enabled: bool,
+    },
+
+    /// Toggle one text-formatting flag for selection styling.
+    ToggleSelectionHighlightTextFormat {
+        format: SelectionHighlightTextFormat,
     },
 
     /// Open command prefix picker.

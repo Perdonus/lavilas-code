@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -23,6 +24,8 @@ use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
 use crate::ui_preferences::SelectionHighlightPreset;
+use crate::ui_preferences::SelectionHighlightTextFormat;
+use crate::ui_preferences::SelectionHighlightTextFormats;
 
 use super::scroll_state::ScrollState;
 
@@ -69,6 +72,19 @@ const FIXED_LEFT_COLUMN_DENOMINATOR: usize = 10;
 const MENU_SURFACE_INSET_V: u16 = 1;
 const MENU_SURFACE_INSET_H: u16 = 2;
 static SELECTION_HIGHLIGHT_PRESET: AtomicU8 = AtomicU8::new(SelectionHighlightPreset::Light as u8);
+static SELECTION_HIGHLIGHT_FILL: AtomicU8 = AtomicU8::new(1);
+static SELECTION_HIGHLIGHT_TEXT_FORMATS: AtomicU8 = AtomicU8::new(0);
+
+#[derive(Clone, Copy)]
+struct SelectionHighlightPalette {
+    fill_bg: Color,
+    fill_bg_emphasis: Color,
+    fill_fg: Color,
+    text_fg: Color,
+    text_fg_emphasis: Color,
+    text_secondary_fg: Color,
+    text_secondary_fg_emphasis: Color,
+}
 
 /// Apply the shared "menu surface" padding used by bottom-pane overlays.
 ///
@@ -318,30 +334,137 @@ pub(crate) fn set_selection_highlight_preset(preset: SelectionHighlightPreset) {
     SELECTION_HIGHLIGHT_PRESET.store(preset as u8, Ordering::Relaxed);
 }
 
-pub(crate) fn selection_highlight_style() -> Style {
+pub(crate) fn set_selection_highlight_fill(fill: bool) {
+    SELECTION_HIGHLIGHT_FILL.store(u8::from(fill), Ordering::Relaxed);
+}
+
+pub(crate) fn set_selection_highlight_text_formats(formats: SelectionHighlightTextFormats) {
+    SELECTION_HIGHLIGHT_TEXT_FORMATS.store(formats.bits(), Ordering::Relaxed);
+}
+
+fn current_selection_highlight_fill() -> bool {
+    SELECTION_HIGHLIGHT_FILL.load(Ordering::Relaxed) != 0
+}
+
+fn current_selection_highlight_text_formats() -> SelectionHighlightTextFormats {
+    SelectionHighlightTextFormats::from_bits(SELECTION_HIGHLIGHT_TEXT_FORMATS.load(Ordering::Relaxed))
+}
+
+fn selection_highlight_palette() -> SelectionHighlightPalette {
     match current_selection_highlight_preset() {
-        SelectionHighlightPreset::Light => {
-            Style::default().fg(Color::Black).bg(Color::White).bold()
-        }
-        SelectionHighlightPreset::Graphite => {
-            Style::default().fg(Color::White).bg(Color::DarkGray).bold()
-        }
-        SelectionHighlightPreset::Amber => {
-            Style::default().fg(Color::Black).bg(Color::Yellow).bold()
-        }
-        SelectionHighlightPreset::Mint => Style::default()
-            .fg(Color::Black)
-            .bg(Color::LightGreen)
-            .bold(),
-        SelectionHighlightPreset::Rose => Style::default()
-            .fg(Color::Black)
-            .bg(Color::LightMagenta)
-            .bold(),
+        SelectionHighlightPreset::Light => SelectionHighlightPalette {
+            fill_bg: Color::White,
+            fill_bg_emphasis: Color::Rgb(236, 236, 236),
+            fill_fg: Color::Black,
+            text_fg: Color::White,
+            text_fg_emphasis: Color::Rgb(245, 245, 245),
+            text_secondary_fg: Color::Rgb(214, 214, 214),
+            text_secondary_fg_emphasis: Color::Rgb(230, 230, 230),
+        },
+        SelectionHighlightPreset::Graphite => SelectionHighlightPalette {
+            fill_bg: Color::Rgb(73, 78, 87),
+            fill_bg_emphasis: Color::Rgb(61, 66, 74),
+            fill_fg: Color::White,
+            text_fg: Color::Rgb(205, 210, 220),
+            text_fg_emphasis: Color::Rgb(228, 232, 239),
+            text_secondary_fg: Color::Rgb(163, 170, 183),
+            text_secondary_fg_emphasis: Color::Rgb(188, 195, 207),
+        },
+        SelectionHighlightPreset::Amber => SelectionHighlightPalette {
+            fill_bg: Color::Rgb(248, 229, 191),
+            fill_bg_emphasis: Color::Rgb(240, 214, 162),
+            fill_fg: Color::Black,
+            text_fg: Color::Rgb(247, 224, 166),
+            text_fg_emphasis: Color::Rgb(255, 213, 138),
+            text_secondary_fg: Color::Rgb(221, 193, 129),
+            text_secondary_fg_emphasis: Color::Rgb(236, 205, 142),
+        },
+        SelectionHighlightPreset::Mint => SelectionHighlightPalette {
+            fill_bg: Color::Rgb(212, 241, 223),
+            fill_bg_emphasis: Color::Rgb(191, 232, 207),
+            fill_fg: Color::Black,
+            text_fg: Color::Rgb(190, 238, 208),
+            text_fg_emphasis: Color::Rgb(163, 228, 187),
+            text_secondary_fg: Color::Rgb(153, 208, 177),
+            text_secondary_fg_emphasis: Color::Rgb(171, 220, 191),
+        },
+        SelectionHighlightPreset::Rose => SelectionHighlightPalette {
+            fill_bg: Color::Rgb(246, 213, 224),
+            fill_bg_emphasis: Color::Rgb(239, 193, 210),
+            fill_fg: Color::Black,
+            text_fg: Color::Rgb(244, 198, 217),
+            text_fg_emphasis: Color::Rgb(236, 178, 202),
+            text_secondary_fg: Color::Rgb(220, 165, 189),
+            text_secondary_fg_emphasis: Color::Rgb(231, 181, 202),
+        },
     }
+}
+
+fn selection_highlight_base_style(is_secondary: bool) -> Style {
+    let palette = selection_highlight_palette();
+    let formats = current_selection_highlight_text_formats();
+    let fill = current_selection_highlight_fill();
+    let semibold = formats.contains(SelectionHighlightTextFormat::Semibold);
+    let mono = formats.contains(SelectionHighlightTextFormat::Mono);
+
+    let mut style = if fill {
+        let bg = if mono {
+            Color::Rgb(71, 76, 84)
+        } else if semibold {
+            palette.fill_bg_emphasis
+        } else {
+            palette.fill_bg
+        };
+        let fg = if mono {
+            Color::Rgb(244, 245, 246)
+        } else {
+            palette.fill_fg
+        };
+        Style::default().fg(fg).bg(bg)
+    } else {
+        let fg = if mono {
+            if is_secondary {
+                Color::Rgb(189, 194, 201)
+            } else {
+                Color::Rgb(229, 233, 238)
+            }
+        } else if is_secondary {
+            if semibold {
+                palette.text_secondary_fg_emphasis
+            } else {
+                palette.text_secondary_fg
+            }
+        } else if semibold {
+            palette.text_fg_emphasis
+        } else {
+            palette.text_fg
+        };
+        Style::default().fg(fg).bg(Color::Reset)
+    };
+
+    if formats.contains(SelectionHighlightTextFormat::Bold) {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if formats.contains(SelectionHighlightTextFormat::Italic) {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if formats.contains(SelectionHighlightTextFormat::Underlined) {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+
+    style
+}
+
+pub(crate) fn selection_highlight_style() -> Style {
+    selection_highlight_base_style(/*is_secondary*/ false)
 }
 
 fn selected_row_style() -> Style {
     selection_highlight_style()
+}
+
+fn selected_secondary_row_style() -> Style {
+    selection_highlight_base_style(/*is_secondary*/ true)
 }
 
 fn badge_style(label: &str) -> Style {
@@ -385,7 +508,16 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
     if selected {
         for line in lines.iter_mut() {
             line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.patch(selected_row_style());
+                let is_secondary = span.style.add_modifier.contains(Modifier::DIM)
+                    || matches!(span.style.fg, Some(Color::Gray | Color::DarkGray));
+                let mut style = span.style.patch(if is_secondary {
+                    selected_secondary_row_style()
+                } else {
+                    selected_row_style()
+                });
+                style.add_modifier.remove(Modifier::DIM);
+                style.sub_modifier.remove(Modifier::DIM);
+                span.style = style;
             });
         }
     }
@@ -811,7 +943,16 @@ pub(crate) fn render_rows_single_line(
         let mut full_line = build_full_line(row, desc_col);
         if Some(i) == state.selected_idx && !row.is_disabled {
             full_line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.patch(selected_row_style());
+                let is_secondary = span.style.add_modifier.contains(Modifier::DIM)
+                    || matches!(span.style.fg, Some(Color::Gray | Color::DarkGray));
+                let mut style = span.style.patch(if is_secondary {
+                    selected_secondary_row_style()
+                } else {
+                    selected_row_style()
+                });
+                style.add_modifier.remove(Modifier::DIM);
+                style.sub_modifier.remove(Modifier::DIM);
+                span.style = style;
             });
         }
         if row.is_disabled {
@@ -991,6 +1132,44 @@ mod tests {
         let style = selected_row_style();
         assert_eq!(style.fg, Some(Color::Black));
         assert_eq!(style.bg, Some(Color::White));
+    }
+
+    #[test]
+    fn text_only_selection_style_clears_background_fill() {
+        set_selection_highlight_preset(SelectionHighlightPreset::Mint);
+        set_selection_highlight_fill(false);
+        set_selection_highlight_text_formats(SelectionHighlightTextFormats::empty());
+
+        let style = selection_highlight_style();
+        assert_eq!(style.bg, Some(Color::Reset));
+        assert!(matches!(style.fg, Some(Color::Rgb(..))));
+
+        set_selection_highlight_fill(true);
+        set_selection_highlight_preset(SelectionHighlightPreset::Light);
+    }
+
+    #[test]
+    fn selected_secondary_spans_drop_dim_and_keep_contrast() {
+        set_selection_highlight_preset(SelectionHighlightPreset::Rose);
+        set_selection_highlight_fill(false);
+        set_selection_highlight_text_formats(
+            SelectionHighlightTextFormats::empty()
+                .with_toggled(SelectionHighlightTextFormat::Italic),
+        );
+
+        let mut lines = vec![Line::from(vec![
+            Span::styled("Name", Style::default()),
+            Span::styled(" description", Style::default().dim()),
+        ])];
+        apply_row_state_style(&mut lines, true, false);
+
+        assert!(!lines[0].spans[1].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(lines[0].spans[1].style.bg, Some(Color::Reset));
+        assert!(lines[0].spans[1].style.add_modifier.contains(Modifier::ITALIC));
+
+        set_selection_highlight_text_formats(SelectionHighlightTextFormats::empty());
+        set_selection_highlight_fill(true);
+        set_selection_highlight_preset(SelectionHighlightPreset::Light);
     }
 
     #[test]
