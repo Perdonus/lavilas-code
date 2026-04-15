@@ -46,9 +46,42 @@ impl UiLanguage {
     }
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionHighlightPreset {
+    Light = 0,
+    Graphite = 1,
+    Amber = 2,
+    Mint = 3,
+    Rose = 4,
+}
+
+impl SelectionHighlightPreset {
+    pub(crate) fn from_code(code: &str) -> Self {
+        match code.trim().to_ascii_lowercase().as_str() {
+            "graphite" => Self::Graphite,
+            "amber" => Self::Amber,
+            "mint" => Self::Mint,
+            "rose" => Self::Rose,
+            _ => Self::Light,
+        }
+    }
+
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Graphite => "graphite",
+            Self::Amber => "amber",
+            Self::Mint => "mint",
+            Self::Rose => "rose",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UiPreferences {
     pub(crate) language: UiLanguage,
+    pub(crate) selection_highlight_preset: SelectionHighlightPreset,
     pub(crate) command_prefix: char,
     pub(crate) hidden_commands: Vec<String>,
     pub(crate) model_presets_enabled: bool,
@@ -59,6 +92,7 @@ impl Default for UiPreferences {
     fn default() -> Self {
         Self {
             language: UiLanguage::Ru,
+            selection_highlight_preset: SelectionHighlightPreset::Light,
             command_prefix: '/',
             hidden_commands: Vec::new(),
             model_presets_enabled: true,
@@ -241,6 +275,11 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
         .and_then(serde_json::Value::as_str)
         .map(UiLanguage::from_code)
         .unwrap_or(UiLanguage::Ru);
+    let selection_highlight_preset = value
+        .get("selection_highlight_preset")
+        .and_then(serde_json::Value::as_str)
+        .map(SelectionHighlightPreset::from_code)
+        .unwrap_or(SelectionHighlightPreset::Light);
     let command_prefix = value
         .get("command_prefix")
         .and_then(serde_json::Value::as_str)
@@ -285,6 +324,7 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
 
     UiPreferences {
         language,
+        selection_highlight_preset,
         command_prefix,
         hidden_commands,
         model_presets_enabled,
@@ -297,6 +337,17 @@ pub(crate) fn save_ui_language(codex_home: &Path, language: UiLanguage) -> io::R
         codex_home,
         "language",
         serde_json::Value::String(language.code().to_string()),
+    )
+}
+
+pub(crate) fn save_selection_highlight_preset(
+    codex_home: &Path,
+    preset: SelectionHighlightPreset,
+) -> io::Result<()> {
+    persist_setting(
+        codex_home,
+        "selection_highlight_preset",
+        serde_json::Value::String(preset.code().to_string()),
     )
 }
 
@@ -802,6 +853,7 @@ fn supported_reasoning_levels(levels: &[&str]) -> Vec<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
+    use super::SelectionHighlightPreset;
     use super::UiLanguage;
     use super::default_profile_model;
     use super::ensure_profile_model_catalog;
@@ -810,6 +862,7 @@ mod tests {
     use super::save_command_prefix;
     use super::save_hidden_commands;
     use super::save_provider_model_presets;
+    use super::save_selection_highlight_preset;
     use super::save_ui_language;
     use tempfile::tempdir;
 
@@ -817,6 +870,8 @@ mod tests {
     fn ui_preferences_round_trip() {
         let codex_home = tempdir().expect("tempdir");
         save_ui_language(codex_home.path(), UiLanguage::En).expect("save language");
+        save_selection_highlight_preset(codex_home.path(), SelectionHighlightPreset::Graphite)
+            .expect("save highlight preset");
         save_command_prefix(codex_home.path(), '!').expect("save prefix");
         save_hidden_commands(
             codex_home.path(),
@@ -826,6 +881,10 @@ mod tests {
 
         let preferences = load_ui_preferences(codex_home.path());
         assert_eq!(preferences.language, UiLanguage::En);
+        assert_eq!(
+            preferences.selection_highlight_preset,
+            SelectionHighlightPreset::Graphite
+        );
         assert_eq!(preferences.command_prefix, '!');
         assert_eq!(preferences.hidden_commands, vec!["model", "profiles"]);
     }

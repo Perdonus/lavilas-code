@@ -192,6 +192,7 @@ use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
+use crate::bottom_pane::selection_highlight_style;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
@@ -2457,7 +2458,7 @@ impl ChatComposer {
             .map(|(idx, _)| {
                 let label = local_image_label_text(idx + 1);
                 if self.selected_remote_image_index == Some(idx) {
-                    label.cyan().reversed().into()
+                    Line::from(Span::styled(label, selection_highlight_style()))
                 } else {
                     label.cyan().into()
                 }
@@ -5595,8 +5596,7 @@ mod tests {
         assert!(redraw);
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
 
-        assert_eq!(composer.textarea.text(), "a
-b");
+        assert_eq!(composer.textarea.text(), "a\nb");
     }
 
     fn ascii_burst_treats_enter_as_newline() {

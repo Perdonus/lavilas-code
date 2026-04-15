@@ -30,6 +30,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
+use crate::ui_preferences::SelectionHighlightPreset;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -349,6 +350,14 @@ pub(crate) enum AppEvent {
     /// Persist preferred UI/profile language.
     SetProfilesLanguage {
         lang: String,
+    },
+
+    /// Open selection highlight color picker.
+    OpenSelectionHighlightPicker,
+
+    /// Persist the selection highlight preset used in popups.
+    SetSelectionHighlightPreset {
+        preset: SelectionHighlightPreset,
     },
 
     /// Open command prefix picker.

@@ -6333,6 +6333,12 @@ impl App {
             AppEvent::SetProfilesLanguage { lang } => {
                 self.chat_widget.apply_profiles_language(&lang);
             }
+            AppEvent::OpenSelectionHighlightPicker => {
+                self.chat_widget.open_selection_highlight_picker_popup();
+            }
+            AppEvent::SetSelectionHighlightPreset { preset } => {
+                self.chat_widget.apply_selection_highlight_preset(preset);
+            }
             AppEvent::OpenCommandPrefixPicker => {
                 self.chat_widget.open_command_prefix_picker_popup();
             }

@@ -12,6 +12,8 @@ use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Widget;
 use std::borrow::Cow;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -20,6 +22,7 @@ use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
+use crate::ui_preferences::SelectionHighlightPreset;
 
 use super::scroll_state::ScrollState;
 
@@ -65,6 +68,7 @@ const FIXED_LEFT_COLUMN_DENOMINATOR: usize = 10;
 
 const MENU_SURFACE_INSET_V: u16 = 1;
 const MENU_SURFACE_INSET_H: u16 = 2;
+static SELECTION_HIGHLIGHT_PRESET: AtomicU8 = AtomicU8::new(SelectionHighlightPreset::Light as u8);
 
 /// Apply the shared "menu surface" padding used by bottom-pane overlays.
 ///
@@ -300,8 +304,44 @@ fn wrap_row_lines(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<L
     wrap_standard_row(row, desc_col, width)
 }
 
+fn current_selection_highlight_preset() -> SelectionHighlightPreset {
+    match SELECTION_HIGHLIGHT_PRESET.load(Ordering::Relaxed) {
+        x if x == SelectionHighlightPreset::Graphite as u8 => SelectionHighlightPreset::Graphite,
+        x if x == SelectionHighlightPreset::Amber as u8 => SelectionHighlightPreset::Amber,
+        x if x == SelectionHighlightPreset::Mint as u8 => SelectionHighlightPreset::Mint,
+        x if x == SelectionHighlightPreset::Rose as u8 => SelectionHighlightPreset::Rose,
+        _ => SelectionHighlightPreset::Light,
+    }
+}
+
+pub(crate) fn set_selection_highlight_preset(preset: SelectionHighlightPreset) {
+    SELECTION_HIGHLIGHT_PRESET.store(preset as u8, Ordering::Relaxed);
+}
+
+pub(crate) fn selection_highlight_style() -> Style {
+    match current_selection_highlight_preset() {
+        SelectionHighlightPreset::Light => {
+            Style::default().fg(Color::Black).bg(Color::White).bold()
+        }
+        SelectionHighlightPreset::Graphite => {
+            Style::default().fg(Color::White).bg(Color::DarkGray).bold()
+        }
+        SelectionHighlightPreset::Amber => {
+            Style::default().fg(Color::Black).bg(Color::Yellow).bold()
+        }
+        SelectionHighlightPreset::Mint => Style::default()
+            .fg(Color::Black)
+            .bg(Color::LightGreen)
+            .bold(),
+        SelectionHighlightPreset::Rose => Style::default()
+            .fg(Color::Black)
+            .bg(Color::LightMagenta)
+            .bold(),
+    }
+}
+
 fn selected_row_style() -> Style {
-    Style::default().fg(Color::Black).bg(Color::Cyan).bold()
+    selection_highlight_style()
 }
 
 fn badge_style(label: &str) -> Style {
@@ -945,6 +985,13 @@ fn measure_rows_height_inner(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn default_selected_row_style_uses_light_preset() {
+        let style = selected_row_style();
+        assert_eq!(style.fg, Some(Color::Black));
+        assert_eq!(style.bg, Some(Color::White));
+    }
 
     #[test]
     fn one_cell_width_falls_back_without_panic_for_wrapped_two_column_rows() {

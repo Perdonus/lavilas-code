@@ -37,6 +37,8 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::time::Duration;
 
+use crate::bottom_pane::selection_highlight_style;
+
 #[derive(Clone)]
 struct ProviderOption {
     name: String,
@@ -243,7 +245,7 @@ impl WidgetRef for &OssSelectionWidget<'_> {
             .enumerate()
             .map(|(idx, opt)| {
                 let style = if idx == self.selected_option {
-                    Style::new().bg(Color::Cyan).fg(Color::Black)
+                    selection_highlight_style()
                 } else {
                     Style::new().bg(Color::DarkGray)
                 };

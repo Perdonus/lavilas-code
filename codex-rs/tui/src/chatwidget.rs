@@ -268,6 +268,7 @@ const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and P
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const CUSTOM_SETTINGS_VIEW_ID: &str = "custom-settings";
 const LANGUAGE_PICKER_VIEW_ID: &str = "language-picker";
+const SELECTION_HIGHLIGHT_VIEW_ID: &str = "selection-highlight-picker";
 const COMMAND_PREFIX_VIEW_ID: &str = "command-prefix-picker";
 const COMMAND_VISIBILITY_VIEW_ID: &str = "command-visibility-picker";
 const PROFILES_MANAGER_VIEW_ID: &str = "profiles-manager";
@@ -354,6 +355,7 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::bottom_pane::prompt_args::command_prefix;
 use crate::bottom_pane::prompt_args::set_command_prefix;
+use crate::bottom_pane::set_selection_highlight_preset;
 use crate::bottom_pane::slash_commands;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text;
@@ -389,6 +391,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use crate::ui_preferences::SelectionHighlightPreset;
 use crate::ui_preferences::StoredModelPreset;
 use crate::ui_preferences::UiLanguage;
 use crate::ui_preferences::default_profile_model as default_profile_model_for_provider;
@@ -399,6 +402,7 @@ use crate::ui_preferences::save_command_prefix as save_ui_command_prefix;
 use crate::ui_preferences::save_hidden_commands as save_ui_hidden_commands;
 use crate::ui_preferences::save_model_presets_enabled as save_ui_model_presets_enabled;
 use crate::ui_preferences::save_provider_model_presets as save_ui_provider_model_presets;
+use crate::ui_preferences::save_selection_highlight_preset as save_ui_selection_highlight_preset;
 use crate::ui_preferences::save_ui_language;
 use crate::ui_preferences::settings_path as ui_settings_path;
 mod interrupts;
@@ -10344,6 +10348,52 @@ impl ChatWidget {
         self.ui_language().code().to_string()
     }
 
+    fn current_selection_highlight_preset(&self) -> SelectionHighlightPreset {
+        self.ui_preferences().selection_highlight_preset
+    }
+
+    fn selection_highlight_label_for_locale(
+        preset: SelectionHighlightPreset,
+        is_ru: bool,
+    ) -> &'static str {
+        match (is_ru, preset) {
+            (true, SelectionHighlightPreset::Light) => "Светлый",
+            (true, SelectionHighlightPreset::Graphite) => "Графит",
+            (true, SelectionHighlightPreset::Amber) => "Янтарь",
+            (true, SelectionHighlightPreset::Mint) => "Мята",
+            (true, SelectionHighlightPreset::Rose) => "Роза",
+            (false, SelectionHighlightPreset::Light) => "Light",
+            (false, SelectionHighlightPreset::Graphite) => "Graphite",
+            (false, SelectionHighlightPreset::Amber) => "Amber",
+            (false, SelectionHighlightPreset::Mint) => "Mint",
+            (false, SelectionHighlightPreset::Rose) => "Rose",
+        }
+    }
+
+    fn selection_highlight_description_for_locale(
+        preset: SelectionHighlightPreset,
+        is_ru: bool,
+    ) -> &'static str {
+        match (is_ru, preset) {
+            (true, SelectionHighlightPreset::Light) => {
+                "Белый фон и чёрный текст. Новый основной вариант."
+            }
+            (true, SelectionHighlightPreset::Graphite) => "Тёмно-серый фон и белый текст.",
+            (true, SelectionHighlightPreset::Amber) => "Жёлтый фон и чёрный текст.",
+            (true, SelectionHighlightPreset::Mint) => "Светло-зелёный фон и чёрный текст.",
+            (true, SelectionHighlightPreset::Rose) => "Светло-розовый фон и чёрный текст.",
+            (false, SelectionHighlightPreset::Light) => {
+                "White background with black text. The new default."
+            }
+            (false, SelectionHighlightPreset::Graphite) => {
+                "Dark graphite background with white text."
+            }
+            (false, SelectionHighlightPreset::Amber) => "Amber background with black text.",
+            (false, SelectionHighlightPreset::Mint) => "Light green background with black text.",
+            (false, SelectionHighlightPreset::Rose) => "Soft rose background with black text.",
+        }
+    }
+
     fn current_model_presets_enabled(&self) -> bool {
         self.ui_preferences().model_presets_enabled
     }
@@ -10539,6 +10589,7 @@ impl ChatWidget {
     fn apply_ui_preferences_from_profiles(&mut self) {
         let preferences = self.ui_preferences();
         set_command_prefix(preferences.command_prefix);
+        set_selection_highlight_preset(preferences.selection_highlight_preset);
         slash_commands::set_hidden_command_keys(preferences.hidden_commands);
     }
 
@@ -10578,6 +10629,43 @@ impl ChatWidget {
                     settings_path.display()
                 )),
             ),
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn apply_selection_highlight_preset(&mut self, preset: SelectionHighlightPreset) {
+        let is_ru = self.ui_language().is_ru();
+        if let Err(err) =
+            save_ui_selection_highlight_preset(self.config.codex_home.as_path(), preset)
+        {
+            let message = if is_ru {
+                format!("Не удалось сохранить цвет выделения: {err}")
+            } else {
+                format!("Failed to save selection highlight: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+
+        set_selection_highlight_preset(preset);
+        let label = Self::selection_highlight_label_for_locale(preset, is_ru);
+        let settings_path = self.profiles_settings_path();
+        if is_ru {
+            self.add_info_message(
+                format!("Цвет выделения изменён: {label}."),
+                Some(format!(
+                    "Сохранено в {}. Активный пункт во всех списках теперь подсвечивается этим стилем.",
+                    settings_path.display()
+                )),
+            );
+        } else {
+            self.add_info_message(
+                format!("Selection highlight changed to {label}."),
+                Some(format!(
+                    "Saved in {}. Active rows in popups now use this style.",
+                    settings_path.display()
+                )),
+            );
         }
         self.request_redraw();
     }
@@ -10677,6 +10765,10 @@ impl ChatWidget {
         let hidden_count = self.current_hidden_command_count();
         let lang_label = self.ui_language_label(self.ui_language());
         let is_ru = self.ui_language().is_ru();
+        let highlight_label = Self::selection_highlight_label_for_locale(
+            self.current_selection_highlight_preset(),
+            is_ru,
+        );
         let replace_active = self.bottom_pane.active_view_id() == Some(CUSTOM_SETTINGS_VIEW_ID);
         let initial_selected_idx = self
             .bottom_pane
@@ -10820,6 +10912,32 @@ impl ChatWidget {
                     "language interface english russian locale".to_string()
                 }),
                 actions: vec![Box::new(|tx| tx.send(AppEvent::OpenLanguagePicker))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: if is_ru {
+                    "Выделение в списках".to_string()
+                } else {
+                    "Selection highlight".to_string()
+                },
+                description: Some(if is_ru {
+                    format!(
+                        "Сейчас: {highlight_label}. Меняет цвет активного пункта во всех всплывающих списках и настройках."
+                    )
+                } else {
+                    format!(
+                        "Current: {highlight_label}. Controls the active-row color in popups and settings."
+                    )
+                }),
+                search_value: Some(if is_ru {
+                    "выделение цвет активный пункт список меню popup".to_string()
+                } else {
+                    "selection highlight color active row popup menu".to_string()
+                }),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenSelectionHighlightPicker)
+                })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -11091,6 +11209,98 @@ impl ChatWidget {
             let _ = self
                 .bottom_pane
                 .replace_selection_view_if_active(LANGUAGE_PICKER_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_selection_highlight_picker_popup(&mut self) {
+        let current = self.current_selection_highlight_preset();
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_VIEW_ID);
+        let remembered_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(SELECTION_HIGHLIGHT_VIEW_ID);
+        let presets = [
+            SelectionHighlightPreset::Light,
+            SelectionHighlightPreset::Graphite,
+            SelectionHighlightPreset::Amber,
+            SelectionHighlightPreset::Mint,
+            SelectionHighlightPreset::Rose,
+        ];
+
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к общим настройкам.".to_string()
+            } else {
+                "Return to the main settings hub.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад настройки".to_string()
+            } else {
+                "back settings".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.extend(presets.into_iter().map(|preset| SelectionItem {
+            name: Self::selection_highlight_label_for_locale(preset, is_ru).to_string(),
+            description: Some(
+                Self::selection_highlight_description_for_locale(preset, is_ru).to_string(),
+            ),
+            search_value: Some(if is_ru {
+                format!(
+                    "{} цвет выделение активный пункт",
+                    Self::selection_highlight_label_for_locale(preset, is_ru)
+                )
+            } else {
+                format!(
+                    "{} selection highlight active row",
+                    Self::selection_highlight_label_for_locale(preset, is_ru)
+                )
+            }),
+            is_current: current == preset,
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::SetSelectionHighlightPreset { preset });
+                tx.send(AppEvent::OpenCustomSettings);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }));
+        let initial_selected_idx = remembered_selected_idx
+            .or_else(|| items.iter().position(|item| item.is_current))
+            .or(Some(1));
+
+        let params = SelectionViewParams {
+            view_id: Some(SELECTION_HIGHLIGHT_VIEW_ID),
+            title: Some(if is_ru {
+                "Выделение в списках".to_string()
+            } else {
+                "Selection highlight".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Выберите цвет активного пункта для всплывающих списков, настроек и похожих меню."
+                    .to_string()
+            } else {
+                "Choose the active-row color for popups, settings, and similar menus.".to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            ..Default::default()
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(SELECTION_HIGHLIGHT_VIEW_ID, params);
         } else {
             self.bottom_pane.show_selection_view(params);
         }

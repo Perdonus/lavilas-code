@@ -1,3 +1,4 @@
+use crate::bottom_pane::selection_highlight_style;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RowRenderable;
 use ratatui::style::Style;
@@ -27,7 +28,7 @@ pub(crate) fn selection_option_row_with_dim(
         format!("  {}. ", index + 1)
     };
     let style = if is_selected {
-        Style::default().cyan()
+        selection_highlight_style()
     } else if dim {
         Style::default().dim()
     } else {
