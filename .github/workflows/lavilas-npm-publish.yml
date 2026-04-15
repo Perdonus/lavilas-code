@@ -8,6 +8,7 @@ on:
 
 jobs:
   build-platform-package:
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -18,36 +19,6 @@ jobs:
             artifact_name: npm-codex-linux-x64
             bin_path: codex-rs/target/x86_64-unknown-linux-musl/release/codex
             rust_target: x86_64-unknown-linux-musl
-          - os: ubuntu-24.04-arm
-            package: codex-linux-arm64
-            target_triple: aarch64-unknown-linux-musl
-            artifact_name: npm-codex-linux-arm64
-            bin_path: codex-rs/target/aarch64-unknown-linux-musl/release/codex
-            rust_target: aarch64-unknown-linux-musl
-          - os: macos-15-intel
-            package: codex-darwin-x64
-            target_triple: x86_64-apple-darwin
-            artifact_name: npm-codex-darwin-x64
-            bin_path: codex-rs/target/x86_64-apple-darwin/release/codex
-            rust_target: x86_64-apple-darwin
-          - os: macos-14
-            package: codex-darwin-arm64
-            target_triple: aarch64-apple-darwin
-            artifact_name: npm-codex-darwin-arm64
-            bin_path: codex-rs/target/aarch64-apple-darwin/release/codex
-            rust_target: aarch64-apple-darwin
-          - os: windows-latest
-            package: codex-win32-x64
-            target_triple: x86_64-pc-windows-msvc
-            artifact_name: npm-codex-win32-x64
-            bin_path: codex-rs/target/x86_64-pc-windows-msvc/release/codex.exe
-            rust_target: x86_64-pc-windows-msvc
-          - os: windows-11-arm
-            package: codex-win32-arm64
-            target_triple: aarch64-pc-windows-msvc
-            artifact_name: npm-codex-win32-arm64
-            bin_path: codex-rs/target/aarch64-pc-windows-msvc/release/codex.exe
-            rust_target: aarch64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -294,8 +265,10 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ runner.temp }}/pkg-${{ matrix.package }}
+          compression-level: 0
 
   publish-npm:
+    timeout-minutes: 45
     needs: build-platform-package
     runs-on: ubuntu-latest
     steps:
