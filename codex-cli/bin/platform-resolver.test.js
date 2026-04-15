@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import {
   ensurePlatformPackageMetadata,
+  resolveRuntimeCacheRoot,
   selectVendorInstallation,
 } from "./platform-resolver.js";
 
@@ -136,4 +137,87 @@ test("ensurePlatformPackageMetadata recreates missing package.json from vendor t
   assert.equal(written.version, "1.3.56");
 
   rmSync(tempRoot, { force: true, recursive: true });
+});
+
+test("selectVendorInstallation materializes and reuses runtime cache outside node_modules", () => {
+  const tempRoot = path.join(os.tmpdir(), `codex-platform-test-${Date.now()}-runtime-cache`);
+  rmSync(tempRoot, { force: true, recursive: true });
+
+  const packageDir = path.join(tempRoot, "node_modules", "@lavilas", "codex");
+  const nestedPlatformDir = path.join(
+    packageDir,
+    "node_modules",
+    "@lavilas",
+    "codex-linux-x64",
+  );
+  const runtimeCacheRoot = path.join(tempRoot, "runtime-cache");
+  makeVendorTree(nestedPlatformDir, 32);
+
+  const selectOptions = {
+    packageDir,
+    platformPackage: "@lavilas/codex-linux-x64",
+    targetTriple: "x86_64-unknown-linux-musl",
+    binaryName: "codex",
+    packageVersion: "1.3.61",
+    runtimeCacheRoot,
+    requireResolve: () => {
+      throw new Error("not installed");
+    },
+  };
+
+  const selected = selectVendorInstallation(selectOptions);
+  assert.ok(selected);
+  assert.equal(selected.source, "runtime-cache:nested-platform-package");
+  const cacheEntries = readdirSync(
+    path.join(runtimeCacheRoot, "@lavilas", "codex-linux-x64"),
+    { withFileTypes: true },
+  );
+  assert.equal(cacheEntries.length, 1);
+  assert.match(cacheEntries[0].name, /^1\.3\.61-[a-f0-9]{12}$/);
+  assert.equal(
+    selected.binaryPath,
+    path.join(
+      runtimeCacheRoot,
+      "@lavilas",
+      "codex-linux-x64",
+      cacheEntries[0].name,
+      "vendor",
+      "x86_64-unknown-linux-musl",
+      "codex",
+      "codex",
+    ),
+  );
+  assert.ok(
+    existsSync(
+      path.join(
+        runtimeCacheRoot,
+        "@lavilas",
+        "codex-linux-x64",
+        cacheEntries[0].name,
+        ".ready.json",
+      ),
+    ),
+  );
+
+  rmSync(nestedPlatformDir, { force: true, recursive: true });
+
+  const reused = selectVendorInstallation(selectOptions);
+  assert.ok(reused);
+  assert.equal(reused.source, "runtime-cache");
+  assert.equal(reused.binaryPath, selected.binaryPath);
+
+  rmSync(tempRoot, { force: true, recursive: true });
+});
+
+test("resolveRuntimeCacheRoot prefers CODEX_HOME before platform cache defaults", () => {
+  const cacheRoot = resolveRuntimeCacheRoot({
+    env: {
+      CODEX_HOME: "/tmp/custom-codex-home",
+      XDG_CACHE_HOME: "/tmp/xdg-cache",
+    },
+    homeDir: "/tmp/home",
+    platformName: "linux",
+  });
+
+  assert.equal(cacheRoot, "/tmp/custom-codex-home/runtime/npm");
 });

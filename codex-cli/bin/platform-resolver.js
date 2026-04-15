@@ -1,11 +1,19 @@
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 
 export const PLATFORM_PACKAGE_BY_TARGET = {
@@ -95,6 +103,73 @@ function packageInstallDir(packageDir, platformPackage) {
   return path.join(packageDir, "node_modules", ...packageNameSegments(platformPackage));
 }
 
+function packageCacheBaseDir(runtimeCacheRoot, platformPackage) {
+  if (!runtimeCacheRoot) {
+    return null;
+  }
+  return path.join(runtimeCacheRoot, ...packageNameSegments(platformPackage));
+}
+
+function packageCacheDir(
+  runtimeCacheRoot,
+  platformPackage,
+  packageVersion,
+  manifestDigest = null,
+) {
+  if (!runtimeCacheRoot || !packageVersion) {
+    return null;
+  }
+  const cacheBaseDir = packageCacheBaseDir(runtimeCacheRoot, platformPackage);
+  if (!cacheBaseDir) {
+    return null;
+  }
+  const cacheKey = manifestDigest
+    ? `${packageVersion}-${manifestDigest.slice(0, 12)}`
+    : packageVersion;
+  return path.join(cacheBaseDir, cacheKey);
+}
+
+export function resolveRuntimeCacheRoot({
+  env = process.env,
+  homeDir = (() => {
+    try {
+      return os.homedir();
+    } catch {
+      return null;
+    }
+  })(),
+  platformName = process.platform,
+} = {}) {
+  const explicitCacheDir =
+    env.LAVILAS_CODEX_VENDOR_CACHE_DIR ?? env.CODEX_VENDOR_CACHE_DIR ?? null;
+  if (explicitCacheDir) {
+    return path.resolve(explicitCacheDir);
+  }
+
+  const codexHome =
+    env.CODEX_HOME ?? (homeDir ? path.join(homeDir, ".codex") : null);
+  if (codexHome) {
+    return path.join(codexHome, "runtime", "npm");
+  }
+
+  if (!homeDir) {
+    return null;
+  }
+
+  switch (platformName) {
+    case "win32": {
+      const localAppData = env.LOCALAPPDATA || path.join(homeDir, "AppData", "Local");
+      return path.join(localAppData, "Lavilas", "Codex", "runtime", "npm");
+    }
+    case "darwin":
+      return path.join(homeDir, "Library", "Caches", "Lavilas", "Codex", "runtime", "npm");
+    default: {
+      const xdgCacheHome = env.XDG_CACHE_HOME || path.join(homeDir, ".cache");
+      return path.join(xdgCacheHome, "lavilas-codex", "runtime", "npm");
+    }
+  }
+}
+
 function readJsonFile(filePath) {
   try {
     if (!existsSync(filePath)) {
@@ -110,7 +185,89 @@ function vendorManifestFor(vendorRoot) {
   return readJsonFile(path.join(vendorRoot, "manifest.json"));
 }
 
-function validateVendorRoot(candidate, targetTriple, binaryName) {
+function vendorManifestDigest(vendorRoot) {
+  try {
+    const manifestContents = readFileSync(path.join(vendorRoot, "manifest.json"));
+    return createHash("sha256").update(manifestContents).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function readyMarkerPathFor(vendorRoot) {
+  return path.join(path.dirname(vendorRoot), ".ready.json");
+}
+
+function readyMarkerFor(vendorRoot) {
+  return readJsonFile(readyMarkerPathFor(vendorRoot));
+}
+
+function validateVendorManifest(manifest, vendorRoot) {
+  if (!manifest || typeof manifest !== "object") {
+    return { valid: false, reason: "missing manifest.json" };
+  }
+
+  const files = manifest.files;
+  if (!files || typeof files !== "object") {
+    return { valid: false, reason: "invalid manifest.json files map" };
+  }
+
+  for (const [relativePath, metadata] of Object.entries(files)) {
+    const candidatePath = path.join(vendorRoot, relativePath);
+    if (!existsSync(candidatePath)) {
+      return { valid: false, reason: `missing ${relativePath}` };
+    }
+
+    let candidateStat;
+    try {
+      candidateStat = statSync(candidatePath);
+    } catch {
+      return { valid: false, reason: `unable to stat ${relativePath}` };
+    }
+
+    if (!candidateStat.isFile() || candidateStat.size <= 0) {
+      return { valid: false, reason: `invalid ${relativePath}` };
+    }
+
+    if (
+      metadata &&
+      typeof metadata === "object" &&
+      typeof metadata.size === "number" &&
+      metadata.size !== candidateStat.size
+    ) {
+      return { valid: false, reason: `size mismatch for ${relativePath}` };
+    }
+  }
+
+  return { valid: true };
+}
+
+function validateVendorRoot(
+  candidate,
+  targetTriple,
+  binaryName,
+  { requireReadyMarker = false } = {},
+) {
+  const manifest = vendorManifestFor(candidate.vendorRoot);
+  const manifestValidation = validateVendorManifest(manifest, candidate.vendorRoot);
+  if (!manifestValidation.valid) {
+    return manifestValidation;
+  }
+
+  if (requireReadyMarker) {
+    const readyMarker = readyMarkerFor(candidate.vendorRoot);
+    if (!readyMarker || typeof readyMarker !== "object") {
+      return { valid: false, reason: "missing .ready.json" };
+    }
+    if (
+      candidate.cacheKey &&
+      typeof readyMarker.cacheKey === "string" &&
+      readyMarker.cacheKey !== candidate.cacheKey
+    ) {
+      return { valid: false, reason: "runtime cache marker mismatch" };
+    }
+  }
+
   const binaryRelativePath = `${targetTriple}/codex/${binaryName}`;
   const binaryPath = path.join(candidate.vendorRoot, binaryRelativePath);
   if (!existsSync(binaryPath)) {
@@ -127,7 +284,6 @@ function validateVendorRoot(candidate, targetTriple, binaryName) {
     return { valid: false, reason: `invalid ${binaryRelativePath}` };
   }
 
-  const manifest = vendorManifestFor(candidate.vendorRoot);
   const expectedBinary = manifest?.files?.[binaryRelativePath];
   if (
     expectedBinary &&
@@ -159,6 +315,199 @@ function pushCandidate(candidates, seen, vendorRoot, source) {
   }
   seen.add(resolvedRoot);
   candidates.push({ vendorRoot: resolvedRoot, source });
+}
+
+function copyDirectoryRecursive(sourceDir, destinationDir) {
+  mkdirSync(destinationDir, { recursive: true });
+
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destinationPath = path.join(destinationDir, entry.name);
+
+    if (entry.isDirectory()) {
+      copyDirectoryRecursive(sourcePath, destinationPath);
+      continue;
+    }
+
+    if (entry.isSymbolicLink()) {
+      const resolvedPath = realpathSync(sourcePath);
+      const resolvedStat = statSync(resolvedPath);
+      if (resolvedStat.isDirectory()) {
+        copyDirectoryRecursive(resolvedPath, destinationPath);
+      } else {
+        copyFileSync(resolvedPath, destinationPath);
+        chmodSync(destinationPath, resolvedStat.mode);
+      }
+      continue;
+    }
+
+    const sourceStat = lstatSync(sourcePath);
+    if (sourceStat.isDirectory()) {
+      copyDirectoryRecursive(sourcePath, destinationPath);
+      continue;
+    }
+
+    copyFileSync(sourcePath, destinationPath);
+    chmodSync(destinationPath, sourceStat.mode);
+  }
+}
+
+function runtimeCacheCandidate({
+  runtimeCacheRoot,
+  platformPackage,
+  packageVersion,
+  manifestDigest = null,
+  source = "runtime-cache",
+}) {
+  const cacheDir = packageCacheDir(
+    runtimeCacheRoot,
+    platformPackage,
+    packageVersion,
+    manifestDigest,
+  );
+  if (!cacheDir) {
+    return null;
+  }
+  return {
+    vendorRoot: path.join(cacheDir, "vendor"),
+    cacheKey: path.basename(cacheDir),
+    source,
+  };
+}
+
+function collectRuntimeCacheCandidates({
+  runtimeCacheRoot,
+  platformPackage,
+  packageVersion,
+}) {
+  const cacheBaseDir = packageCacheBaseDir(runtimeCacheRoot, platformPackage);
+  if (!cacheBaseDir || !packageVersion || !existsSync(cacheBaseDir)) {
+    return [];
+  }
+
+  const versionPrefix = `${packageVersion}-`;
+  return readdirSync(cacheBaseDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(versionPrefix))
+    .map((entry) => ({
+      vendorRoot: path.join(cacheBaseDir, entry.name, "vendor"),
+      cacheKey: entry.name,
+      source: "runtime-cache",
+    }));
+}
+
+function materializeRuntimeCache({
+  runtimeCacheRoot,
+  platformPackage,
+  packageVersion,
+  targetTriple,
+  binaryName,
+  sourceInstallation,
+}) {
+  const manifestDigest = vendorManifestDigest(sourceInstallation.vendorRoot);
+  const cacheDir = packageCacheDir(
+    runtimeCacheRoot,
+    platformPackage,
+    packageVersion,
+    manifestDigest,
+  );
+  if (!cacheDir || !manifestDigest) {
+    return null;
+  }
+
+  const cachedCandidate = runtimeCacheCandidate({
+    runtimeCacheRoot,
+    platformPackage,
+    packageVersion,
+    manifestDigest,
+    source: `runtime-cache:${sourceInstallation.source}`,
+  });
+  if (!cachedCandidate) {
+    return null;
+  }
+
+  const cachedInstallation = validateVendorRoot(
+    cachedCandidate,
+    targetTriple,
+    binaryName,
+    { requireReadyMarker: true },
+  );
+  if (cachedInstallation.valid) {
+    return cachedInstallation;
+  }
+
+  const cacheParentDir = path.dirname(cacheDir);
+  mkdirSync(cacheParentDir, { recursive: true });
+
+  const tempCacheDir = path.join(
+    cacheParentDir,
+    `.tmp-${packageVersion}-${process.pid}-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2)}`,
+  );
+
+  try {
+    copyDirectoryRecursive(sourceInstallation.vendorRoot, path.join(tempCacheDir, "vendor"));
+
+    const stagedInstallation = validateVendorRoot(
+      {
+        vendorRoot: path.join(tempCacheDir, "vendor"),
+        cacheKey: path.basename(cacheDir),
+        source: `runtime-cache-staging:${sourceInstallation.source}`,
+      },
+      targetTriple,
+      binaryName,
+    );
+    if (!stagedInstallation.valid) {
+      return null;
+    }
+
+    const readyMarker = {
+      cacheKey: path.basename(cacheDir),
+      platformPackage,
+      packageVersion,
+      targetTriple,
+      manifestSha256: manifestDigest,
+      createdAt: new Date().toISOString(),
+    };
+    writeFileSync(
+      readyMarkerPathFor(path.join(tempCacheDir, "vendor")),
+      `${JSON.stringify(readyMarker, null, 2)}\n`,
+    );
+
+    try {
+      renameSync(tempCacheDir, cacheDir);
+    } catch {
+      const currentInstallation = validateVendorRoot(
+        cachedCandidate,
+        targetTriple,
+        binaryName,
+        { requireReadyMarker: true },
+      );
+      if (currentInstallation.valid) {
+        return currentInstallation;
+      }
+
+      const currentReadyMarker = readyMarkerFor(cachedCandidate.vendorRoot);
+      if (!currentReadyMarker && existsSync(cacheDir)) {
+        rmSync(cacheDir, { recursive: true, force: true });
+        renameSync(tempCacheDir, cacheDir);
+      } else {
+        return null;
+      }
+    }
+
+    const finalInstallation = validateVendorRoot(
+      cachedCandidate,
+      targetTriple,
+      binaryName,
+      { requireReadyMarker: true },
+    );
+    return finalInstallation.valid ? finalInstallation : null;
+  } catch {
+    return null;
+  } finally {
+    rmSync(tempCacheDir, { recursive: true, force: true });
+  }
 }
 
 export function collectVendorCandidates({
@@ -216,6 +565,8 @@ export function selectVendorInstallation({
   platformPackage,
   targetTriple,
   binaryName,
+  packageVersion = null,
+  runtimeCacheRoot = null,
   localVendorRoot = path.join(packageDir, "vendor"),
   requireResolve = null,
 }) {
@@ -228,9 +579,35 @@ export function selectVendorInstallation({
   for (const candidate of candidates) {
     const result = validateVendorRoot(candidate, targetTriple, binaryName);
     if (result.valid) {
-      return result;
+      return (
+        materializeRuntimeCache({
+          runtimeCacheRoot,
+          platformPackage,
+          packageVersion,
+          targetTriple,
+          binaryName,
+          sourceInstallation: result,
+        }) ?? result
+      );
     }
   }
+
+  for (const cachedCandidate of collectRuntimeCacheCandidates({
+    runtimeCacheRoot,
+    platformPackage,
+    packageVersion,
+  })) {
+    const cachedInstallation = validateVendorRoot(
+      cachedCandidate,
+      targetTriple,
+      binaryName,
+      { requireReadyMarker: true },
+    );
+    if (cachedInstallation.valid) {
+      return cachedInstallation;
+    }
+  }
+
   return null;
 }
 

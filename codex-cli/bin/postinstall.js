@@ -11,6 +11,7 @@ import {
   ensurePlatformPackageMetadata,
   getCodexBinaryName,
   resolveTargetTriple,
+  resolveRuntimeCacheRoot,
   selectVendorInstallation,
   updateCommandForPackageManager,
 } from "./platform-resolver.js";
@@ -51,6 +52,8 @@ const selectedInstallation = selectVendorInstallation({
   platformPackage,
   targetTriple,
   binaryName: getCodexBinaryName(),
+  packageVersion: rootPackageJson.version ?? null,
+  runtimeCacheRoot: resolveRuntimeCacheRoot(),
   requireResolve: (specifier) => require.resolve(specifier),
 });
 

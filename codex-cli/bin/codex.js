@@ -2,7 +2,7 @@
 // Unified entry point for the Codex CLI.
 
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, readdirSync, statSync } from "fs";
+import { chmodSync, existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { createRequire } from "node:module";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -11,6 +11,7 @@ import {
   detectPackageManager,
   getCodexBinaryName,
   resolveTargetTriple,
+  resolveRuntimeCacheRoot,
   selectVendorInstallation,
   updateCommandForPackageManager,
 } from "./platform-resolver.js";
@@ -20,6 +21,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageDir = path.join(__dirname, "..");
 const require = createRequire(import.meta.url);
+const rootPackageJson = JSON.parse(
+  readFileSync(path.join(packageDir, "package.json"), "utf8"),
+);
 
 const { platform, arch } = process;
 const targetTriple = resolveTargetTriple(platform, arch);
@@ -35,18 +39,14 @@ if (!platformPackage) {
 
 const codexBinaryName = getCodexBinaryName(process.platform);
 const localVendorRoot = path.join(packageDir, "vendor");
-const localBinaryPath = path.join(
-  localVendorRoot,
-  targetTriple,
-  "codex",
-  codexBinaryName,
-);
 
 const selectedInstallation = selectVendorInstallation({
   packageDir,
   platformPackage,
   targetTriple,
   binaryName: codexBinaryName,
+  packageVersion: rootPackageJson.version ?? null,
+  runtimeCacheRoot: resolveRuntimeCacheRoot(),
   localVendorRoot,
   requireResolve: (specifier) => require.resolve(specifier),
 });
@@ -59,9 +59,7 @@ if (!selectedInstallation) {
   );
 }
 
-const vendorRoot = selectedInstallation.vendorRoot;
-const archRoot = path.join(vendorRoot, targetTriple);
-const binaryPath = path.join(archRoot, "codex", codexBinaryName);
+const binaryPath = selectedInstallation.binaryPath;
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
@@ -80,7 +78,7 @@ function getUpdatedPath(newDirs) {
 }
 
 const additionalDirs = [];
-const pathDir = path.join(archRoot, "path");
+const pathDir = selectedInstallation.pathDir;
 if (existsSync(pathDir)) {
   additionalDirs.push(pathDir);
 }
