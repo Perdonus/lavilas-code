@@ -80,10 +80,14 @@ struct SelectionHighlightPalette {
     fill_bg: Color,
     fill_bg_emphasis: Color,
     fill_fg: Color,
+    fill_secondary_fg: Color,
+    fill_secondary_fg_emphasis: Color,
     text_fg: Color,
     text_fg_emphasis: Color,
     text_secondary_fg: Color,
     text_secondary_fg_emphasis: Color,
+    mono_text_fg: Color,
+    mono_text_secondary_fg: Color,
 }
 
 /// Apply the shared "menu surface" padding used by bottom-pane overlays.
@@ -356,46 +360,66 @@ fn selection_highlight_palette() -> SelectionHighlightPalette {
             fill_bg: Color::White,
             fill_bg_emphasis: Color::Rgb(236, 236, 236),
             fill_fg: Color::Black,
+            fill_secondary_fg: Color::Rgb(62, 62, 62),
+            fill_secondary_fg_emphasis: Color::Rgb(47, 47, 47),
             text_fg: Color::White,
             text_fg_emphasis: Color::Rgb(245, 245, 245),
             text_secondary_fg: Color::Rgb(214, 214, 214),
             text_secondary_fg_emphasis: Color::Rgb(230, 230, 230),
+            mono_text_fg: Color::Rgb(239, 239, 239),
+            mono_text_secondary_fg: Color::Rgb(206, 206, 206),
         },
         SelectionHighlightPreset::Graphite => SelectionHighlightPalette {
             fill_bg: Color::Rgb(73, 78, 87),
             fill_bg_emphasis: Color::Rgb(61, 66, 74),
             fill_fg: Color::White,
+            fill_secondary_fg: Color::Rgb(223, 227, 234),
+            fill_secondary_fg_emphasis: Color::Rgb(235, 238, 243),
             text_fg: Color::Rgb(205, 210, 220),
             text_fg_emphasis: Color::Rgb(228, 232, 239),
             text_secondary_fg: Color::Rgb(163, 170, 183),
             text_secondary_fg_emphasis: Color::Rgb(188, 195, 207),
+            mono_text_fg: Color::Rgb(218, 222, 228),
+            mono_text_secondary_fg: Color::Rgb(189, 194, 201),
         },
         SelectionHighlightPreset::Amber => SelectionHighlightPalette {
             fill_bg: Color::Rgb(248, 229, 191),
             fill_bg_emphasis: Color::Rgb(240, 214, 162),
             fill_fg: Color::Black,
+            fill_secondary_fg: Color::Rgb(78, 61, 35),
+            fill_secondary_fg_emphasis: Color::Rgb(66, 51, 29),
             text_fg: Color::Rgb(247, 224, 166),
             text_fg_emphasis: Color::Rgb(255, 213, 138),
             text_secondary_fg: Color::Rgb(221, 193, 129),
             text_secondary_fg_emphasis: Color::Rgb(236, 205, 142),
+            mono_text_fg: Color::Rgb(228, 214, 181),
+            mono_text_secondary_fg: Color::Rgb(204, 187, 151),
         },
         SelectionHighlightPreset::Mint => SelectionHighlightPalette {
             fill_bg: Color::Rgb(212, 241, 223),
             fill_bg_emphasis: Color::Rgb(191, 232, 207),
             fill_fg: Color::Black,
+            fill_secondary_fg: Color::Rgb(34, 73, 55),
+            fill_secondary_fg_emphasis: Color::Rgb(28, 62, 47),
             text_fg: Color::Rgb(190, 238, 208),
             text_fg_emphasis: Color::Rgb(163, 228, 187),
             text_secondary_fg: Color::Rgb(153, 208, 177),
             text_secondary_fg_emphasis: Color::Rgb(171, 220, 191),
+            mono_text_fg: Color::Rgb(192, 226, 204),
+            mono_text_secondary_fg: Color::Rgb(161, 198, 177),
         },
         SelectionHighlightPreset::Rose => SelectionHighlightPalette {
             fill_bg: Color::Rgb(246, 213, 224),
             fill_bg_emphasis: Color::Rgb(239, 193, 210),
             fill_fg: Color::Black,
+            fill_secondary_fg: Color::Rgb(87, 51, 67),
+            fill_secondary_fg_emphasis: Color::Rgb(74, 43, 57),
             text_fg: Color::Rgb(244, 198, 217),
             text_fg_emphasis: Color::Rgb(236, 178, 202),
             text_secondary_fg: Color::Rgb(220, 165, 189),
             text_secondary_fg_emphasis: Color::Rgb(231, 181, 202),
+            mono_text_fg: Color::Rgb(228, 200, 211),
+            mono_text_secondary_fg: Color::Rgb(205, 175, 188),
         },
     }
 }
@@ -408,15 +432,17 @@ fn selection_highlight_base_style(is_secondary: bool) -> Style {
     let mono = formats.contains(SelectionHighlightTextFormat::Mono);
 
     let mut style = if fill {
-        let bg = if mono {
-            Color::Rgb(71, 76, 84)
-        } else if semibold {
+        let bg = if semibold || mono {
             palette.fill_bg_emphasis
         } else {
             palette.fill_bg
         };
-        let fg = if mono {
-            Color::Rgb(244, 245, 246)
+        let fg = if is_secondary {
+            if semibold || mono {
+                palette.fill_secondary_fg_emphasis
+            } else {
+                palette.fill_secondary_fg
+            }
         } else {
             palette.fill_fg
         };
@@ -424,9 +450,9 @@ fn selection_highlight_base_style(is_secondary: bool) -> Style {
     } else {
         let fg = if mono {
             if is_secondary {
-                Color::Rgb(189, 194, 201)
+                palette.mono_text_secondary_fg
             } else {
-                Color::Rgb(229, 233, 238)
+                palette.mono_text_fg
             }
         } else if is_secondary {
             if semibold {

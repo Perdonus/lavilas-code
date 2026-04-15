@@ -10375,6 +10375,18 @@ impl ChatWidget {
         }
     }
 
+    fn reopen_selection_highlight_view_after_change(&mut self) {
+        match self.bottom_pane.active_view_id() {
+            Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID) => {
+                self.open_selection_highlight_color_picker_popup();
+            }
+            Some(SELECTION_HIGHLIGHT_VIEW_ID) => {
+                self.open_selection_highlight_picker_popup();
+            }
+            _ => self.request_redraw(),
+        }
+    }
+
     fn selection_highlight_label_for_locale(
         preset: SelectionHighlightPreset,
         is_ru: bool,
@@ -10785,11 +10797,7 @@ impl ChatWidget {
                 )),
             );
         }
-        if self.selection_highlight_settings_view_active_id().is_some() {
-            self.open_selection_highlight_picker_popup();
-        } else {
-            self.request_redraw();
-        }
+        self.reopen_selection_highlight_view_after_change();
     }
 
     pub(crate) fn apply_selection_highlight_fill(&mut self, fill: bool) {
@@ -10831,11 +10839,7 @@ impl ChatWidget {
             self.add_info_message(state.to_string(), Some(detail.to_string()));
         }
 
-        if self.selection_highlight_settings_view_active_id().is_some() {
-            self.open_selection_highlight_picker_popup();
-        } else {
-            self.request_redraw();
-        }
+        self.reopen_selection_highlight_view_after_change();
     }
 
     pub(crate) fn toggle_selection_highlight_text_format(
@@ -10872,11 +10876,7 @@ impl ChatWidget {
             );
         }
 
-        if self.selection_highlight_settings_view_active_id().is_some() {
-            self.open_selection_highlight_picker_popup();
-        } else {
-            self.request_redraw();
-        }
+        self.reopen_selection_highlight_view_after_change();
     }
 
     pub(crate) fn apply_command_prefix(&mut self, prefix: char) {
