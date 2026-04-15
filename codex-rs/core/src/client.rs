@@ -1622,10 +1622,11 @@ impl ModelClientSession {
                     .await?;
                     continue;
                 }
-                Err(err @ TransportError::Http {
+                Err(TransportError::Http {
                     status,
-                    ref body,
-                    ..
+                    url,
+                    headers,
+                    body,
                 }) if status == StatusCode::PAYMENT_REQUIRED => {
                     let provider = self.client.runtime_config().provider;
                     if let Some(max_tokens) = parse_openrouter_affordable_max_tokens(body.as_deref())
@@ -1644,7 +1645,12 @@ impl ModelClientSession {
                         continue;
                     }
 
-                    return Err(map_api_error(ApiError::Transport(err)));
+                    return Err(map_api_error(ApiError::Transport(TransportError::Http {
+                        status,
+                        url,
+                        headers,
+                        body,
+                    })));
                 }
                 Err(err) => return Err(map_api_error(ApiError::Transport(err))),
             }
