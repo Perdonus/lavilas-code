@@ -24,7 +24,7 @@ jobs:
             artifact_name: npm-codex-linux-arm64
             bin_path: codex-rs/target/aarch64-unknown-linux-musl/release/codex
             rust_target: aarch64-unknown-linux-musl
-          - os: macos-15-intel
+          - os: macos-13
             package: codex-darwin-x64
             target_triple: x86_64-apple-darwin
             artifact_name: npm-codex-darwin-x64
