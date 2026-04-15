@@ -111,12 +111,15 @@ use tracing::warn;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::context_manager::ContextManager;
+use crate::context_manager::is_user_turn_boundary;
 use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::api_bridge::CoreAuthProvider;
 use codex_api::api_bridge::map_api_error;
 use codex_client::HttpTransport;
+use codex_client::run_with_retry;
 use codex_client::sse_stream;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
@@ -212,10 +215,7 @@ fn mistral_tool_call_id_is_valid(call_id: &str) -> bool {
     call_id.len() == 9 && call_id.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
-fn normalize_chat_completions_tool_call_id(
-    provider: &ModelProviderInfo,
-    call_id: &str,
-) -> String {
+fn normalize_chat_completions_tool_call_id(provider: &ModelProviderInfo, call_id: &str) -> String {
     if !provider_uses_mistral_api(provider) || mistral_tool_call_id_is_valid(call_id) {
         return call_id.to_string();
     }
@@ -266,6 +266,20 @@ fn parse_openrouter_affordable_max_tokens(body: Option<&str>) -> Option<u32> {
     parse_decimal_after_marker(&lowercase, "can only afford ").filter(|max_tokens| *max_tokens > 0)
 }
 
+fn parse_openrouter_affordable_prompt_tokens(body: Option<&str>) -> Option<u32> {
+    let body = body?.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let lowercase = body.to_ascii_lowercase();
+    if !lowercase.contains("prompt tokens limit exceeded") {
+        return None;
+    }
+
+    parse_decimal_after_marker(&lowercase, ">").filter(|prompt_tokens| *prompt_tokens > 0)
+}
+
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -278,6 +292,7 @@ struct ModelClientState {
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
     chat_completions_max_tokens_caps: StdMutex<HashMap<String, u32>>,
+    chat_completions_prompt_tokens_caps: StdMutex<HashMap<String, u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -431,6 +446,7 @@ impl ModelClient {
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
                 chat_completions_max_tokens_caps: StdMutex::new(HashMap::new()),
+                chat_completions_prompt_tokens_caps: StdMutex::new(HashMap::new()),
             }),
         }
     }
@@ -587,6 +603,52 @@ impl ModelClient {
             }
             None => {
                 caps.insert(key, max_tokens);
+                true
+            }
+        }
+    }
+
+    fn cached_chat_completions_prompt_tokens_cap(
+        &self,
+        provider: &ModelProviderInfo,
+        model: &str,
+    ) -> Option<u32> {
+        let key = Self::chat_completions_max_tokens_cache_key(provider, model)?;
+        self.state
+            .chat_completions_prompt_tokens_caps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .copied()
+    }
+
+    fn remember_chat_completions_prompt_tokens_cap(
+        &self,
+        provider: &ModelProviderInfo,
+        model: &str,
+        prompt_tokens: u32,
+    ) -> bool {
+        if prompt_tokens == 0 {
+            return false;
+        }
+
+        let Some(key) = Self::chat_completions_max_tokens_cache_key(provider, model) else {
+            return false;
+        };
+
+        let mut caps = self
+            .state
+            .chat_completions_prompt_tokens_caps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match caps.get_mut(&key) {
+            Some(existing) if *existing <= prompt_tokens => false,
+            Some(existing) => {
+                *existing = prompt_tokens;
+                true
+            }
+            None => {
+                caps.insert(key, prompt_tokens);
                 true
             }
         }
@@ -1170,9 +1232,17 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
     ) -> Result<ChatCompletionsRequest> {
         let runtime_config = self.client.runtime_config();
-        let input = prompt.get_formatted_input();
-        let chat_completions_tool_names =
-            serializable_chat_completions_tool_names(&prompt.tools)?;
+        let request_model =
+            normalize_request_model_for_provider(&runtime_config.provider, &model_info.slug);
+        let input = trim_chat_completions_input_to_prompt_cap(
+            prompt.get_formatted_input(),
+            &prompt.base_instructions,
+            self.client.cached_chat_completions_prompt_tokens_cap(
+                &runtime_config.provider,
+                request_model.as_ref(),
+            ),
+        );
+        let chat_completions_tool_names = serializable_chat_completions_tool_names(&prompt.tools)?;
         let messages = build_chat_completions_messages_with_tools(
             &runtime_config.provider,
             &prompt.base_instructions.text,
@@ -1181,8 +1251,6 @@ impl ModelClientSession {
         )?;
         let tools = create_tools_json_for_chat_completions(&prompt.tools)?;
         let has_tools = !tools.is_empty();
-        let request_model =
-            normalize_request_model_for_provider(&runtime_config.provider, &model_info.slug);
         let reasoning_effort = ModelClient::build_chat_completions_reasoning_effort(
             &runtime_config.provider,
             model_info,
@@ -1629,7 +1697,8 @@ impl ModelClientSession {
                     body,
                 }) if status == StatusCode::PAYMENT_REQUIRED => {
                     let provider = self.client.runtime_config().provider;
-                    if let Some(max_tokens) = parse_openrouter_affordable_max_tokens(body.as_deref())
+                    if let Some(max_tokens) =
+                        parse_openrouter_affordable_max_tokens(body.as_deref())
                         && self.client.remember_chat_completions_max_tokens_cap(
                             &provider,
                             request.model.as_str(),
@@ -1641,6 +1710,22 @@ impl ModelClientSession {
                             model = %request.model,
                             max_tokens,
                             "retrying OpenRouter chat completions request with reduced max_tokens"
+                        );
+                        continue;
+                    }
+
+                    if let Some(prompt_tokens) =
+                        parse_openrouter_affordable_prompt_tokens(body.as_deref())
+                        && self.client.remember_chat_completions_prompt_tokens_cap(
+                            &provider,
+                            request.model.as_str(),
+                            prompt_tokens,
+                        )
+                    {
+                        warn!(
+                            model = %request.model,
+                            prompt_tokens,
+                            "retrying OpenRouter chat completions request with reduced prompt history"
                         );
                         continue;
                     }
@@ -2741,9 +2826,8 @@ fn build_chat_completions_messages_with_tools(
                 if !text.is_empty() {
                     let is_instruction_message = role.eq_ignore_ascii_case("developer")
                         || role.eq_ignore_ascii_case("system");
-                    let is_contextual_instruction_message =
-                        role.eq_ignore_ascii_case("user")
-                            && content_items_are_chat_completions_contextual_instruction(content);
+                    let is_contextual_instruction_message = role.eq_ignore_ascii_case("user")
+                        && content_items_are_chat_completions_contextual_instruction(content);
                     if is_instruction_message || is_contextual_instruction_message {
                         instruction_segments.push(text);
                     } else {
@@ -2943,9 +3027,7 @@ fn build_chat_completions_messages_with_tools(
                 revised_prompt,
                 ..
             } => {
-                if available_tool_names
-                    .is_some_and(|names| !names.contains("image_generation"))
-                {
+                if available_tool_names.is_some_and(|names| !names.contains("image_generation")) {
                     continue;
                 }
                 synthetic_tool_call_counter += 1;
@@ -2995,14 +3077,45 @@ fn build_chat_completions_messages_with_tools(
     if !instruction_segments.is_empty() {
         messages.insert(
             0,
-            ChatCompletionsMessage::text(
-                instructions_role,
-                instruction_segments.join("\n\n"),
-            ),
+            ChatCompletionsMessage::text(instructions_role, instruction_segments.join("\n\n")),
         );
     }
 
     Ok(messages)
+}
+
+fn trim_chat_completions_input_to_prompt_cap(
+    input: Vec<ResponseItem>,
+    base_instructions: &codex_protocol::models::BaseInstructions,
+    prompt_tokens_cap: Option<u32>,
+) -> Vec<ResponseItem> {
+    let Some(prompt_tokens_cap) = prompt_tokens_cap else {
+        return input;
+    };
+    let prompt_tokens_cap = i64::from(prompt_tokens_cap);
+    if prompt_tokens_cap <= 0 {
+        return input;
+    }
+
+    let mut history = ContextManager::new();
+    history.replace(input);
+
+    while history
+        .estimate_token_count_with_base_instructions(base_instructions)
+        .is_some_and(|estimated_tokens| estimated_tokens > prompt_tokens_cap)
+    {
+        let can_trim_old_history = history
+            .raw_items()
+            .iter()
+            .rposition(is_user_turn_boundary)
+            .is_some_and(|last_user_index| last_user_index > 0);
+        if !can_trim_old_history {
+            break;
+        }
+        history.remove_first_item();
+    }
+
+    history.raw_items().to_vec()
 }
 
 fn is_chat_completions_contextual_instruction_text(text: &str) -> bool {
@@ -3375,7 +3488,8 @@ fn tool_output_to_chat_text(output: &FunctionCallOutputPayload) -> String {
 }
 
 fn chat_completions_custom_tool_names(tools: &[ToolSpec]) -> HashSet<String> {
-    tools.iter()
+    tools
+        .iter()
         .filter_map(|tool| match tool {
             ToolSpec::Freeform(tool) => Some(tool.name.clone()),
             _ => None,
@@ -3439,25 +3553,38 @@ async fn execute_chat_completions_streaming_request(
     session_telemetry: &SessionTelemetry,
     idle_timeout: Duration,
 ) -> std::result::Result<ResponseStream, TransportError> {
-    let transport = ReqwestTransport::new(build_reqwest_client());
-    let mut http_request = provider.build_request(Method::POST, "chat/completions");
-    http_request.headers.extend(extra_headers);
-    if let Some(token) = auth.token.as_ref()
-        && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
-    {
+    let request_body =
+        serde_json::to_value(request).map_err(|err| TransportError::Build(err.to_string()))?;
+    let auth_token = auth.token.clone();
+    let account_id = auth.account_id.clone();
+    let make_request = || {
+        let mut http_request = provider.build_request(Method::POST, "chat/completions");
+        http_request.headers.extend(extra_headers.clone());
+        if let Some(token) = auth_token.as_ref()
+            && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
+        {
+            http_request
+                .headers
+                .insert(http::header::AUTHORIZATION, header);
+        }
+        if let Some(account_id) = account_id.as_ref()
+            && let Ok(header) = HeaderValue::from_str(account_id)
+        {
+            http_request.headers.insert("ChatGPT-Account-ID", header);
+        }
+        http_request.body = Some(request_body.clone());
         http_request
-            .headers
-            .insert(http::header::AUTHORIZATION, header);
-    }
-    if let Some(account_id) = auth.account_id.as_ref()
-        && let Ok(header) = HeaderValue::from_str(account_id)
-    {
-        http_request.headers.insert("ChatGPT-Account-ID", header);
-    }
-    http_request.body =
-        Some(serde_json::to_value(request).map_err(|err| TransportError::Build(err.to_string()))?);
+    };
 
-    let stream_response = transport.stream(http_request).await?;
+    let stream_response = run_with_retry(
+        provider.retry.to_policy(),
+        make_request,
+        |req, _attempt| async move {
+            let transport = ReqwestTransport::new(build_reqwest_client());
+            transport.stream(req).await
+        },
+    )
+    .await?;
     let (tx, mut rx) = mpsc::channel(128);
     sse_stream(stream_response.bytes, idle_timeout, tx);
 
@@ -3478,7 +3605,9 @@ async fn execute_chat_completions_streaming_request(
             let raw = match frame {
                 Ok(raw) => raw,
                 Err(err) => {
-                    let _ = tx_event.send(Err(map_api_error(ApiError::Stream(err.to_string())))).await;
+                    let _ = tx_event
+                        .send(Err(map_api_error(ApiError::Stream(err.to_string()))))
+                        .await;
                     return;
                 }
             };
@@ -3516,7 +3645,11 @@ async fn execute_chat_completions_streaming_request(
             if let Some(model) = chunk.model.clone() {
                 if response_model.as_deref() != Some(model.as_str()) {
                     response_model = Some(model.clone());
-                    if tx_event.send(Ok(ResponseEvent::ServerModel(model))).await.is_err() {
+                    if tx_event
+                        .send(Ok(ResponseEvent::ServerModel(model)))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -3624,17 +3757,20 @@ async fn execute_chat_completions_streaming_request(
                 }
 
                 for tool_call_delta in delta.tool_calls {
-                    let entry = pending_tool_calls.entry(tool_call_delta.index).or_insert_with(|| {
-                        ChatCompletionToolCall {
+                    let entry = pending_tool_calls
+                        .entry(tool_call_delta.index)
+                        .or_insert_with(|| ChatCompletionToolCall {
                             id: tool_call_delta.id.clone(),
-                            kind: tool_call_delta.kind.clone().unwrap_or_else(default_chat_completion_tool_call_kind),
+                            kind: tool_call_delta
+                                .kind
+                                .clone()
+                                .unwrap_or_else(default_chat_completion_tool_call_kind),
                             function: ChatCompletionCalledFunction {
                                 name: String::new(),
                                 arguments: String::new(),
                             },
                             extra_content: tool_call_delta.extra_content.clone(),
-                        }
-                    });
+                        });
                     if entry.id.is_none() {
                         entry.id = tool_call_delta.id.clone();
                     }
@@ -3661,7 +3797,11 @@ async fn execute_chat_completions_streaming_request(
         if emitted_message {
             let item =
                 assistant_chat_completions_response_item("assistant".to_string(), text_accumulator);
-            if tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await.is_err() {
+            if tx_event
+                .send(Ok(ResponseEvent::OutputItemDone(item)))
+                .await
+                .is_err()
+            {
                 return;
             }
         }
@@ -3671,7 +3811,11 @@ async fn execute_chat_completions_streaming_request(
         for (index, tool_call) in ordered_tool_calls {
             let item =
                 chat_completions_tool_call_response_item(tool_call, index, &custom_tool_names);
-            if tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await.is_err() {
+            if tx_event
+                .send(Ok(ResponseEvent::OutputItemDone(item)))
+                .await
+                .is_err()
+            {
                 return;
             }
         }
@@ -3817,9 +3961,7 @@ fn chat_completions_response_to_events(
                     }
                     if !emitted_reasoning_summary_part {
                         emitted_reasoning_summary_part = true;
-                        events.push(ResponseEvent::ReasoningSummaryPartAdded {
-                            summary_index: 0,
-                        });
+                        events.push(ResponseEvent::ReasoningSummaryPartAdded { summary_index: 0 });
                     }
                     events.push(ResponseEvent::ReasoningSummaryDelta {
                         delta: segment.text,

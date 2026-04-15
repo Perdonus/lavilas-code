@@ -540,7 +540,20 @@ fn build_chat_completions_request_omits_reasoning_effort_for_mistral_without_met
 fn parse_openrouter_affordable_max_tokens_extracts_limit_from_credit_error() {
     let body = "This request requires more credits, or fewer max_tokens. You requested up to 65536 tokens, but can only afford 149. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account.";
 
-    assert_eq!(super::parse_openrouter_affordable_max_tokens(Some(body)), Some(149));
+    assert_eq!(
+        super::parse_openrouter_affordable_max_tokens(Some(body)),
+        Some(149)
+    );
+}
+
+#[test]
+fn parse_openrouter_affordable_prompt_tokens_extracts_limit_from_credit_error() {
+    let body = "Prompt tokens limit exceeded: 22683 > 167. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account.";
+
+    assert_eq!(
+        super::parse_openrouter_affordable_prompt_tokens(Some(body)),
+        Some(167)
+    );
 }
 
 #[test]
@@ -568,6 +581,80 @@ fn build_chat_completions_request_applies_cached_openrouter_max_tokens_cap() {
         .expect("chat completions request");
 
     assert_eq!(request.max_tokens, Some(149));
+}
+
+#[test]
+fn build_chat_completions_request_applies_cached_openrouter_prompt_tokens_cap() {
+    let provider = openrouter_provider();
+    let client = test_model_client_with_provider(provider.clone());
+    client.remember_chat_completions_prompt_tokens_cap(&provider, "openai/gpt-4.1", 120);
+
+    let prompt = super::Prompt {
+        base_instructions: BaseInstructions {
+            text: "short instructions".to_string(),
+        },
+        input: vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "old history ".repeat(400),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "old reply ".repeat(400),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "latest question".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ],
+        tools: vec![],
+        parallel_tool_calls: false,
+        personality: None,
+        output_schema: None,
+    };
+    let mut model_info = test_model_info();
+    model_info.slug = "openai/gpt-4.1".to_string();
+
+    let request = client
+        .new_session()
+        .build_chat_completions_request(&prompt, &model_info, None)
+        .expect("chat completions request");
+
+    let message_texts = request
+        .messages
+        .iter()
+        .filter_map(|message| message.content.as_ref().and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(
+        message_texts
+            .iter()
+            .any(|text| text.contains("latest question"))
+    );
+    assert!(
+        !message_texts
+            .iter()
+            .any(|text| text.contains("old history")),
+        "old user history should be trimmed when OpenRouter caps prompt tokens"
+    );
+    assert!(
+        !message_texts.iter().any(|text| text.contains("old reply")),
+        "old assistant history should be trimmed alongside the oversized replay"
+    );
 }
 
 #[test]
@@ -825,9 +912,7 @@ fn build_chat_completions_messages_hoists_contextual_user_scaffolding_to_leading
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: ENVIRONMENT_CONTEXT_FRAGMENT.wrap(
-                        "<cwd>/root/project</cwd>".to_string(),
-                    ),
+                    text: ENVIRONMENT_CONTEXT_FRAGMENT.wrap("<cwd>/root/project</cwd>".to_string()),
                 }],
                 end_turn: None,
                 phase: None,
@@ -1092,7 +1177,8 @@ fn build_chat_completions_messages_replays_builtin_provider_tools_as_tool_histor
             .content
             .as_ref()
             .and_then(Value::as_str)
-            .is_some_and(|text| text.contains("[image generation result omitted during provider translation]"))
+            .is_some_and(|text| text
+                .contains("[image generation result omitted during provider translation]"))
     );
 }
 
@@ -1175,10 +1261,7 @@ fn build_chat_completions_messages_batches_consecutive_tool_calls_into_one_assis
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[0].role, "assistant");
     assert_eq!(
-        messages[0]
-            .tool_calls
-            .as_ref()
-            .map(std::vec::Vec::len),
+        messages[0].tool_calls.as_ref().map(std::vec::Vec::len),
         Some(2)
     );
     assert_eq!(messages[1].role, "tool");
@@ -1292,10 +1375,11 @@ fn chat_completions_response_emits_reasoning_events_from_structured_content() {
 
     let events = chat_completions_response_to_events(response).expect("events");
 
-    assert!(events.iter().any(|event| matches!(
-        event,
-        super::ResponseEvent::ServerReasoningIncluded(true)
-    )));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, super::ResponseEvent::ServerReasoningIncluded(true)))
+    );
     assert!(events.iter().any(|event| matches!(
         event,
         super::ResponseEvent::ReasoningSummaryPartAdded { summary_index: 0 }
