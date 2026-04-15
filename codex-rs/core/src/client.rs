@@ -151,6 +151,7 @@ const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 const GOOGLE_THOUGHT_SIGNATURE_PREFIX: &str = "google-thought-signature:";
+const OPENROUTER_API_HOST: &str = "openrouter.ai";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -161,6 +162,14 @@ fn provider_uses_mistral_api(provider: &ModelProviderInfo) -> bool {
 
 fn provider_uses_gemini_api(provider: &ModelProviderInfo) -> bool {
     provider.uses_gemini_api()
+}
+
+fn provider_uses_openrouter_api(provider: &ModelProviderInfo) -> bool {
+    provider.name.eq_ignore_ascii_case("openrouter")
+        || provider
+            .base_url
+            .as_deref()
+            .is_some_and(|base_url| base_url.to_ascii_lowercase().contains(OPENROUTER_API_HOST))
 }
 
 fn effective_wire_api(provider: &ModelProviderInfo) -> WireApi {
@@ -233,6 +242,30 @@ fn decode_google_thought_signature(id: Option<&String>) -> Option<&str> {
     id.and_then(|value| value.strip_prefix(GOOGLE_THOUGHT_SIGNATURE_PREFIX))
 }
 
+fn parse_decimal_after_marker(text: &str, marker: &str) -> Option<u32> {
+    let start = text.find(marker)?.checked_add(marker.len())?;
+    let digits = text[start..]
+        .chars()
+        .skip_while(|ch| !ch.is_ascii_digit())
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    digits.parse().ok()
+}
+
+fn parse_openrouter_affordable_max_tokens(body: Option<&str>) -> Option<u32> {
+    let body = body?.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let lowercase = body.to_ascii_lowercase();
+    if !lowercase.contains("fewer max_tokens") || !lowercase.contains("can only afford") {
+        return None;
+    }
+
+    parse_decimal_after_marker(&lowercase, "can only afford ").filter(|max_tokens| *max_tokens > 0)
+}
+
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -244,6 +277,7 @@ struct ModelClientState {
     runtime_config: StdRwLock<ModelClientRuntimeConfig>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
+    chat_completions_max_tokens_caps: StdMutex<HashMap<String, u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -396,6 +430,7 @@ impl ModelClient {
                 }),
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                chat_completions_max_tokens_caps: StdMutex::new(HashMap::new()),
             }),
         }
     }
@@ -493,6 +528,68 @@ impl ModelClient {
             .cached_websocket_session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
+    }
+
+    fn chat_completions_max_tokens_cache_key(
+        provider: &ModelProviderInfo,
+        model: &str,
+    ) -> Option<String> {
+        if !provider_uses_openrouter_api(provider) {
+            return None;
+        }
+
+        let base_url = provider.base_url.as_deref()?.trim_end_matches('/');
+        if base_url.is_empty() {
+            return None;
+        }
+
+        Some(format!("{base_url}::{}", model.trim().to_ascii_lowercase()))
+    }
+
+    fn cached_chat_completions_max_tokens_cap(
+        &self,
+        provider: &ModelProviderInfo,
+        model: &str,
+    ) -> Option<u32> {
+        let key = Self::chat_completions_max_tokens_cache_key(provider, model)?;
+        self.state
+            .chat_completions_max_tokens_caps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .copied()
+    }
+
+    fn remember_chat_completions_max_tokens_cap(
+        &self,
+        provider: &ModelProviderInfo,
+        model: &str,
+        max_tokens: u32,
+    ) -> bool {
+        if max_tokens == 0 {
+            return false;
+        }
+
+        let Some(key) = Self::chat_completions_max_tokens_cache_key(provider, model) else {
+            return false;
+        };
+
+        let mut caps = self
+            .state
+            .chat_completions_max_tokens_caps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match caps.get_mut(&key) {
+            Some(existing) if *existing <= max_tokens => false,
+            Some(existing) => {
+                *existing = max_tokens;
+                true
+            }
+            None => {
+                caps.insert(key, max_tokens);
+                true
+            }
+        }
     }
 
     pub(crate) fn force_http_fallback(
@@ -1097,6 +1194,10 @@ impl ModelClientSession {
                 .model_supports_parallel_tool_calls(model_info.slug.as_str());
 
         Ok(ChatCompletionsRequest {
+            max_tokens: self.client.cached_chat_completions_max_tokens_cap(
+                &runtime_config.provider,
+                request_model.as_ref(),
+            ),
             model: request_model.into_owned(),
             messages,
             tools,
@@ -1520,6 +1621,30 @@ impl ModelClientSession {
                     )
                     .await?;
                     continue;
+                }
+                Err(err @ TransportError::Http {
+                    status,
+                    ref body,
+                    ..
+                }) if status == StatusCode::PAYMENT_REQUIRED => {
+                    let provider = self.client.runtime_config().provider;
+                    if let Some(max_tokens) = parse_openrouter_affordable_max_tokens(body.as_deref())
+                        && self.client.remember_chat_completions_max_tokens_cap(
+                            &provider,
+                            request.model.as_str(),
+                            max_tokens,
+                        )
+                        && request.max_tokens != Some(max_tokens)
+                    {
+                        warn!(
+                            model = %request.model,
+                            max_tokens,
+                            "retrying OpenRouter chat completions request with reduced max_tokens"
+                        );
+                        continue;
+                    }
+
+                    return Err(map_api_error(ApiError::Transport(err)));
                 }
                 Err(err) => return Err(map_api_error(ApiError::Transport(err))),
             }
@@ -2302,6 +2427,8 @@ impl WebsocketTelemetry for ApiTelemetry {
 #[derive(Debug, Clone, Serialize)]
 struct ChatCompletionsRequest {
     model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     messages: Vec<ChatCompletionsMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<JsonValue>,

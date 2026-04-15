@@ -111,6 +111,27 @@ fn mistral_provider() -> ModelProviderInfo {
     }
 }
 
+fn openrouter_provider() -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "OpenRouter".to_string(),
+        base_url: Some("https://openrouter.ai/api/v1".to_string()),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        wire_api: WireApi::ChatCompletions,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    }
+}
+
 fn test_model_info() -> ModelInfo {
     serde_json::from_value(json!({
         "slug": "gpt-test",
@@ -513,6 +534,40 @@ fn build_chat_completions_request_omits_reasoning_effort_for_mistral_without_met
         .expect("chat completions request");
 
     assert_eq!(request.reasoning_effort, None);
+}
+
+#[test]
+fn parse_openrouter_affordable_max_tokens_extracts_limit_from_credit_error() {
+    let body = "This request requires more credits, or fewer max_tokens. You requested up to 65536 tokens, but can only afford 149. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account.";
+
+    assert_eq!(super::parse_openrouter_affordable_max_tokens(Some(body)), Some(149));
+}
+
+#[test]
+fn build_chat_completions_request_applies_cached_openrouter_max_tokens_cap() {
+    let provider = openrouter_provider();
+    let client = test_model_client_with_provider(provider.clone());
+    client.remember_chat_completions_max_tokens_cap(&provider, "openai/gpt-4.1", 149);
+
+    let prompt = super::Prompt {
+        base_instructions: BaseInstructions {
+            text: "".to_string(),
+        },
+        input: vec![],
+        tools: vec![],
+        parallel_tool_calls: false,
+        personality: None,
+        output_schema: None,
+    };
+    let mut model_info = test_model_info();
+    model_info.slug = "openai/gpt-4.1".to_string();
+
+    let request = client
+        .new_session()
+        .build_chat_completions_request(&prompt, &model_info, None)
+        .expect("chat completions request");
+
+    assert_eq!(request.max_tokens, Some(149));
 }
 
 #[test]
