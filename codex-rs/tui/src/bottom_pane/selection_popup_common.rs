@@ -333,7 +333,7 @@ fn selection_highlight_palette_from_choice(
     match choice {
         UiColorChoice::Auto => selection_highlight_palette_for_preset(fallback_preset),
         UiColorChoice::Preset(preset) => selection_highlight_palette_for_preset(preset),
-        UiColorChoice::Custom(hex) => parse_hex_color(hex)
+        UiColorChoice::Custom(hex) => parse_hex_color(&hex)
             .map(custom_selection_highlight_palette)
             .unwrap_or_else(|| selection_highlight_palette_for_preset(fallback_preset)),
     }
@@ -354,7 +354,7 @@ fn resolve_text_color_choice(
                 palette.text_fg
             })
         }
-        UiColorChoice::Custom(hex) => parse_hex_color(hex).map(|base| {
+        UiColorChoice::Custom(hex) => parse_hex_color(&hex).map(|base| {
             if is_secondary {
                 mix_color(base, Color::Gray, 0.3)
             } else {
@@ -423,9 +423,10 @@ fn unselected_row_styles() -> (Style, Style) {
         true,
     );
 
+    let secondary_choice = preferences.list_secondary_color.clone();
     let mut secondary = Style::default();
     if let Some(color) = resolve_text_color_choice(
-        preferences.list_secondary_color,
+        secondary_choice.clone(),
         true,
         current_selection_highlight_preset(),
     ) {
@@ -436,7 +437,7 @@ fn unselected_row_styles() -> (Style, Style) {
     secondary = apply_terminal_safe_formats(
         secondary,
         preferences.list_text_formats,
-        preferences.list_secondary_color != UiColorChoice::Auto,
+        secondary_choice != UiColorChoice::Auto,
         true,
     );
 

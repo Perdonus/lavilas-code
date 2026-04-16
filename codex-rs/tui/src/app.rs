@@ -6432,7 +6432,10 @@ impl App {
                     .into_iter()
                     .find(|font| font.id == font_id)
                 {
-                    if let Err(err) = remove_installed_font(self.config.codex_home.as_path(), &font)
+                    if let Err(err) = remove_installed_font(
+                        self.config.codex_home.as_path(),
+                        font.id.as_str(),
+                    )
                     {
                         self.chat_widget.add_error_message(if self.ui_language_is_ru() {
                             format!("Не удалось удалить файлы шрифта: {err}")

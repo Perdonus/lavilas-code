@@ -247,6 +247,7 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
@@ -12052,10 +12053,13 @@ impl ChatWidget {
             ..Default::default()
         };
 
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_COLOR_VIEW_ID, params)
-        {
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID);
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(SELECTION_HIGHLIGHT_COLOR_VIEW_ID, params);
+        } else {
             self.bottom_pane.show_selection_view(params);
         }
     }
@@ -12137,10 +12141,14 @@ impl ChatWidget {
             ..Default::default()
         };
 
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID, params)
-        {
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID);
+        if replace_active {
+            let _ = self.bottom_pane.replace_selection_view_if_active(
+                SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID,
+                params,
+            );
+        } else {
             self.bottom_pane.show_selection_view(params);
         }
     }
@@ -12293,10 +12301,14 @@ impl ChatWidget {
             ..Default::default()
         };
 
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID, params)
-        {
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID);
+        if replace_active {
+            let _ = self.bottom_pane.replace_selection_view_if_active(
+                SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID,
+                params,
+            );
+        } else {
             self.bottom_pane.show_selection_view(params);
         }
     }
@@ -12417,10 +12429,13 @@ impl ChatWidget {
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))),
             ..Default::default()
         };
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FORMAT_VIEW_ID, params)
-        {
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_FORMAT_VIEW_ID);
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FORMAT_VIEW_ID, params);
+        } else {
             self.bottom_pane.show_selection_view(params);
         }
     }
@@ -12492,10 +12507,14 @@ impl ChatWidget {
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFormatPicker))),
             ..Default::default()
         };
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID, params)
-        {
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID);
+        if replace_active {
+            let _ = self.bottom_pane.replace_selection_view_if_active(
+                SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID,
+                params,
+            );
+        } else {
             self.bottom_pane.show_selection_view(params);
         }
     }
@@ -12600,10 +12619,13 @@ impl ChatWidget {
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))),
             ..Default::default()
         };
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FONTS_VIEW_ID, params)
-        {
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_FONTS_VIEW_ID);
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FONTS_VIEW_ID, params);
+        } else {
             self.bottom_pane.show_selection_view(params);
         }
     }
@@ -12728,10 +12750,13 @@ impl ChatWidget {
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))),
             ..Default::default()
         };
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID, params)
-        {
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID);
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID, params);
+        } else {
             self.bottom_pane.show_selection_view(params);
         }
     }
@@ -12852,10 +12877,14 @@ impl ChatWidget {
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))),
             ..Default::default()
         };
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID, params)
-        {
+        let replace_active =
+            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID);
+        if replace_active {
+            let _ = self.bottom_pane.replace_selection_view_if_active(
+                SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID,
+                params,
+            );
+        } else {
             self.bottom_pane.show_selection_view(params);
         }
     }
