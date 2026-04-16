@@ -12643,6 +12643,7 @@ impl ChatWidget {
             } else {
                 "Return to installed fonts.".to_string()
             }),
+            search_value: (!query.is_empty()).then_some(query.clone()),
             actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))],
             dismiss_on_select: true,
             ..Default::default()
@@ -12658,6 +12659,7 @@ impl ChatWidget {
             } else {
                 "Type a family name and get a one-click install option.".to_string()
             }),
+            search_value: (!query.is_empty()).then_some(query.clone()),
             actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightCustomFontPrompt))],
             dismiss_on_select: true,
             ..Default::default()
@@ -12674,6 +12676,7 @@ impl ChatWidget {
                 } else {
                     "Direct Google Fonts request for this family.".to_string()
                 }),
+                search_value: Some(query.clone()),
                 actions: vec![Box::new({
                     let family = query.clone();
                     move |tx| tx.send(AppEvent::InstallGoogleFont {
@@ -12739,15 +12742,20 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some(if is_ru {
-                "Найти шрифт в каталоге".to_string()
+                "Начните печатать название шрифта".to_string()
             } else {
-                "Search the font catalog".to_string()
+                "Start typing a font family".to_string()
             }),
+            initial_search_query: (!query.is_empty()).then_some(query.clone()),
             initial_selected_idx: self
                 .bottom_pane
                 .selected_index_for_active_view(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID)
                 .or(Some(1)),
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))),
+            on_search_query_changed: Some(Box::new(|query, tx| {
+                let trimmed = query.trim().to_string();
+                tx.send(AppEvent::OpenSelectionHighlightFontSearchResults { query: trimmed });
+            })),
             ..Default::default()
         };
         let replace_active =

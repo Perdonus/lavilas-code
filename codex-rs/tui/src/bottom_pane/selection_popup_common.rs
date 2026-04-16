@@ -369,12 +369,12 @@ fn ensure_visible_text_color(color: Color, is_secondary: bool) -> Color {
     let Some(luminance) = color_luminance(color) else {
         return color;
     };
-    let threshold = if is_secondary { 0.62 } else { 0.72 };
-    if luminance < threshold {
+    let minimum = if is_secondary { 0.22 } else { 0.16 };
+    if luminance >= minimum {
         return color;
     }
-    let darken_weight = if is_secondary { 0.58 } else { 0.72 };
-    darken_color(color, darken_weight)
+    let lighten_weight = if is_secondary { 0.42 } else { 0.34 };
+    lighten_color(color, lighten_weight)
 }
 
 fn apply_terminal_safe_formats(
@@ -1572,6 +1572,13 @@ mod tests {
     }
 
     #[test]
+    fn visible_text_guard_preserves_light_colors() {
+        let color = Color::Rgb(240, 236, 230);
+        assert_eq!(ensure_visible_text_color(color, false), color);
+        assert_eq!(ensure_visible_text_color(color, true), color);
+    }
+
+    #[test]
     fn selected_secondary_spans_drop_dim_and_keep_contrast() {
         set_selection_highlight_preset(SelectionHighlightPreset::Rose);
         set_selection_highlight_fill(false);
@@ -1620,7 +1627,7 @@ mod tests {
     }
 
     #[test]
-    fn extended_text_formats_remain_safe_in_text_only_mode() {
+    fn unsupported_text_formats_are_sanitized_in_text_only_mode() {
         set_selection_highlight_fill(false);
         set_selection_highlight_text_formats(
             SelectionHighlightTextFormats::empty()
@@ -1630,8 +1637,8 @@ mod tests {
         );
 
         let style = selection_highlight_style();
-        assert!(style.add_modifier.contains(Modifier::DIM));
-        assert!(style.add_modifier.contains(Modifier::REVERSED));
+        assert!(!style.add_modifier.contains(Modifier::DIM));
+        assert!(!style.add_modifier.contains(Modifier::REVERSED));
         assert!(style.add_modifier.contains(Modifier::CROSSED_OUT));
 
         set_selection_highlight_fill(true);

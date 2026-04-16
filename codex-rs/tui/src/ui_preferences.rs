@@ -124,15 +124,13 @@ impl SelectionHighlightTextFormat {
         self as u16
     }
 
-    pub(crate) const fn all() -> [Self; 8] {
+    pub(crate) const fn all() -> [Self; 6] {
         [
             Self::Bold,
             Self::Semibold,
             Self::Italic,
             Self::Underlined,
             Self::Mono,
-            Self::Dim,
-            Self::Reversed,
             Self::CrossedOut,
         ]
     }
@@ -149,8 +147,6 @@ impl SelectionHighlightTextFormats {
         | SelectionHighlightTextFormat::Italic.bit()
         | SelectionHighlightTextFormat::Underlined.bit()
         | SelectionHighlightTextFormat::Mono.bit()
-        | SelectionHighlightTextFormat::Dim.bit()
-        | SelectionHighlightTextFormat::Reversed.bit()
         | SelectionHighlightTextFormat::CrossedOut.bit();
 
     pub(crate) const fn empty() -> Self {
@@ -162,9 +158,13 @@ impl SelectionHighlightTextFormats {
     }
 
     pub(crate) const fn from_bits(bits: u16) -> Self {
-        Self {
-            bits: bits & Self::ALL_BITS,
+        let mut bits = bits & Self::ALL_BITS;
+        if bits & SelectionHighlightTextFormat::Bold.bit() != 0
+            && bits & SelectionHighlightTextFormat::Semibold.bit() != 0
+        {
+            bits &= !SelectionHighlightTextFormat::Semibold.bit();
         }
+        Self { bits }
     }
 
     pub(crate) const fn contains(self, format: SelectionHighlightTextFormat) -> bool {
@@ -1329,6 +1329,16 @@ mod tests {
         );
         assert_eq!(preferences.command_prefix, '!');
         assert_eq!(preferences.hidden_commands, vec!["model", "profiles"]);
+    }
+
+    #[test]
+    fn selection_highlight_formats_strip_conflicting_weight() {
+        let formats = SelectionHighlightTextFormats::empty()
+            .with_toggled(SelectionHighlightTextFormat::Bold)
+            .with_toggled(SelectionHighlightTextFormat::Semibold);
+
+        assert!(formats.contains(SelectionHighlightTextFormat::Bold));
+        assert!(!formats.contains(SelectionHighlightTextFormat::Semibold));
     }
 
     #[test]

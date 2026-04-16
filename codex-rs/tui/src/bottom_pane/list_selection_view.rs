@@ -113,6 +113,10 @@ pub(crate) type OnSelectionChangedCallback =
 /// Ctrl+C).  Used by the theme picker to restore the pre-open theme.
 pub(crate) type OnCancelCallback = Option<Box<dyn Fn(&AppEventSender) + Send + Sync>>;
 
+/// Callback invoked whenever the search query changes in a searchable picker.
+pub(crate) type OnSearchQueryChangedCallback =
+    Option<Box<dyn Fn(&str, &AppEventSender) + Send + Sync>>;
+
 /// One row in a [`ListSelectionView`] selection list.
 ///
 /// This is the source-of-truth model for row state before filtering and
@@ -155,6 +159,7 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
+    pub initial_search_query: Option<String>,
     pub dense_rows: bool,
     pub col_width_mode: ColumnWidthMode,
     pub header: Box<dyn Renderable>,
@@ -185,6 +190,9 @@ pub(crate) struct SelectionViewParams {
 
     /// Called when the picker is dismissed via Esc/Ctrl+C without selecting.
     pub on_cancel: OnCancelCallback,
+
+    /// Called whenever the search query changes in a searchable picker.
+    pub on_search_query_changed: OnSearchQueryChangedCallback,
 }
 
 impl Default for SelectionViewParams {
@@ -198,6 +206,7 @@ impl Default for SelectionViewParams {
             items: Vec::new(),
             is_searchable: false,
             search_placeholder: None,
+            initial_search_query: None,
             dense_rows: false,
             col_width_mode: ColumnWidthMode::AutoVisible,
             header: Box::new(()),
@@ -209,6 +218,7 @@ impl Default for SelectionViewParams {
             preserve_side_content_bg: false,
             on_selection_changed: None,
             on_cancel: None,
+            on_search_query_changed: None,
         }
     }
 }
@@ -229,6 +239,7 @@ pub(crate) struct ListSelectionView {
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
+    on_search_query_changed: OnSearchQueryChangedCallback,
     dense_rows: bool,
     col_width_mode: ColumnWidthMode,
     filtered_indices: Vec<usize>,
@@ -294,12 +305,13 @@ impl ListSelectionView {
             complete: false,
             app_event_tx,
             is_searchable: params.is_searchable,
-            search_query: String::new(),
+            search_query: params.initial_search_query.unwrap_or_default(),
             search_placeholder: if params.is_searchable {
                 params.search_placeholder
             } else {
                 None
             },
+            on_search_query_changed: params.on_search_query_changed,
             dense_rows: params.dense_rows,
             col_width_mode: params.col_width_mode,
             filtered_indices: Vec::new(),
@@ -540,6 +552,21 @@ impl ListSelectionView {
         }
     }
 
+    fn fire_search_query_changed(&self) {
+        if let Some(cb) = &self.on_search_query_changed {
+            cb(self.search_query.as_str(), &self.app_event_tx);
+        }
+    }
+
+    fn update_search_query_from_input(&mut self, query: String) {
+        if self.search_query == query {
+            return;
+        }
+        self.search_query = query;
+        self.apply_filter();
+        self.fire_search_query_changed();
+    }
+
     fn accept(&mut self) {
         let selected_item = self
             .state
@@ -759,8 +786,9 @@ impl ListSelectionView {
     }
 
     fn handle_search_backspace(&mut self) {
-        self.search_query.pop();
-        self.apply_filter();
+        let mut query = self.search_query.clone();
+        query.pop();
+        self.update_search_query_from_input(query);
     }
 }
 
@@ -867,8 +895,9 @@ impl BottomPaneView for ListSelectionView {
                 && !modifiers.contains(KeyModifiers::CONTROL)
                 && !modifiers.contains(KeyModifiers::ALT) =>
             {
-                self.search_query.push(c);
-                self.apply_filter();
+                let mut query = self.search_query.clone();
+                query.push(c);
+                self.update_search_query_from_input(query);
             }
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -1296,6 +1325,8 @@ mod tests {
     use ratatui::layout::Rect;
     use ratatui::style::Color;
     use ratatui::style::Style;
+    use std::sync::Arc;
+    use std::sync::Mutex;
     use tokio::sync::mpsc::unbounded_channel;
 
     struct MarkerRenderable {
@@ -1667,6 +1698,45 @@ mod tests {
         assert!(
             !rendered.contains("filter"),
             "expected old search query to disappear after Ctrl+H, got {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn searchable_view_reports_query_changes() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let seen_queries = Arc::new(Mutex::new(Vec::<String>::new()));
+        let callback_queries = Arc::clone(&seen_queries);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![SelectionItem {
+                    name: "JetBrains Mono".to_string(),
+                    search_value: Some("JetBrains Mono".to_string()),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
+                is_searchable: true,
+                on_search_query_changed: Some(Box::new(move |query, _tx| {
+                    callback_queries
+                        .lock()
+                        .expect("query callback mutex poisoned")
+                        .push(query.to_string());
+                })),
+                ..Default::default()
+            },
+            tx,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert_eq!(
+            seen_queries
+                .lock()
+                .expect("query callback mutex poisoned")
+                .clone(),
+            vec!["j".to_string(), "je".to_string(), "j".to_string()]
         );
     }
 
