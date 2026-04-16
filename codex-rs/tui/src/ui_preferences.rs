@@ -86,6 +86,9 @@ pub(crate) enum SelectionHighlightTextFormat {
     Italic = 1 << 2,
     Underlined = 1 << 3,
     Mono = 1 << 4,
+    Dim = 1 << 5,
+    Reversed = 1 << 6,
+    CrossedOut = 1 << 7,
 }
 
 impl SelectionHighlightTextFormat {
@@ -96,6 +99,10 @@ impl SelectionHighlightTextFormat {
             "italic" => Some(Self::Italic),
             "underlined" => Some(Self::Underlined),
             "mono" => Some(Self::Mono),
+            "dim" => Some(Self::Dim),
+            "reversed" => Some(Self::Reversed),
+            "crossed_out" => Some(Self::CrossedOut),
+            "crossedout" => Some(Self::CrossedOut),
             _ => None,
         }
     }
@@ -107,45 +114,54 @@ impl SelectionHighlightTextFormat {
             Self::Italic => "italic",
             Self::Underlined => "underlined",
             Self::Mono => "mono",
+            Self::Dim => "dim",
+            Self::Reversed => "reversed",
+            Self::CrossedOut => "crossed_out",
         }
     }
 
-    pub(crate) const fn bit(self) -> u8 {
-        self as u8
+    pub(crate) const fn bit(self) -> u16 {
+        self as u16
     }
 
-    pub(crate) const fn all() -> [Self; 5] {
+    pub(crate) const fn all() -> [Self; 8] {
         [
             Self::Bold,
             Self::Semibold,
             Self::Italic,
             Self::Underlined,
             Self::Mono,
+            Self::Dim,
+            Self::Reversed,
+            Self::CrossedOut,
         ]
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct SelectionHighlightTextFormats {
-    bits: u8,
+    bits: u16,
 }
 
 impl SelectionHighlightTextFormats {
-    const ALL_BITS: u8 = SelectionHighlightTextFormat::Bold.bit()
+    const ALL_BITS: u16 = SelectionHighlightTextFormat::Bold.bit()
         | SelectionHighlightTextFormat::Semibold.bit()
         | SelectionHighlightTextFormat::Italic.bit()
         | SelectionHighlightTextFormat::Underlined.bit()
-        | SelectionHighlightTextFormat::Mono.bit();
+        | SelectionHighlightTextFormat::Mono.bit()
+        | SelectionHighlightTextFormat::Dim.bit()
+        | SelectionHighlightTextFormat::Reversed.bit()
+        | SelectionHighlightTextFormat::CrossedOut.bit();
 
     pub(crate) const fn empty() -> Self {
         Self { bits: 0 }
     }
 
-    pub(crate) const fn bits(self) -> u8 {
+    pub(crate) const fn bits(self) -> u16 {
         self.bits
     }
 
-    pub(crate) const fn from_bits(bits: u8) -> Self {
+    pub(crate) const fn from_bits(bits: u16) -> Self {
         Self {
             bits: bits & Self::ALL_BITS,
         }
@@ -173,7 +189,7 @@ impl SelectionHighlightTextFormats {
                 .iter()
                 .filter_map(serde_json::Value::as_str)
                 .filter_map(SelectionHighlightTextFormat::from_code)
-                .fold(0u8, |acc, format| acc | format.bit());
+                .fold(0u16, |acc, format| acc | format.bit());
             return Self::from_bits(bits);
         }
 
@@ -186,7 +202,7 @@ impl SelectionHighlightTextFormats {
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false)
                 })
-                .fold(0u8, |acc, format| acc | format.bit());
+                .fold(0u16, |acc, format| acc | format.bit());
             return Self::from_bits(bits);
         }
 
@@ -205,11 +221,90 @@ impl SelectionHighlightTextFormats {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UiColorChoice {
+    Auto,
+    Preset(SelectionHighlightPreset),
+    Custom(String),
+}
+
+impl Default for UiColorChoice {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+impl UiColorChoice {
+    pub(crate) fn from_setting_value(value: Option<&serde_json::Value>, fallback: Self) -> Self {
+        let Some(value) = value else {
+            return fallback;
+        };
+
+        let Some(raw) = value.as_str() else {
+            return fallback;
+        };
+
+        Self::from_code(raw).unwrap_or(fallback)
+    }
+
+    pub(crate) fn from_code(code: &str) -> Option<Self> {
+        let normalized = code.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return None;
+        }
+        if normalized == "auto" {
+            return Some(Self::Auto);
+        }
+        if let Some(hex) = normalize_hex_color(normalized.as_str()) {
+            return Some(Self::Custom(hex));
+        }
+        Some(Self::Preset(SelectionHighlightPreset::from_code(
+            normalized.as_str(),
+        )))
+    }
+
+    pub(crate) fn to_setting_value(&self) -> serde_json::Value {
+        let code = match self {
+            Self::Auto => "auto".to_string(),
+            Self::Preset(preset) => preset.code().to_string(),
+            Self::Custom(hex) => hex.clone(),
+        };
+        serde_json::Value::String(code)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PopupColorTarget {
+    Selection,
+    ListPrimary,
+    ListSecondary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PopupFormatTarget {
+    Selection,
+    List,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct StoredFontProfile {
+    pub(crate) id: String,
+    pub(crate) family: String,
+    pub(crate) source: String,
+    pub(crate) files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UiPreferences {
     pub(crate) language: UiLanguage,
     pub(crate) selection_highlight_preset: SelectionHighlightPreset,
+    pub(crate) selection_highlight_color: UiColorChoice,
     pub(crate) selection_highlight_fill: bool,
     pub(crate) selection_highlight_text_formats: SelectionHighlightTextFormats,
+    pub(crate) list_primary_color: UiColorChoice,
+    pub(crate) list_secondary_color: UiColorChoice,
+    pub(crate) list_text_formats: SelectionHighlightTextFormats,
+    pub(crate) installed_fonts: Vec<StoredFontProfile>,
+    pub(crate) active_font_id: Option<String>,
     pub(crate) command_prefix: char,
     pub(crate) hidden_commands: Vec<String>,
     pub(crate) model_presets_enabled: bool,
@@ -221,8 +316,14 @@ impl Default for UiPreferences {
         Self {
             language: UiLanguage::Ru,
             selection_highlight_preset: SelectionHighlightPreset::Light,
+            selection_highlight_color: UiColorChoice::Preset(SelectionHighlightPreset::Light),
             selection_highlight_fill: true,
             selection_highlight_text_formats: SelectionHighlightTextFormats::empty(),
+            list_primary_color: UiColorChoice::Auto,
+            list_secondary_color: UiColorChoice::Auto,
+            list_text_formats: SelectionHighlightTextFormats::empty(),
+            installed_fonts: Vec::new(),
+            active_font_id: None,
             command_prefix: '/',
             hidden_commands: Vec::new(),
             model_presets_enabled: true,
@@ -254,6 +355,10 @@ pub(crate) fn profiles_dir(codex_home: &Path) -> PathBuf {
 
 pub(crate) fn settings_path(codex_home: &Path) -> PathBuf {
     profiles_dir(codex_home).join("settings.json")
+}
+
+pub(crate) fn fonts_dir(codex_home: &Path) -> PathBuf {
+    profiles_dir(codex_home).join("Fonts")
 }
 
 pub(crate) fn profile_model_catalog_path(codex_home: &Path, profile_stem: &str) -> PathBuf {
@@ -410,6 +515,10 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
         .and_then(serde_json::Value::as_str)
         .map(SelectionHighlightPreset::from_code)
         .unwrap_or(SelectionHighlightPreset::Light);
+    let selection_highlight_color = UiColorChoice::from_setting_value(
+        value.get("selection_highlight_color"),
+        UiColorChoice::Preset(selection_highlight_preset),
+    );
     let selection_highlight_fill = value
         .get("selection_highlight_fill")
         .and_then(serde_json::Value::as_bool)
@@ -417,6 +526,12 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
     let selection_highlight_text_formats = SelectionHighlightTextFormats::from_setting_value(
         value.get("selection_highlight_text_formats"),
     );
+    let list_primary_color =
+        UiColorChoice::from_setting_value(value.get("list_primary_color"), UiColorChoice::Auto);
+    let list_secondary_color =
+        UiColorChoice::from_setting_value(value.get("list_secondary_color"), UiColorChoice::Auto);
+    let list_text_formats =
+        SelectionHighlightTextFormats::from_setting_value(value.get("list_text_formats"));
     let command_prefix = value
         .get("command_prefix")
         .and_then(serde_json::Value::as_str)
@@ -458,12 +573,34 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
+    let installed_fonts = value
+        .get("fonts")
+        .and_then(|fonts| fonts.get("installed"))
+        .cloned()
+        .and_then(|installed| serde_json::from_value::<Vec<StoredFontProfile>>(installed).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(normalize_stored_font_profile)
+        .collect::<Vec<_>>();
+    let active_font_id = value
+        .get("fonts")
+        .and_then(|fonts| fonts.get("active_font_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
 
     UiPreferences {
         language,
         selection_highlight_preset,
+        selection_highlight_color,
         selection_highlight_fill,
         selection_highlight_text_formats,
+        list_primary_color,
+        list_secondary_color,
+        list_text_formats,
+        installed_fonts,
+        active_font_id,
         command_prefix,
         hidden_commands,
         model_presets_enabled,
@@ -483,10 +620,23 @@ pub(crate) fn save_selection_highlight_preset(
     codex_home: &Path,
     preset: SelectionHighlightPreset,
 ) -> io::Result<()> {
+    let mut json = load_settings_json(codex_home);
+    if !json.is_object() {
+        json = serde_json::json!({});
+    }
+    json["selection_highlight_preset"] = serde_json::Value::String(preset.code().to_string());
+    json["selection_highlight_color"] = UiColorChoice::Preset(preset).to_setting_value();
+    save_settings_json(codex_home, &json)
+}
+
+pub(crate) fn save_selection_highlight_color(
+    codex_home: &Path,
+    choice: UiColorChoice,
+) -> io::Result<()> {
     persist_setting(
         codex_home,
-        "selection_highlight_preset",
-        serde_json::Value::String(preset.code().to_string()),
+        "selection_highlight_color",
+        choice.to_setting_value(),
     )
 }
 
@@ -507,6 +657,24 @@ pub(crate) fn save_selection_highlight_text_formats(
         "selection_highlight_text_formats",
         formats.to_setting_value(),
     )
+}
+
+pub(crate) fn save_list_primary_color(codex_home: &Path, choice: UiColorChoice) -> io::Result<()> {
+    persist_setting(codex_home, "list_primary_color", choice.to_setting_value())
+}
+
+pub(crate) fn save_list_secondary_color(
+    codex_home: &Path,
+    choice: UiColorChoice,
+) -> io::Result<()> {
+    persist_setting(codex_home, "list_secondary_color", choice.to_setting_value())
+}
+
+pub(crate) fn save_list_text_formats(
+    codex_home: &Path,
+    formats: SelectionHighlightTextFormats,
+) -> io::Result<()> {
+    persist_setting(codex_home, "list_text_formats", formats.to_setting_value())
 }
 
 pub(crate) fn save_command_prefix(codex_home: &Path, prefix: char) -> io::Result<()> {
@@ -571,6 +739,44 @@ pub(crate) fn save_provider_model_presets(
     save_settings_json(codex_home, &json)
 }
 
+pub(crate) fn save_installed_fonts(
+    codex_home: &Path,
+    fonts: &[StoredFontProfile],
+) -> io::Result<()> {
+    let normalized = fonts
+        .iter()
+        .cloned()
+        .filter_map(normalize_stored_font_profile)
+        .collect::<Vec<_>>();
+    let mut json = load_settings_json(codex_home);
+    if !json.is_object() {
+        json = serde_json::json!({});
+    }
+    if json.get("fonts").is_none() {
+        json["fonts"] = serde_json::json!({});
+    }
+    json["fonts"]["installed"] =
+        serde_json::to_value(normalized).unwrap_or_else(|_| serde_json::json!([]));
+    save_settings_json(codex_home, &json)
+}
+
+pub(crate) fn save_active_font_id(
+    codex_home: &Path,
+    active_font_id: Option<&str>,
+) -> io::Result<()> {
+    let mut json = load_settings_json(codex_home);
+    if !json.is_object() {
+        json = serde_json::json!({});
+    }
+    if json.get("fonts").is_none() {
+        json["fonts"] = serde_json::json!({});
+    }
+    json["fonts"]["active_font_id"] = active_font_id
+        .map(|value| serde_json::Value::String(value.to_string()))
+        .unwrap_or(serde_json::Value::Null);
+    save_settings_json(codex_home, &json)
+}
+
 fn normalize_stored_model_preset(preset: StoredModelPreset) -> Option<StoredModelPreset> {
     let id = preset.id.trim();
     let name = preset.name.trim();
@@ -584,6 +790,56 @@ fn normalize_stored_model_preset(preset: StoredModelPreset) -> Option<StoredMode
         name: name.to_string(),
         model: model.to_string(),
     })
+}
+
+fn normalize_stored_font_profile(profile: StoredFontProfile) -> Option<StoredFontProfile> {
+    let id = profile.id.trim();
+    let family = profile.family.trim();
+    let source = profile.source.trim();
+    if id.is_empty() || family.is_empty() || source.is_empty() {
+        return None;
+    }
+
+    let files = profile
+        .files
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+
+    Some(StoredFontProfile {
+        id: id.to_string(),
+        family: family.to_string(),
+        source: source.to_string(),
+        files,
+    })
+}
+
+pub(crate) fn normalize_hex_color(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let without_hash = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    let expanded = match without_hash.len() {
+        3 => {
+            let mut out = String::with_capacity(6);
+            for ch in without_hash.chars() {
+                if !ch.is_ascii_hexdigit() {
+                    return None;
+                }
+                out.push(ch);
+                out.push(ch);
+            }
+            out
+        }
+        6 => {
+            if !without_hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                return None;
+            }
+            without_hash.to_string()
+        }
+        _ => return None,
+    };
+
+    Some(format!("#{}", expanded.to_ascii_lowercase()))
 }
 
 fn persist_setting(codex_home: &Path, key: &str, value: serde_json::Value) -> io::Result<()> {

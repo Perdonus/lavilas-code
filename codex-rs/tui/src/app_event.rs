@@ -30,8 +30,12 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
+use crate::ui_preferences::PopupColorTarget;
+use crate::ui_preferences::PopupFormatTarget;
 use crate::ui_preferences::SelectionHighlightPreset;
 use crate::ui_preferences::SelectionHighlightTextFormat;
+use crate::ui_preferences::StoredFontProfile;
+use crate::ui_preferences::UiColorChoice;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -359,9 +363,28 @@ pub(crate) enum AppEvent {
     /// Open the nested selection highlight color palette picker.
     OpenSelectionHighlightColorPicker,
 
+    /// Open the color section target picker (selection vs list text).
+    OpenSelectionHighlightColorTargetPicker,
+
+    /// Open the concrete color picker for one target.
+    OpenSelectionHighlightColorChoicePicker {
+        target: PopupColorTarget,
+    },
+
+    /// Open a free-form prompt for a custom HEX color.
+    OpenSelectionHighlightCustomColorPrompt {
+        target: PopupColorTarget,
+    },
+
     /// Persist the selection highlight preset used in popups.
     SetSelectionHighlightPreset {
         preset: SelectionHighlightPreset,
+    },
+
+    /// Persist a color choice for one popup target.
+    SetPopupColorChoice {
+        target: PopupColorTarget,
+        choice: UiColorChoice,
     },
 
     /// Persist whether selection styling fills the background or recolors text only.
@@ -372,6 +395,60 @@ pub(crate) enum AppEvent {
     /// Toggle one text-formatting flag for selection styling.
     ToggleSelectionHighlightTextFormat {
         format: SelectionHighlightTextFormat,
+    },
+
+    /// Open the formatting section root.
+    OpenSelectionHighlightFormatPicker,
+
+    /// Open the formatting picker for one target.
+    OpenSelectionHighlightFormatTargetPicker {
+        target: PopupFormatTarget,
+    },
+
+    /// Toggle one text-formatting flag for a popup target.
+    TogglePopupTextFormat {
+        target: PopupFormatTarget,
+        format: SelectionHighlightTextFormat,
+    },
+
+    /// Open the fonts section root.
+    OpenSelectionHighlightFontsPicker,
+
+    /// Open the add-font flow.
+    OpenSelectionHighlightAddFontPicker,
+
+    /// Open the featured-font results for a query.
+    OpenSelectionHighlightFontSearchResults {
+        query: String,
+    },
+
+    /// Open a free-form prompt for a font family name.
+    OpenSelectionHighlightCustomFontPrompt,
+
+    /// Download and install a Google Font family into Profiles/Fonts.
+    InstallGoogleFont {
+        family: String,
+    },
+
+    /// Font download finished in the background.
+    FinishGoogleFontInstall {
+        family: String,
+        result: Result<StoredFontProfile, String>,
+    },
+
+    /// Open the action menu for one installed font.
+    OpenSelectionHighlightFontActions {
+        font_id: String,
+    },
+
+    /// Mark one installed font as active in preferences.
+    ActivateInstalledFont {
+        font_id: String,
+    },
+
+    /// Delete one installed font from preferences and disk.
+    DeleteInstalledFont {
+        font_id: String,
     },
 
     /// Open command prefix picker.

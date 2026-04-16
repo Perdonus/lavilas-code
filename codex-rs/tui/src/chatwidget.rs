@@ -270,6 +270,12 @@ const CUSTOM_SETTINGS_VIEW_ID: &str = "custom-settings";
 const LANGUAGE_PICKER_VIEW_ID: &str = "language-picker";
 const SELECTION_HIGHLIGHT_VIEW_ID: &str = "selection-highlight-picker";
 const SELECTION_HIGHLIGHT_COLOR_VIEW_ID: &str = "selection-highlight-color-picker";
+const SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID: &str = "selection-highlight-color-target-picker";
+const SELECTION_HIGHLIGHT_FORMAT_VIEW_ID: &str = "selection-highlight-format-picker";
+const SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID: &str = "selection-highlight-format-target-picker";
+const SELECTION_HIGHLIGHT_FONTS_VIEW_ID: &str = "selection-highlight-fonts-picker";
+const SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID: &str = "selection-highlight-add-font-picker";
+const SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID: &str = "selection-highlight-font-actions-picker";
 const COMMAND_PREFIX_VIEW_ID: &str = "command-prefix-picker";
 const COMMAND_VISIBILITY_VIEW_ID: &str = "command-visibility-picker";
 const PROFILES_MANAGER_VIEW_ID: &str = "profiles-manager";
@@ -394,19 +400,35 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use crate::ui_appearance::color_preview_description;
+use crate::ui_appearance::describe_color_choice;
+use crate::ui_appearance::format_preview_label;
+use crate::ui_appearance::styled_color_label_spans;
+use crate::font_library::featured_fonts;
+use crate::font_library::search_featured_fonts;
+use crate::ui_preferences::PopupColorTarget;
+use crate::ui_preferences::PopupFormatTarget;
 use crate::ui_preferences::SelectionHighlightPreset;
 use crate::ui_preferences::SelectionHighlightTextFormat;
 use crate::ui_preferences::SelectionHighlightTextFormats;
+use crate::ui_preferences::StoredFontProfile;
 use crate::ui_preferences::StoredModelPreset;
+use crate::ui_preferences::UiColorChoice;
 use crate::ui_preferences::UiLanguage;
 use crate::ui_preferences::default_profile_model as default_profile_model_for_provider;
+use crate::ui_preferences::save_active_font_id as save_ui_active_font_id;
 use crate::ui_preferences::load_ui_preferences;
+use crate::ui_preferences::save_installed_fonts as save_ui_installed_fonts;
+use crate::ui_preferences::save_list_primary_color as save_ui_list_primary_color;
+use crate::ui_preferences::save_list_secondary_color as save_ui_list_secondary_color;
+use crate::ui_preferences::save_list_text_formats as save_ui_list_text_formats;
 use crate::ui_preferences::profile_model_catalog_path as ui_profile_model_catalog_path;
 use crate::ui_preferences::profiles_dir as ui_profiles_dir;
 use crate::ui_preferences::save_command_prefix as save_ui_command_prefix;
 use crate::ui_preferences::save_hidden_commands as save_ui_hidden_commands;
 use crate::ui_preferences::save_model_presets_enabled as save_ui_model_presets_enabled;
 use crate::ui_preferences::save_provider_model_presets as save_ui_provider_model_presets;
+use crate::ui_preferences::save_selection_highlight_color as save_ui_selection_highlight_color;
 use crate::ui_preferences::save_selection_highlight_fill as save_ui_selection_highlight_fill;
 use crate::ui_preferences::save_selection_highlight_preset as save_ui_selection_highlight_preset;
 use crate::ui_preferences::save_selection_highlight_text_formats as save_ui_selection_highlight_text_formats;
@@ -10359,6 +10381,10 @@ impl ChatWidget {
         self.ui_preferences().selection_highlight_preset
     }
 
+    fn current_selection_highlight_color(&self) -> UiColorChoice {
+        self.ui_preferences().selection_highlight_color.clone()
+    }
+
     fn current_selection_highlight_fill(&self) -> bool {
         self.ui_preferences().selection_highlight_fill
     }
@@ -10367,23 +10393,57 @@ impl ChatWidget {
         self.ui_preferences().selection_highlight_text_formats
     }
 
+    fn current_list_primary_color(&self) -> UiColorChoice {
+        self.ui_preferences().list_primary_color.clone()
+    }
+
+    fn current_list_secondary_color(&self) -> UiColorChoice {
+        self.ui_preferences().list_secondary_color.clone()
+    }
+
+    fn current_list_text_formats(&self) -> SelectionHighlightTextFormats {
+        self.ui_preferences().list_text_formats
+    }
+
+    pub(crate) fn current_installed_fonts(&self) -> Vec<StoredFontProfile> {
+        self.ui_preferences().installed_fonts
+    }
+
+    fn current_active_font_id(&self) -> Option<String> {
+        self.ui_preferences().active_font_id
+    }
+
     fn selection_highlight_settings_view_active_id(&self) -> Option<&'static str> {
         match self.bottom_pane.active_view_id() {
             Some(SELECTION_HIGHLIGHT_VIEW_ID) => Some(SELECTION_HIGHLIGHT_VIEW_ID),
             Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID) => Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID),
+            Some(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID) => {
+                Some(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID)
+            }
+            Some(SELECTION_HIGHLIGHT_FORMAT_VIEW_ID) => Some(SELECTION_HIGHLIGHT_FORMAT_VIEW_ID),
+            Some(SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID) => {
+                Some(SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID)
+            }
+            Some(SELECTION_HIGHLIGHT_FONTS_VIEW_ID) => Some(SELECTION_HIGHLIGHT_FONTS_VIEW_ID),
+            Some(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID) => Some(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID),
+            Some(SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID) => {
+                Some(SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID)
+            }
             _ => None,
         }
     }
 
     fn reopen_selection_highlight_view_after_change(&mut self) {
         match self.bottom_pane.active_view_id() {
-            Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID) => {
-                self.open_selection_highlight_color_picker_popup();
-            }
-            Some(SELECTION_HIGHLIGHT_VIEW_ID) => {
-                self.open_selection_highlight_picker_popup();
-            }
-            _ => self.request_redraw(),
+            Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID)
+            | Some(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID)
+            | Some(SELECTION_HIGHLIGHT_FORMAT_VIEW_ID)
+            | Some(SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID)
+            | Some(SELECTION_HIGHLIGHT_FONTS_VIEW_ID)
+            | Some(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID)
+            | Some(SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID)
+            | Some(SELECTION_HIGHLIGHT_VIEW_ID)
+            | _ => self.request_redraw(),
         }
     }
 
@@ -10411,14 +10471,14 @@ impl ChatWidget {
     ) -> &'static str {
         match (is_ru, preset) {
             (true, SelectionHighlightPreset::Light) => {
-                "Белый/чёрный. Основной спокойный вариант."
+                "Белая заливка с чёрным текстом."
             }
             (true, SelectionHighlightPreset::Graphite) => "Тёмный графитовый контраст.",
             (true, SelectionHighlightPreset::Amber) => "Пастельный янтарный акцент.",
             (true, SelectionHighlightPreset::Mint) => "Пастельный мятный акцент.",
             (true, SelectionHighlightPreset::Rose) => "Пастельный розовый акцент.",
             (false, SelectionHighlightPreset::Light) => {
-                "White/black. The calm default option."
+                "White fill with black text."
             }
             (false, SelectionHighlightPreset::Graphite) => "Dark graphite contrast.",
             (false, SelectionHighlightPreset::Amber) => "Pastel amber accent.",
@@ -10446,11 +10506,17 @@ impl ChatWidget {
             (true, SelectionHighlightTextFormat::Italic) => "Курсив",
             (true, SelectionHighlightTextFormat::Underlined) => "Подчёркнутый",
             (true, SelectionHighlightTextFormat::Mono) => "Моно",
+            (true, SelectionHighlightTextFormat::Dim) => "Приглушённый",
+            (true, SelectionHighlightTextFormat::Reversed) => "Инверсия",
+            (true, SelectionHighlightTextFormat::CrossedOut) => "Зачёркнутый",
             (false, SelectionHighlightTextFormat::Bold) => "Bold",
             (false, SelectionHighlightTextFormat::Semibold) => "Semi-bold",
             (false, SelectionHighlightTextFormat::Italic) => "Italic",
             (false, SelectionHighlightTextFormat::Underlined) => "Underlined",
             (false, SelectionHighlightTextFormat::Mono) => "Monospace",
+            (false, SelectionHighlightTextFormat::Dim) => "Dim",
+            (false, SelectionHighlightTextFormat::Reversed) => "Reversed",
+            (false, SelectionHighlightTextFormat::CrossedOut) => "Crossed out",
         }
     }
 
@@ -10476,6 +10542,15 @@ impl ChatWidget {
             (true, SelectionHighlightTextFormat::Mono) => {
                 format!("{state}. Переключает выбранный пункт в code-подобный вид.")
             }
+            (true, SelectionHighlightTextFormat::Dim) => {
+                format!("{state}. Делает текст мягче и спокойнее.")
+            }
+            (true, SelectionHighlightTextFormat::Reversed) => {
+                format!("{state}. Инвертирует пары foreground/background.")
+            }
+            (true, SelectionHighlightTextFormat::CrossedOut) => {
+                format!("{state}. Добавляет зачёркивание к тексту.")
+            }
             (false, SelectionHighlightTextFormat::Bold) => {
                 format!("{state}. Adds a heavier selected-row weight.")
             }
@@ -10491,6 +10566,15 @@ impl ChatWidget {
             (false, SelectionHighlightTextFormat::Mono) => {
                 format!("{state}. Switches the active row to a code-like look.")
             }
+            (false, SelectionHighlightTextFormat::Dim) => {
+                format!("{state}. Softens the text tone.")
+            }
+            (false, SelectionHighlightTextFormat::Reversed) => {
+                format!("{state}. Reverses foreground and background.")
+            }
+            (false, SelectionHighlightTextFormat::CrossedOut) => {
+                format!("{state}. Adds a strike-through decoration.")
+            }
         }
     }
 
@@ -10503,11 +10587,14 @@ impl ChatWidget {
         } else {
             "text"
         };
-        let mut parts = vec![Self::selection_highlight_label_for_locale(
-            self.current_selection_highlight_preset(),
-            is_ru,
-        )
-        .to_string(), mode.to_string()];
+        let mut parts = vec![
+            describe_color_choice(
+                &self.current_selection_highlight_color(),
+                self.current_selection_highlight_preset(),
+                is_ru,
+            ),
+            mode.to_string(),
+        ];
         let formats = self.current_selection_highlight_text_formats();
         if !formats.is_empty() {
             let labels = SelectionHighlightTextFormat::all()
@@ -10520,6 +10607,143 @@ impl ChatWidget {
             parts.push(labels.join(", "));
         }
         parts.join(" · ")
+    }
+
+    fn current_list_text_summary(&self) -> String {
+        let is_ru = self.ui_language().is_ru();
+        let mut parts = vec![
+            if is_ru {
+                format!(
+                    "основной {}",
+                    describe_color_choice(
+                        &self.current_list_primary_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru,
+                    )
+                )
+            } else {
+                format!(
+                    "primary {}",
+                    describe_color_choice(
+                        &self.current_list_primary_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru,
+                    )
+                )
+            },
+            if is_ru {
+                format!(
+                    "описание {}",
+                    describe_color_choice(
+                        &self.current_list_secondary_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru,
+                    )
+                )
+            } else {
+                format!(
+                    "secondary {}",
+                    describe_color_choice(
+                        &self.current_list_secondary_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru,
+                    )
+                )
+            },
+        ];
+        let formats = self.current_list_text_formats();
+        if !formats.is_empty() {
+            let labels = SelectionHighlightTextFormat::all()
+                .into_iter()
+                .filter(|format| formats.contains(*format))
+                .map(|format| {
+                    Self::selection_highlight_format_label_for_locale(format, is_ru).to_string()
+                })
+                .collect::<Vec<_>>();
+            parts.push(labels.join(", "));
+        }
+        parts.join(" · ")
+    }
+
+    fn current_font_summary(&self) -> String {
+        let is_ru = self.ui_language().is_ru();
+        let fonts = self.current_installed_fonts();
+        let Some(active_id) = self.current_active_font_id() else {
+            return if is_ru {
+                format!("системный · установлено {}", fonts.len())
+            } else {
+                format!("system · installed {}", fonts.len())
+            };
+        };
+        let active = fonts
+            .iter()
+            .find(|font| font.id == active_id)
+            .map(|font| font.family.clone())
+            .unwrap_or(active_id);
+        if is_ru {
+            format!("{active} · установлено {}", fonts.len())
+        } else {
+            format!("{active} · installed {}", fonts.len())
+        }
+    }
+
+    fn popup_color_target_label_for_locale(target: PopupColorTarget, is_ru: bool) -> &'static str {
+        match (is_ru, target) {
+            (true, PopupColorTarget::Selection) => "Выделение",
+            (true, PopupColorTarget::ListPrimary) => "Основной текст",
+            (true, PopupColorTarget::ListSecondary) => "Текст описания",
+            (false, PopupColorTarget::Selection) => "Selection",
+            (false, PopupColorTarget::ListPrimary) => "Primary text",
+            (false, PopupColorTarget::ListSecondary) => "Secondary text",
+        }
+    }
+
+    fn popup_format_target_label_for_locale(
+        target: PopupFormatTarget,
+        is_ru: bool,
+    ) -> &'static str {
+        match (is_ru, target) {
+            (true, PopupFormatTarget::Selection) => "Выделение",
+            (true, PopupFormatTarget::List) => "Весь остальной",
+            (false, PopupFormatTarget::Selection) => "Selection",
+            (false, PopupFormatTarget::List) => "The rest",
+        }
+    }
+
+    fn popup_target_state_tags(enabled: bool) -> Vec<String> {
+        vec![if enabled { "✔" } else { "✖" }.to_string()]
+    }
+
+    fn popup_current_color_choice(&self, target: PopupColorTarget) -> UiColorChoice {
+        match target {
+            PopupColorTarget::Selection => self.current_selection_highlight_color(),
+            PopupColorTarget::ListPrimary => self.current_list_primary_color(),
+            PopupColorTarget::ListSecondary => self.current_list_secondary_color(),
+        }
+    }
+
+    fn popup_current_text_formats(&self, target: PopupFormatTarget) -> SelectionHighlightTextFormats {
+        match target {
+            PopupFormatTarget::Selection => self.current_selection_highlight_text_formats(),
+            PopupFormatTarget::List => self.current_list_text_formats(),
+        }
+    }
+
+    fn font_is_active(&self, font_id: &str) -> bool {
+        self.current_active_font_id().as_deref() == Some(font_id)
+    }
+
+    fn font_category_for_family(family: &str, is_ru: bool) -> Option<&'static str> {
+        featured_fonts()
+            .iter()
+            .find(|entry| entry.family.eq_ignore_ascii_case(family))
+            .map(|entry| {
+                if is_ru {
+                    entry.category.display_name_ru()
+                } else {
+                    entry.category.display_name_en()
+                }
+            })
     }
 
     fn current_model_presets_enabled(&self) -> bool {
@@ -10778,26 +11002,7 @@ impl ChatWidget {
         }
 
         set_selection_highlight_preset(preset);
-        let label = Self::selection_highlight_label_for_locale(preset, is_ru);
-        let settings_path = self.profiles_settings_path();
-        if is_ru {
-            self.add_info_message(
-                format!("Цвет выделения изменён: {label}."),
-                Some(format!(
-                    "Сохранено в {}. Активный пункт во всех списках теперь подсвечивается этим стилем.",
-                    settings_path.display()
-                )),
-            );
-        } else {
-            self.add_info_message(
-                format!("Selection highlight changed to {label}."),
-                Some(format!(
-                    "Saved in {}. Active rows in popups now use this style.",
-                    settings_path.display()
-                )),
-            );
-        }
-        self.reopen_selection_highlight_view_after_change();
+        self.request_redraw();
     }
 
     pub(crate) fn apply_selection_highlight_fill(&mut self, fill: bool) {
@@ -10813,33 +11018,7 @@ impl ChatWidget {
         }
 
         set_selection_highlight_fill(fill);
-        if is_ru {
-            let state = if fill {
-                "Заливка выделения включена."
-            } else {
-                "Заливка выделения выключена."
-            };
-            let detail = if fill {
-                "Теперь активный пункт подсвечивается фоном."
-            } else {
-                "Теперь выделение красит только текст без фоновой подложки."
-            };
-            self.add_info_message(state.to_string(), Some(detail.to_string()));
-        } else {
-            let state = if fill {
-                "Selection fill enabled."
-            } else {
-                "Selection fill disabled."
-            };
-            let detail = if fill {
-                "Active rows now use a background fill."
-            } else {
-                "Active rows now recolor text without a background fill."
-            };
-            self.add_info_message(state.to_string(), Some(detail.to_string()));
-        }
-
-        self.reopen_selection_highlight_view_after_change();
+        self.request_redraw();
     }
 
     pub(crate) fn toggle_selection_highlight_text_format(
@@ -10861,22 +11040,147 @@ impl ChatWidget {
         }
 
         set_selection_highlight_text_formats(updated);
-        let label = Self::selection_highlight_format_label_for_locale(format, is_ru);
-        let enabled = updated.contains(format);
-        let state = Self::selection_highlight_fill_label_for_locale(enabled, is_ru);
-        if is_ru {
-            self.add_info_message(
-                format!("Формат выделения обновлён: {label}."),
-                Some(format!("Состояние: {state}.")),
-            );
-        } else {
-            self.add_info_message(
-                format!("Selection formatting updated: {label}."),
-                Some(format!("State: {state}.")),
-            );
+        self.request_redraw();
+    }
+
+    pub(crate) fn apply_popup_color_choice(
+        &mut self,
+        target: PopupColorTarget,
+        choice: UiColorChoice,
+    ) {
+        let is_ru = self.ui_language().is_ru();
+        let save_result = match target {
+            PopupColorTarget::Selection => match &choice {
+                UiColorChoice::Preset(preset) => {
+                    save_ui_selection_highlight_preset(self.config.codex_home.as_path(), *preset)
+                }
+                _ => save_ui_selection_highlight_color(
+                    self.config.codex_home.as_path(),
+                    choice.clone(),
+                ),
+            },
+            PopupColorTarget::ListPrimary => {
+                save_ui_list_primary_color(self.config.codex_home.as_path(), choice.clone())
+            }
+            PopupColorTarget::ListSecondary => {
+                save_ui_list_secondary_color(self.config.codex_home.as_path(), choice.clone())
+            }
+        };
+        if let Err(err) = save_result {
+            let message = if is_ru {
+                format!("Не удалось сохранить цвет интерфейса: {err}")
+            } else {
+                format!("Failed to save interface color: {err}")
+            };
+            self.add_error_message(message);
+            return;
         }
 
-        self.reopen_selection_highlight_view_after_change();
+        if let (PopupColorTarget::Selection, UiColorChoice::Preset(preset)) = (target, &choice) {
+            set_selection_highlight_preset(*preset);
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn toggle_popup_text_format(
+        &mut self,
+        target: PopupFormatTarget,
+        format: SelectionHighlightTextFormat,
+    ) {
+        let is_ru = self.ui_language().is_ru();
+        let updated = match target {
+            PopupFormatTarget::Selection => self
+                .current_selection_highlight_text_formats()
+                .with_toggled(format),
+            PopupFormatTarget::List => self.current_list_text_formats().with_toggled(format),
+        };
+        let save_result = match target {
+            PopupFormatTarget::Selection => {
+                save_ui_selection_highlight_text_formats(self.config.codex_home.as_path(), updated)
+            }
+            PopupFormatTarget::List => {
+                save_ui_list_text_formats(self.config.codex_home.as_path(), updated)
+            }
+        };
+        if let Err(err) = save_result {
+            let message = if is_ru {
+                format!("Не удалось сохранить формат текста: {err}")
+            } else {
+                format!("Failed to save text formatting: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+
+        if let PopupFormatTarget::Selection = target {
+            set_selection_highlight_text_formats(updated);
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn finish_google_font_install(&mut self, profile: StoredFontProfile) {
+        let mut fonts = self.current_installed_fonts();
+        if let Some(existing) = fonts.iter_mut().find(|font| font.id == profile.id) {
+            *existing = profile;
+        } else {
+            fonts.push(profile);
+            fonts.sort_by(|a, b| a.family.to_ascii_lowercase().cmp(&b.family.to_ascii_lowercase()));
+        }
+        if let Err(err) = save_ui_installed_fonts(self.config.codex_home.as_path(), &fonts) {
+            let message = if self.ui_language().is_ru() {
+                format!("Не удалось сохранить список шрифтов: {err}")
+            } else {
+                format!("Failed to save installed fonts: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn activate_installed_font(&mut self, font_id: &str) {
+        if let Err(err) =
+            save_ui_active_font_id(self.config.codex_home.as_path(), Some(font_id))
+        {
+            let message = if self.ui_language().is_ru() {
+                format!("Не удалось активировать шрифт: {err}")
+            } else {
+                format!("Failed to activate font: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn delete_installed_font_preference(&mut self, font_id: &str) {
+        let mut fonts = self.current_installed_fonts();
+        let original_len = fonts.len();
+        fonts.retain(|font| font.id != font_id);
+        if fonts.len() == original_len {
+            return;
+        }
+        if let Err(err) = save_ui_installed_fonts(self.config.codex_home.as_path(), &fonts) {
+            let message = if self.ui_language().is_ru() {
+                format!("Не удалось обновить список шрифтов: {err}")
+            } else {
+                format!("Failed to update installed fonts: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
+        if self.current_active_font_id().as_deref() == Some(font_id) {
+            if let Err(err) = save_ui_active_font_id(self.config.codex_home.as_path(), None) {
+                let message = if self.ui_language().is_ru() {
+                    format!("Не удалось сбросить активный шрифт: {err}")
+                } else {
+                    format!("Failed to clear the active font: {err}")
+                };
+                self.add_error_message(message);
+                return;
+            }
+        }
+        self.request_redraw();
     }
 
     pub(crate) fn apply_command_prefix(&mut self, prefix: char) {
@@ -11129,17 +11433,21 @@ impl ChatWidget {
                 },
                 description: Some(if is_ru {
                     format!(
-                        "Сейчас: {highlight_summary}. Цвет, заливка и формат текста активного пункта."
+                        "Сейчас: {highlight_summary}. Остальной текст: {}. Шрифт: {}.",
+                        self.current_list_text_summary(),
+                        self.current_font_summary()
                     )
                 } else {
                     format!(
-                        "Current: {highlight_summary}. Controls color, fill, and text styling for active rows."
+                        "Current: {highlight_summary}. Other text: {}. Font: {}.",
+                        self.current_list_text_summary(),
+                        self.current_font_summary()
                     )
                 }),
                 search_value: Some(if is_ru {
-                    "выделение цвет активный пункт список меню popup".to_string()
+                    "выделение цвет активный пункт список меню popup шрифт".to_string()
                 } else {
-                    "selection highlight color active row popup menu".to_string()
+                    "selection highlight color active row popup menu font".to_string()
                 }),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::OpenSelectionHighlightPicker)
@@ -11422,16 +11730,12 @@ impl ChatWidget {
 
     pub(crate) fn open_selection_highlight_picker_popup(&mut self) {
         let current_fill = self.current_selection_highlight_fill();
-        let current_formats = self.current_selection_highlight_text_formats();
         let is_ru = self.ui_language().is_ru();
         let replace_active = self.selection_highlight_settings_view_active_id();
-        let initial_selected_idx = match replace_active {
-            Some(SELECTION_HIGHLIGHT_VIEW_ID) => self
-                .bottom_pane
-                .selected_index_for_active_view(SELECTION_HIGHLIGHT_VIEW_ID),
-            Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID) => Some(2),
-            _ => Some(1),
-        };
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(SELECTION_HIGHLIGHT_VIEW_ID)
+            .or(Some(1));
 
         let mut items = vec![SelectionItem {
             name: if is_ru {
@@ -11455,11 +11759,7 @@ impl ChatWidget {
         }];
 
         items.push(SelectionItem {
-            name: if is_ru {
-                "Заливка".to_string()
-            } else {
-                "Fill".to_string()
-            },
+            name: if is_ru { "Заливка".to_string() } else { "Fill".to_string() },
             description: Some(if is_ru {
                 if current_fill {
                     "Включена. Активный пункт подсвечивается фоном.".to_string()
@@ -11480,38 +11780,40 @@ impl ChatWidget {
                 tx.send(AppEvent::SetSelectionHighlightFill {
                     enabled: !current_fill,
                 });
+                tx.send(AppEvent::OpenSelectionHighlightPicker);
             })],
             dismiss_on_select: false,
+            category_tags: Self::popup_target_state_tags(current_fill),
             ..Default::default()
         });
 
         items.push(SelectionItem {
-            name: if is_ru {
-                "Цвет".to_string()
-            } else {
-                "Color".to_string()
-            },
+            name: if is_ru { "Цвет".to_string() } else { "Color".to_string() },
             description: Some(if is_ru {
                 format!(
-                    "Сейчас: {}. Отдельный выбор спокойной палитры.",
-                    Self::selection_highlight_label_for_locale(
+                    "Выделение: {}. Остальной текст: {}.",
+                    describe_color_choice(
+                        &self.current_selection_highlight_color(),
                         self.current_selection_highlight_preset(),
                         is_ru
-                    )
+                    ),
+                    self.current_list_text_summary()
                 )
             } else {
                 format!(
-                    "Current: {}. Choose the highlight palette separately.",
-                    Self::selection_highlight_label_for_locale(
+                    "Selection: {}. The rest: {}.",
+                    describe_color_choice(
+                        &self.current_selection_highlight_color(),
                         self.current_selection_highlight_preset(),
                         is_ru
-                    )
+                    ),
+                    self.current_list_text_summary()
                 )
             }),
             search_value: Some(if is_ru {
-                "цвет палитра pastel rose mint amber light graphite".to_string()
+                "цвет палитра выделение основной текст описание hex".to_string()
             } else {
-                "color palette pastel rose mint amber light graphite".to_string()
+                "color palette selection primary secondary text hex".to_string()
             }),
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenSelectionHighlightColorPicker)
@@ -11520,36 +11822,65 @@ impl ChatWidget {
             ..Default::default()
         });
 
-        items.extend(
-            SelectionHighlightTextFormat::all()
-                .into_iter()
-                .map(|format| {
-                    let enabled = current_formats.contains(format);
-                    SelectionItem {
-                        name: Self::selection_highlight_format_label_for_locale(format, is_ru)
-                            .to_string(),
-                        description: Some(Self::selection_highlight_format_description_for_locale(
-                            format, enabled, is_ru,
-                        )),
-                        search_value: Some(if is_ru {
-                            format!(
-                                "{} формат текста выделение",
-                                Self::selection_highlight_format_label_for_locale(format, is_ru)
-                            )
-                        } else {
-                            format!(
-                                "{} text formatting selection",
-                                Self::selection_highlight_format_label_for_locale(format, is_ru)
-                            )
-                        }),
-                        actions: vec![Box::new(move |tx| {
-                            tx.send(AppEvent::ToggleSelectionHighlightTextFormat { format });
-                        })],
-                        dismiss_on_select: false,
-                        ..Default::default()
-                    }
-                }),
-        );
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Форматирование".to_string()
+            } else {
+                "Formatting".to_string()
+            },
+            description: Some(if is_ru {
+                format!(
+                    "Выделение: {}. Остальной текст: {}.",
+                    self.current_selection_highlight_summary(),
+                    self.current_list_text_summary()
+                )
+            } else {
+                format!(
+                    "Selection: {}. The rest: {}.",
+                    self.current_selection_highlight_summary(),
+                    self.current_list_text_summary()
+                )
+            }),
+            search_value: Some(if is_ru {
+                "форматирование жирный курсив подчёркивание моно".to_string()
+            } else {
+                "formatting bold italic underline mono".to_string()
+            }),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenSelectionHighlightFormatPicker)
+            })],
+            dismiss_on_select: false,
+            ..Default::default()
+        });
+
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Шрифты".to_string()
+            } else {
+                "Fonts".to_string()
+            },
+            description: Some(if is_ru {
+                format!(
+                    "Сейчас: {}. Предпочтение сохраняется, а применение зависит от терминала.",
+                    self.current_font_summary()
+                )
+            } else {
+                format!(
+                    "Current: {}. Preference is saved, but terminal support decides whether it can be applied.",
+                    self.current_font_summary()
+                )
+            }),
+            search_value: Some(if is_ru {
+                "шрифты font google fonts установить".to_string()
+            } else {
+                "fonts google fonts install".to_string()
+            }),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenSelectionHighlightFontsPicker)
+            })],
+            dismiss_on_select: false,
+            ..Default::default()
+        });
 
         let params = SelectionViewParams {
             view_id: Some(SELECTION_HIGHLIGHT_VIEW_ID),
@@ -11582,21 +11913,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_selection_highlight_color_picker_popup(&mut self) {
-        let current = self.current_selection_highlight_preset();
         let is_ru = self.ui_language().is_ru();
-        let replace_active = match self.bottom_pane.active_view_id() {
-            Some(SELECTION_HIGHLIGHT_VIEW_ID) => Some(SELECTION_HIGHLIGHT_VIEW_ID),
-            Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID) => Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID),
-            _ => None,
-        };
-        let presets = [
-            SelectionHighlightPreset::Light,
-            SelectionHighlightPreset::Graphite,
-            SelectionHighlightPreset::Amber,
-            SelectionHighlightPreset::Mint,
-            SelectionHighlightPreset::Rose,
-        ];
-
         let mut items = vec![SelectionItem {
             name: if is_ru {
                 "← Назад к параметрам выделения".to_string()
@@ -11604,9 +11921,9 @@ impl ChatWidget {
                 "← Back to selection highlight".to_string()
             },
             description: Some(if is_ru {
-                "Вернуться к режиму заливки и форматированию текста.".to_string()
+                "Вернуться к заливке, форматированию и шрифтам.".to_string()
             } else {
-                "Return to fill mode and text formatting.".to_string()
+                "Return to fill mode, formatting, and fonts.".to_string()
             }),
             search_value: Some(if is_ru {
                 "назад выделение цвет".to_string()
@@ -11617,47 +11934,116 @@ impl ChatWidget {
             dismiss_on_select: true,
             ..Default::default()
         }];
-        items.extend(presets.into_iter().map(|preset| SelectionItem {
-            name: Self::selection_highlight_label_for_locale(preset, is_ru).to_string(),
-            description: Some(
-                Self::selection_highlight_description_for_locale(preset, is_ru).to_string(),
+
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Выделение".to_string()
+            } else {
+                "Selection".to_string()
+            },
+            name_prefix_spans: styled_color_label_spans(
+                &self.current_selection_highlight_color(),
+                self.current_selection_highlight_preset(),
+                is_ru,
             ),
-            search_value: Some(if is_ru {
+            description: Some(if is_ru {
                 format!(
-                    "{} цвет выделение активный пункт",
-                    Self::selection_highlight_label_for_locale(preset, is_ru)
+                    "Текущий цвет активного пункта: {}.",
+                    describe_color_choice(
+                        &self.current_selection_highlight_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru
+                    )
                 )
             } else {
                 format!(
-                    "{} selection highlight active row",
-                    Self::selection_highlight_label_for_locale(preset, is_ru)
+                    "Current active-row color: {}.",
+                    describe_color_choice(
+                        &self.current_selection_highlight_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru
+                    )
                 )
             }),
-            is_current: current == preset,
-            actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::SetSelectionHighlightPreset { preset });
+            search_value: Some(if is_ru {
+                "цвет выделение активный пункт".to_string()
+            } else {
+                "selection active row color".to_string()
+            }),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenSelectionHighlightColorChoicePicker {
+                    target: PopupColorTarget::Selection,
+                })
             })],
             dismiss_on_select: false,
             ..Default::default()
-        }));
+        });
+
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Весь остальной".to_string()
+            } else {
+                "The rest".to_string()
+            },
+            description: Some(if is_ru {
+                format!(
+                    "Основной: {}. Описание: {}.",
+                    describe_color_choice(
+                        &self.current_list_primary_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru
+                    ),
+                    describe_color_choice(
+                        &self.current_list_secondary_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru
+                    )
+                )
+            } else {
+                format!(
+                    "Primary: {}. Secondary: {}.",
+                    describe_color_choice(
+                        &self.current_list_primary_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru
+                    ),
+                    describe_color_choice(
+                        &self.current_list_secondary_color(),
+                        self.current_selection_highlight_preset(),
+                        is_ru
+                    )
+                )
+            }),
+            search_value: Some(if is_ru {
+                "цвет основной текст описание".to_string()
+            } else {
+                "color primary text secondary description".to_string()
+            }),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenSelectionHighlightColorTargetPicker)
+            })],
+            dismiss_on_select: false,
+            ..Default::default()
+        });
+
         let initial_selected_idx = self
             .bottom_pane
             .selected_index_for_active_view(SELECTION_HIGHLIGHT_COLOR_VIEW_ID)
-            .or_else(|| items.iter().position(|item| item.is_current))
             .or(Some(1));
 
         let params = SelectionViewParams {
             view_id: Some(SELECTION_HIGHLIGHT_COLOR_VIEW_ID),
             title: Some(if is_ru {
-                "Цвет выделения".to_string()
+                "Цвет".to_string()
             } else {
-                "Selection color".to_string()
+                "Color".to_string()
             }),
             subtitle: Some(if is_ru {
-                "Пастельные и контрастные варианты для активного пункта."
+                "Сначала выберите, что красим: выделение или остальной текст."
                     .to_string()
             } else {
-                "Pastel and contrast variants for active rows.".to_string()
+                "Choose whether to style the selection or the rest of the text."
+                    .to_string()
             }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -11666,11 +12052,810 @@ impl ChatWidget {
             ..Default::default()
         };
 
-        if let Some(active_view_id) = replace_active {
-            let _ = self
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_COLOR_VIEW_ID, params)
+        {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_selection_highlight_color_target_picker_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад к цветам".to_string()
+            } else {
+                "← Back to colors".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к выбору раздела цветов.".to_string()
+            } else {
+                "Return to the color section.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад цвет".to_string()
+            } else {
+                "back color".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightColorPicker))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        for target in [PopupColorTarget::ListPrimary, PopupColorTarget::ListSecondary] {
+            let choice = self.popup_current_color_choice(target);
+            items.push(SelectionItem {
+                name: Self::popup_color_target_label_for_locale(target, is_ru).to_string(),
+                name_prefix_spans: styled_color_label_spans(
+                    &choice,
+                    self.current_selection_highlight_preset(),
+                    is_ru,
+                ),
+                description: Some(color_preview_description(
+                    &choice,
+                    self.current_selection_highlight_preset(),
+                    is_ru,
+                )),
+                search_value: Some(if is_ru {
+                    format!(
+                        "{} цвет текст",
+                        Self::popup_color_target_label_for_locale(target, is_ru)
+                    )
+                } else {
+                    format!(
+                        "{} color text",
+                        Self::popup_color_target_label_for_locale(target, is_ru)
+                    )
+                }),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenSelectionHighlightColorChoicePicker { target })
+                })],
+                dismiss_on_select: false,
+                ..Default::default()
+            });
+        }
+
+        let params = SelectionViewParams {
+            view_id: Some(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID),
+            title: Some(if is_ru {
+                "Весь остальной".to_string()
+            } else {
+                "The rest".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Основной текст и описания настраиваются отдельно.".to_string()
+            } else {
+                "Primary and secondary list text can be styled separately.".to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: self
                 .bottom_pane
-                .replace_selection_view_if_active(active_view_id, params);
+                .selected_index_for_active_view(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID)
+                .or(Some(1)),
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightColorPicker))),
+            ..Default::default()
+        };
+
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID, params)
+        {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_selection_highlight_color_choice_picker_popup(
+        &mut self,
+        target: PopupColorTarget,
+    ) {
+        let is_ru = self.ui_language().is_ru();
+        let current_choice = self.popup_current_color_choice(target);
+        let fallback_preset = self.current_selection_highlight_preset();
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад".to_string()
+            } else {
+                "← Back".to_string()
+            },
+            description: Some(if matches!(target, PopupColorTarget::Selection) {
+                if is_ru {
+                    "Вернуться к разделу выбора цветов.".to_string()
+                } else {
+                    "Return to the color section.".to_string()
+                }
+            } else if is_ru {
+                "Вернуться к настройке цветов остального текста.".to_string()
+            } else {
+                "Return to list-text color settings.".to_string()
+            }),
+            actions: vec![Box::new(move |tx| {
+                tx.send(if matches!(target, PopupColorTarget::Selection) {
+                    AppEvent::OpenSelectionHighlightColorPicker
+                } else {
+                    AppEvent::OpenSelectionHighlightColorTargetPicker
+                })
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        for preset in [
+            SelectionHighlightPreset::Light,
+            SelectionHighlightPreset::Graphite,
+            SelectionHighlightPreset::Amber,
+            SelectionHighlightPreset::Mint,
+            SelectionHighlightPreset::Rose,
+        ] {
+            let choice = UiColorChoice::Preset(preset);
+            items.push(SelectionItem {
+                name: String::new(),
+                name_prefix_spans: styled_color_label_spans(&choice, fallback_preset, is_ru),
+                description: Some(
+                    Self::selection_highlight_description_for_locale(preset, is_ru).to_string(),
+                ),
+                search_value: Some(if is_ru {
+                    format!(
+                        "{} пастельный цвет",
+                        Self::selection_highlight_label_for_locale(preset, is_ru)
+                    )
+                } else {
+                    format!(
+                        "{} pastel color",
+                        Self::selection_highlight_label_for_locale(preset, is_ru)
+                    )
+                }),
+                actions: vec![
+                    Box::new(move |tx| {
+                        tx.send(AppEvent::SetPopupColorChoice {
+                            target,
+                            choice: UiColorChoice::Preset(preset),
+                        })
+                    }),
+                    Box::new(move |tx| {
+                        tx.send(AppEvent::OpenSelectionHighlightColorChoicePicker { target })
+                    }),
+                ],
+                dismiss_on_select: false,
+                category_tags: Self::popup_target_state_tags(
+                    current_choice == UiColorChoice::Preset(preset),
+                ),
+                ..Default::default()
+            });
+        }
+
+        let custom_is_current = matches!(current_choice, UiColorChoice::Custom(_));
+        let custom_description = match &current_choice {
+            UiColorChoice::Custom(hex) => color_preview_description(
+                &UiColorChoice::Custom(hex.clone()),
+                fallback_preset,
+                is_ru,
+            ),
+            _ => {
+                if is_ru {
+                    "Введите свой HEX, например #f7dce5.".to_string()
+                } else {
+                    "Enter a custom HEX, for example #f7dce5.".to_string()
+                }
+            }
+        };
+        items.push(SelectionItem {
+            name: String::new(),
+            name_prefix_spans: match &current_choice {
+                UiColorChoice::Custom(hex) => styled_color_label_spans(
+                    &UiColorChoice::Custom(hex.clone()),
+                    fallback_preset,
+                    is_ru,
+                ),
+                _ => vec![Span::raw(if is_ru {
+                    "Свой цвет".to_string()
+                } else {
+                    "Custom color".to_string()
+                })],
+            },
+            description: Some(custom_description),
+            search_value: Some(if is_ru {
+                "свой цвет hex".to_string()
+            } else {
+                "custom color hex".to_string()
+            }),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenSelectionHighlightCustomColorPrompt { target })
+            })],
+            dismiss_on_select: true,
+            category_tags: Self::popup_target_state_tags(custom_is_current),
+            ..Default::default()
+        });
+
+        let params = SelectionViewParams {
+            view_id: Some(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID),
+            title: Some(Self::popup_color_target_label_for_locale(target, is_ru).to_string()),
+            subtitle: Some(if is_ru {
+                "Пастельные пресеты и свой HEX-цвет. Название оттенка определяется автоматически."
+                    .to_string()
+            } else {
+                "Pastel presets and a custom HEX color. The shade name is derived automatically."
+                    .to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: self
+                .bottom_pane
+                .selected_index_for_active_view(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID)
+                .or(Some(1)),
+            on_cancel: Some(Box::new(move |tx| {
+                tx.send(if matches!(target, PopupColorTarget::Selection) {
+                    AppEvent::OpenSelectionHighlightColorPicker
+                } else {
+                    AppEvent::OpenSelectionHighlightColorTargetPicker
+                })
+            })),
+            ..Default::default()
+        };
+
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID, params)
+        {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_selection_highlight_custom_color_prompt(
+        &mut self,
+        target: PopupColorTarget,
+    ) {
+        let is_ru = self.ui_language().is_ru();
+        let tx = self.app_event_tx.clone();
+        let target_label = Self::popup_color_target_label_for_locale(target, is_ru).to_string();
+        let view = CustomPromptView::new(
+            if is_ru {
+                "Свой цвет".to_string()
+            } else {
+                "Custom color".to_string()
+            },
+            if is_ru {
+                "Введите HEX и нажмите Enter".to_string()
+            } else {
+                "Enter a HEX color and press Enter".to_string()
+            },
+            Some(if is_ru {
+                format!("{target_label} · пример #f7dce5")
+            } else {
+                format!("{target_label} · example #f7dce5")
+            }),
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::SetPopupColorChoice {
+                    target,
+                    choice: UiColorChoice::Custom(trimmed),
+                });
+                tx.send(AppEvent::OpenSelectionHighlightColorChoicePicker { target });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_selection_highlight_format_picker_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад к параметрам выделения".to_string()
+            } else {
+                "← Back to selection highlight".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к заливке, цветам и шрифтам.".to_string()
+            } else {
+                "Return to fill, colors, and fonts.".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        for target in [PopupFormatTarget::Selection, PopupFormatTarget::List] {
+            let formats = self.popup_current_text_formats(target);
+            let summary = if formats.is_empty() {
+                if is_ru {
+                    "без дополнительных форматов".to_string()
+                } else {
+                    "no extra formatting".to_string()
+                }
+            } else {
+                SelectionHighlightTextFormat::all()
+                    .into_iter()
+                    .filter(|format| formats.contains(*format))
+                    .map(|format| {
+                        Self::selection_highlight_format_label_for_locale(format, is_ru)
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            items.push(SelectionItem {
+                name: Self::popup_format_target_label_for_locale(target, is_ru).to_string(),
+                description: Some(summary),
+                search_value: Some(if is_ru {
+                    format!(
+                        "{} форматирование текст",
+                        Self::popup_format_target_label_for_locale(target, is_ru)
+                    )
+                } else {
+                    format!(
+                        "{} formatting text",
+                        Self::popup_format_target_label_for_locale(target, is_ru)
+                    )
+                }),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenSelectionHighlightFormatTargetPicker { target })
+                })],
+                dismiss_on_select: false,
+                ..Default::default()
+            });
+        }
+        let params = SelectionViewParams {
+            view_id: Some(SELECTION_HIGHLIGHT_FORMAT_VIEW_ID),
+            title: Some(if is_ru {
+                "Форматирование".to_string()
+            } else {
+                "Formatting".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Отдельные форматы для выделения и для остального текста.".to_string()
+            } else {
+                "Separate formatting for the selection and for the rest of the text.".to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: self
+                .bottom_pane
+                .selected_index_for_active_view(SELECTION_HIGHLIGHT_FORMAT_VIEW_ID)
+                .or(Some(1)),
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))),
+            ..Default::default()
+        };
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FORMAT_VIEW_ID, params)
+        {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_selection_highlight_format_target_picker_popup(
+        &mut self,
+        target: PopupFormatTarget,
+    ) {
+        let is_ru = self.ui_language().is_ru();
+        let current_formats = self.popup_current_text_formats(target);
+        let mut items = vec![SelectionItem {
+            name: if is_ru { "← Назад".to_string() } else { "← Back".to_string() },
+            description: Some(if is_ru {
+                "Вернуться к разделу форматирования.".to_string()
+            } else {
+                "Return to the formatting section.".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFormatPicker))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        for format in SelectionHighlightTextFormat::all() {
+            let (label, style, prefix) = format_preview_label(format, is_ru);
+            let enabled = current_formats.contains(format);
+            let mut name_prefix_spans = Vec::new();
+            if let Some(prefix) = prefix {
+                name_prefix_spans.push(Span::styled(format!("{prefix} "), style));
+            } else {
+                name_prefix_spans.push(Span::styled(label.to_string(), style));
+            }
+            items.push(SelectionItem {
+                name: if prefix.is_some() { label.to_string() } else { String::new() },
+                name_prefix_spans,
+                description: Some(Self::selection_highlight_format_description_for_locale(
+                    format, enabled, is_ru,
+                )),
+                search_value: Some(if is_ru {
+                    format!("{label} форматирование")
+                } else {
+                    format!("{label} formatting")
+                }),
+                actions: vec![
+                    Box::new(move |tx| {
+                        tx.send(AppEvent::TogglePopupTextFormat { target, format })
+                    }),
+                    Box::new(move |tx| {
+                        tx.send(AppEvent::OpenSelectionHighlightFormatTargetPicker { target })
+                    }),
+                ],
+                dismiss_on_select: false,
+                category_tags: Self::popup_target_state_tags(enabled),
+                ..Default::default()
+            });
+        }
+        let params = SelectionViewParams {
+            view_id: Some(SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID),
+            title: Some(Self::popup_format_target_label_for_locale(target, is_ru).to_string()),
+            subtitle: Some(if is_ru {
+                "Можно включать несколько форматов сразу.".to_string()
+            } else {
+                "You can enable multiple formats at once.".to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: self
+                .bottom_pane
+                .selected_index_for_active_view(SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID)
+                .or(Some(1)),
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFormatPicker))),
+            ..Default::default()
+        };
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID, params)
+        {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_selection_highlight_fonts_picker_popup(&mut self) {
+        let is_ru = self.ui_language().is_ru();
+        let mut items = vec![SelectionItem {
+            name: if is_ru {
+                "← Назад к параметрам выделения".to_string()
+            } else {
+                "← Back to selection highlight".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к заливке, цветам и форматированию.".to_string()
+            } else {
+                "Return to fill, colors, and formatting.".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Добавить шрифт".to_string()
+            } else {
+                "Add font".to_string()
+            },
+            description: Some(if is_ru {
+                "Поиск и скачивание через Google Fonts.".to_string()
+            } else {
+                "Search and download through Google Fonts.".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightAddFontPicker))],
+            dismiss_on_select: false,
+            ..Default::default()
+        });
+        let mut fonts = self.current_installed_fonts();
+        fonts.sort_by(|a, b| a.family.to_ascii_lowercase().cmp(&b.family.to_ascii_lowercase()));
+        for font in fonts {
+            let active = self.font_is_active(font.id.as_str());
+            items.push(SelectionItem {
+                name: font.family.clone(),
+                description: Some(if is_ru {
+                    format!(
+                        "{} · файлов: {}. Терминал может не поддерживать автоматическое переключение family.",
+                        Self::font_category_for_family(font.family.as_str(), is_ru)
+                            .unwrap_or("Шрифт"),
+                        font.files.len()
+                    )
+                } else {
+                    format!(
+                        "{} · files: {}. Terminal support decides whether family switching is possible.",
+                        Self::font_category_for_family(font.family.as_str(), is_ru)
+                            .unwrap_or("Font"),
+                        font.files.len()
+                    )
+                }),
+                search_value: Some(if is_ru {
+                    format!("{} шрифт google fonts", font.family)
+                } else {
+                    format!("{} font google fonts", font.family)
+                }),
+                actions: vec![Box::new({
+                    let font_id = font.id.clone();
+                    move |tx| {
+                        tx.send(AppEvent::OpenSelectionHighlightFontActions {
+                            font_id: font_id.clone(),
+                        })
+                    }
+                })],
+                dismiss_on_select: false,
+                category_tags: Self::popup_target_state_tags(active),
+                ..Default::default()
+            });
+        }
+        let params = SelectionViewParams {
+            view_id: Some(SELECTION_HIGHLIGHT_FONTS_VIEW_ID),
+            title: Some(if is_ru {
+                "Шрифты".to_string()
+            } else {
+                "Fonts".to_string()
+            }),
+            subtitle: Some(if is_ru {
+                "Сохраняется предпочитаемый шрифт для совместимых терминалов."
+                    .to_string()
+            } else {
+                "Preferred fonts are saved for terminals that support custom families."
+                    .to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти установленный шрифт".to_string()
+            } else {
+                "Find an installed font".to_string()
+            }),
+            initial_selected_idx: self
+                .bottom_pane
+                .selected_index_for_active_view(SELECTION_HIGHLIGHT_FONTS_VIEW_ID)
+                .or(Some(1)),
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))),
+            ..Default::default()
+        };
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FONTS_VIEW_ID, params)
+        {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_selection_highlight_add_font_picker_popup(
+        &mut self,
+        query: Option<&str>,
+    ) {
+        let is_ru = self.ui_language().is_ru();
+        let query = query.unwrap_or("").trim().to_string();
+        let mut items = vec![SelectionItem {
+            name: if is_ru { "← Назад к шрифтам".to_string() } else { "← Back to fonts".to_string() },
+            description: Some(if is_ru {
+                "Вернуться к установленным шрифтам.".to_string()
+            } else {
+                "Return to installed fonts.".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Поиск в Google Fonts".to_string()
+            } else {
+                "Search Google Fonts".to_string()
+            },
+            description: Some(if is_ru {
+                "Введите family и получите кнопку скачивания.".to_string()
+            } else {
+                "Type a family name and get a one-click install option.".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightCustomFontPrompt))],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        if !query.is_empty() {
+            items.push(SelectionItem {
+                name: if is_ru {
+                    format!("Скачать `{query}`")
+                } else {
+                    format!("Install `{query}`")
+                },
+                description: Some(if is_ru {
+                    "Прямой запрос к Google Fonts для этого family.".to_string()
+                } else {
+                    "Direct Google Fonts request for this family.".to_string()
+                }),
+                actions: vec![Box::new({
+                    let family = query.clone();
+                    move |tx| tx.send(AppEvent::InstallGoogleFont {
+                        family: family.clone(),
+                    })
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+        let catalog = if query.is_empty() {
+            featured_fonts()
         } else {
+            search_featured_fonts(query.as_str())
+        };
+        for entry in catalog {
+            let already_installed = self
+                .current_installed_fonts()
+                .iter()
+                .any(|font| font.family.eq_ignore_ascii_case(entry.family));
+            items.push(SelectionItem {
+                name: entry.family.to_string(),
+                description: Some(if is_ru {
+                    format!("{} · Google Fonts", entry.category.display_name_ru())
+                } else {
+                    format!("{} · Google Fonts", entry.category.display_name_en())
+                }),
+                search_value: Some(if is_ru {
+                    format!("{} {}", entry.family, entry.category.display_name_ru())
+                } else {
+                    format!("{} {}", entry.family, entry.category.display_name_en())
+                }),
+                actions: vec![Box::new({
+                    let family = entry.family.to_string();
+                    move |tx| tx.send(AppEvent::InstallGoogleFont {
+                        family: family.clone(),
+                    })
+                })],
+                dismiss_on_select: true,
+                category_tags: Self::popup_target_state_tags(already_installed),
+                ..Default::default()
+            });
+        }
+        let params = SelectionViewParams {
+            view_id: Some(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID),
+            title: Some(if is_ru {
+                "Добавить шрифт".to_string()
+            } else {
+                "Add font".to_string()
+            }),
+            subtitle: Some(if query.is_empty() {
+                if is_ru {
+                    "Популярные шрифты и поиск по Google Fonts.".to_string()
+                } else {
+                    "Featured families and Google Fonts search.".to_string()
+                }
+            } else if is_ru {
+                format!("Результаты по запросу `{query}`.")
+            } else {
+                format!("Results for `{query}`.")
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти шрифт в каталоге".to_string()
+            } else {
+                "Search the font catalog".to_string()
+            }),
+            initial_selected_idx: self
+                .bottom_pane
+                .selected_index_for_active_view(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID)
+                .or(Some(1)),
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))),
+            ..Default::default()
+        };
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID, params)
+        {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
+    pub(crate) fn open_selection_highlight_custom_font_prompt(&mut self) {
+        let is_ru = self.ui_language().is_ru();
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            if is_ru {
+                "Поиск шрифта".to_string()
+            } else {
+                "Search font".to_string()
+            },
+            if is_ru {
+                "Введите family и нажмите Enter".to_string()
+            } else {
+                "Type a font family and press Enter".to_string()
+            },
+            Some(if is_ru {
+                "Пример: JetBrains Mono".to_string()
+            } else {
+                "Example: JetBrains Mono".to_string()
+            }),
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::OpenSelectionHighlightFontSearchResults { query: trimmed });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_selection_highlight_font_actions_popup(&mut self, font_id: &str) {
+        let is_ru = self.ui_language().is_ru();
+        let Some(font) = self
+            .current_installed_fonts()
+            .into_iter()
+            .find(|font| font.id == font_id)
+        else {
+            return;
+        };
+        let active = self.font_is_active(font.id.as_str());
+        let items = vec![
+            SelectionItem {
+                name: if is_ru {
+                    "← Назад к шрифтам".to_string()
+                } else {
+                    "← Back to fonts".to_string()
+                },
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: if is_ru {
+                    "Активировать".to_string()
+                } else {
+                    "Activate".to_string()
+                },
+                description: Some(if is_ru {
+                    "Сохраняет шрифт как основной для совместимых терминалов.".to_string()
+                } else {
+                    "Marks the font as preferred for compatible terminals.".to_string()
+                }),
+                actions: vec![Box::new({
+                    let font_id = font.id.clone();
+                    move |tx| {
+                        tx.send(AppEvent::ActivateInstalledFont {
+                            font_id: font_id.clone(),
+                        });
+                        tx.send(AppEvent::OpenSelectionHighlightFontsPicker);
+                    }
+                })],
+                dismiss_on_select: true,
+                category_tags: Self::popup_target_state_tags(active),
+                ..Default::default()
+            },
+            SelectionItem {
+                name: if is_ru {
+                    "Удалить".to_string()
+                } else {
+                    "Delete".to_string()
+                },
+                description: Some(if is_ru {
+                    "Удаляет скачанные файлы и запись из профиля.".to_string()
+                } else {
+                    "Deletes downloaded files and removes the font from preferences.".to_string()
+                }),
+                actions: vec![Box::new({
+                    let font_id = font.id.clone();
+                    move |tx| {
+                        tx.send(AppEvent::DeleteInstalledFont {
+                            font_id: font_id.clone(),
+                        });
+                        tx.send(AppEvent::OpenSelectionHighlightFontsPicker);
+                    }
+                })],
+                dismiss_on_select: true,
+                category_tags: Self::popup_target_state_tags(false),
+                ..Default::default()
+            },
+        ];
+        let params = SelectionViewParams {
+            view_id: Some(SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID),
+            title: Some(font.family.clone()),
+            subtitle: Some(if is_ru {
+                "Шрифт сохраняется в Profiles/Fonts. Автоприменение зависит от терминала."
+                    .to_string()
+            } else {
+                "Fonts are stored in Profiles/Fonts. Automatic application depends on the terminal."
+                    .to_string()
+            }),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: Some(1),
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))),
+            ..Default::default()
+        };
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID, params)
+        {
             self.bottom_pane.show_selection_view(params);
         }
     }

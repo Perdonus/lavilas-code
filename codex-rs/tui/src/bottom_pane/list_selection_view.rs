@@ -20,6 +20,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use super::selection_popup_common::render_menu_surface;
+use super::selection_popup_common::tag_has_state_badge;
 use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint::KeyBinding;
@@ -255,6 +256,16 @@ struct SelectionMouseLayout {
     visible_row_heights: Vec<u16>,
 }
 
+fn tag_is_default_badge(label: &str) -> bool {
+    let normalized = label.trim().to_lowercase();
+    normalized.contains("default") || normalized.contains("умолч")
+}
+
+fn has_explicit_state_badge(tags: &[String]) -> bool {
+    tags.iter()
+        .any(|tag| tag_has_state_badge(tag) || tag_is_default_badge(tag))
+}
+
 impl ListSelectionView {
     /// Create a selection popup view with filtering, scrolling, and callbacks wired.
     ///
@@ -385,20 +396,18 @@ impl ListSelectionView {
                 self.items.get(*actual_idx).map(|item| {
                     let is_selected = self.state.selected_idx == Some(visible_idx);
                     let prefix = if is_selected { '›' } else { ' ' };
-                    let name = item.name.as_str();
-                    let marker = if item.category_tags.is_empty() {
-                        if item.is_current {
-                            " (текущий)"
-                        } else if item.is_default {
-                            " (по умолчанию)"
-                        } else {
-                            ""
-                        }
-                    } else {
-                        ""
-                    };
-                    let name_with_marker = format!("{name}{marker}");
                     let is_disabled = item.is_disabled || item.disabled_reason.is_some();
+                    let mut category_tags = item.category_tags.clone();
+                    if !has_explicit_state_badge(&category_tags) {
+                        if is_disabled {
+                            category_tags.push("✖".to_string());
+                        } else if item.is_current {
+                            category_tags.push("✓".to_string());
+                        }
+                        if item.is_default {
+                            category_tags.push("default".to_string());
+                        }
+                    }
                     let n = visible_idx + 1;
                     let wrap_prefix = if self.is_searchable {
                         // The number keys don't work when search is enabled (since we let the
@@ -419,13 +428,13 @@ impl ListSelectionView {
                         .or_else(|| item.description.clone());
                     let wrap_indent = description.is_none().then_some(wrap_prefix_width);
                     GenericDisplayRow {
-                        name: name_with_marker,
+                        name: item.name.clone(),
                         name_prefix_spans,
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
                         description,
                         category_tag: None,
-                        category_tags: item.category_tags.clone(),
+                        category_tags,
                         wrap_indent,
                         is_disabled,
                         disabled_reason: item.disabled_reason.clone(),
@@ -571,7 +580,7 @@ impl ListSelectionView {
     }
 
     fn rows_width(total_width: u16) -> u16 {
-        total_width.saturating_sub(2)
+        popup_content_width(total_width)
     }
 
     fn dense_rows_height(&self, rows_len: usize) -> u16 {
@@ -1128,7 +1137,7 @@ impl Renderable for ListSelectionView {
         // -- List rows --
         if list_area.height > 0 {
             let render_area = Rect {
-                x: list_area.x.saturating_sub(1),
+                x: list_area.x,
                 y: list_area.y,
                 width: effective_rows_width.max(1),
                 height: list_area.height,
@@ -2230,13 +2239,53 @@ mod tests {
         let rendered = render_lines_with_width(&view, /*width*/ 72);
         assert!(rendered.contains("MISTRAL"), "missing provider tag:\n{rendered}");
         assert!(rendered.contains("FAST"), "missing speed tag:\n{rendered}");
-        assert!(
-            rendered.contains("CURRENT"),
-            "missing current tag:\n{rendered}"
-        );
+        assert!(rendered.contains("✓"), "missing current badge:\n{rendered}");
         assert!(
             !rendered.contains("(текущий)"),
             "legacy current suffix should not be rendered when tags exist:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn synthesized_state_badges_replace_legacy_name_suffixes() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Настройки".to_string()),
+                dense_rows: true,
+                items: vec![
+                    SelectionItem {
+                        name: "Активный пункт".to_string(),
+                        is_current: true,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Пункт по умолчанию".to_string(),
+                        is_default: true,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Выключенный пункт".to_string(),
+                        is_disabled: true,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let rendered = render_lines_with_width(&view, /*width*/ 72);
+        assert!(rendered.contains("✓"), "missing synthesized current badge:\n{rendered}");
+        assert!(rendered.contains("default"), "missing synthesized default badge:\n{rendered}");
+        assert!(rendered.contains("✕"), "missing synthesized disabled badge:\n{rendered}");
+        assert!(
+            !rendered.contains("(текущий)") && !rendered.contains("(по умолчанию)"),
+            "legacy suffixes should be replaced with right-side badges:\n{rendered}"
         );
     }
 

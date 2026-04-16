@@ -13,16 +13,28 @@ use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Widget;
 use std::borrow::Cow;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU16;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::SystemTime;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
+
+use codex_core::config::find_codex_home;
 
 use crate::key_hint::KeyBinding;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
+use crate::ui_preferences::UiColorChoice;
+use crate::ui_preferences::UiPreferences;
+use crate::ui_preferences::load_ui_preferences;
+use crate::ui_preferences::settings_path as ui_settings_path;
 use crate::ui_preferences::SelectionHighlightPreset;
 use crate::ui_preferences::SelectionHighlightTextFormat;
 use crate::ui_preferences::SelectionHighlightTextFormats;
@@ -73,7 +85,8 @@ const MENU_SURFACE_INSET_V: u16 = 1;
 const MENU_SURFACE_INSET_H: u16 = 2;
 static SELECTION_HIGHLIGHT_PRESET: AtomicU8 = AtomicU8::new(SelectionHighlightPreset::Light as u8);
 static SELECTION_HIGHLIGHT_FILL: AtomicU8 = AtomicU8::new(1);
-static SELECTION_HIGHLIGHT_TEXT_FORMATS: AtomicU8 = AtomicU8::new(0);
+static SELECTION_HIGHLIGHT_TEXT_FORMATS: AtomicU16 = AtomicU16::new(0);
+static POPUP_UI_PREFERENCES: OnceLock<Mutex<CachedPopupUiPreferences>> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct SelectionHighlightPalette {
@@ -88,6 +101,432 @@ struct SelectionHighlightPalette {
     text_secondary_fg_emphasis: Color,
     mono_text_fg: Color,
     mono_text_secondary_fg: Color,
+}
+
+#[derive(Clone)]
+struct CachedPopupUiPreferences {
+    settings_path: Option<PathBuf>,
+    settings_modified: Option<SystemTime>,
+    preferences: UiPreferences,
+}
+
+impl Default for CachedPopupUiPreferences {
+    fn default() -> Self {
+        Self {
+            settings_path: None,
+            settings_modified: None,
+            preferences: UiPreferences::default(),
+        }
+    }
+}
+
+fn popup_ui_preferences() -> UiPreferences {
+    if cfg!(test) {
+        return UiPreferences::default();
+    }
+
+    let mutex = POPUP_UI_PREFERENCES.get_or_init(|| Mutex::new(CachedPopupUiPreferences::default()));
+    let mut cache = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let codex_home = find_codex_home().ok();
+    let settings_path = codex_home
+        .as_ref()
+        .map(|codex_home| ui_settings_path(codex_home.as_path()));
+    let settings_modified = settings_path
+        .as_ref()
+        .and_then(|path| fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok());
+
+    if cache.settings_path != settings_path || cache.settings_modified != settings_modified {
+        cache.settings_path = settings_path;
+        cache.settings_modified = settings_modified;
+        cache.preferences = codex_home
+            .as_ref()
+            .map(|codex_home| load_ui_preferences(codex_home.as_path()))
+            .unwrap_or_default();
+    }
+
+    cache.preferences.clone()
+}
+
+fn parse_hex_color(hex: &str) -> Option<Color> {
+    let raw = hex.trim();
+    let raw = raw.strip_prefix('#').unwrap_or(raw);
+    if raw.len() != 6 || !raw.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    let r = u8::from_str_radix(&raw[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&raw[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&raw[4..6], 16).ok()?;
+    Some(Color::Rgb(r, g, b))
+}
+
+fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Black => Some((0, 0, 0)),
+        Color::White => Some((255, 255, 255)),
+        Color::Gray => Some((160, 160, 160)),
+        Color::DarkGray => Some((96, 96, 96)),
+        Color::Red => Some((220, 76, 70)),
+        Color::Green => Some((77, 182, 96)),
+        Color::Yellow => Some((240, 201, 76)),
+        Color::Blue => Some((79, 140, 255)),
+        Color::Magenta => Some((203, 105, 190)),
+        Color::Cyan => Some((80, 197, 215)),
+        _ => None,
+    }
+}
+
+fn rgb_to_color((r, g, b): (u8, u8, u8)) -> Color {
+    Color::Rgb(r, g, b)
+}
+
+fn mix_channel(a: u8, b: u8, weight: f32) -> u8 {
+    let weight = weight.clamp(0.0, 1.0);
+    (((a as f32) * (1.0 - weight)) + ((b as f32) * weight)).round() as u8
+}
+
+fn mix_color(left: Color, right: Color, weight: f32) -> Color {
+    match (color_to_rgb(left), color_to_rgb(right)) {
+        (Some((lr, lg, lb)), Some((rr, rg, rb))) => rgb_to_color((
+            mix_channel(lr, rr, weight),
+            mix_channel(lg, rg, weight),
+            mix_channel(lb, rb, weight),
+        )),
+        _ => left,
+    }
+}
+
+fn lighten_color(color: Color, weight: f32) -> Color {
+    mix_color(color, Color::White, weight)
+}
+
+fn darken_color(color: Color, weight: f32) -> Color {
+    mix_color(color, Color::Black, weight)
+}
+
+fn color_luminance(color: Color) -> Option<f32> {
+    let (r, g, b) = color_to_rgb(color)?;
+    Some(((0.2126 * r as f32) + (0.7152 * g as f32) + (0.0722 * b as f32)) / 255.0)
+}
+
+fn contrast_text_color(background: Color) -> Color {
+    if color_luminance(background).unwrap_or(0.0) >= 0.62 {
+        Color::Black
+    } else {
+        Color::White
+    }
+}
+
+fn selection_highlight_palette_for_preset(preset: SelectionHighlightPreset) -> SelectionHighlightPalette {
+    match preset {
+        SelectionHighlightPreset::Light => SelectionHighlightPalette {
+            fill_bg: Color::White,
+            fill_bg_emphasis: Color::Rgb(236, 236, 236),
+            fill_fg: Color::Black,
+            fill_secondary_fg: Color::Rgb(62, 62, 62),
+            fill_secondary_fg_emphasis: Color::Rgb(47, 47, 47),
+            text_fg: Color::White,
+            text_fg_emphasis: Color::Rgb(245, 245, 245),
+            text_secondary_fg: Color::Rgb(214, 214, 214),
+            text_secondary_fg_emphasis: Color::Rgb(230, 230, 230),
+            mono_text_fg: Color::Rgb(239, 239, 239),
+            mono_text_secondary_fg: Color::Rgb(206, 206, 206),
+        },
+        SelectionHighlightPreset::Graphite => SelectionHighlightPalette {
+            fill_bg: Color::Rgb(73, 78, 87),
+            fill_bg_emphasis: Color::Rgb(61, 66, 74),
+            fill_fg: Color::White,
+            fill_secondary_fg: Color::Rgb(223, 227, 234),
+            fill_secondary_fg_emphasis: Color::Rgb(235, 238, 243),
+            text_fg: Color::Rgb(205, 210, 220),
+            text_fg_emphasis: Color::Rgb(228, 232, 239),
+            text_secondary_fg: Color::Rgb(163, 170, 183),
+            text_secondary_fg_emphasis: Color::Rgb(188, 195, 207),
+            mono_text_fg: Color::Rgb(218, 222, 228),
+            mono_text_secondary_fg: Color::Rgb(189, 194, 201),
+        },
+        SelectionHighlightPreset::Amber => SelectionHighlightPalette {
+            fill_bg: Color::Rgb(248, 229, 191),
+            fill_bg_emphasis: Color::Rgb(240, 214, 162),
+            fill_fg: Color::Black,
+            fill_secondary_fg: Color::Rgb(78, 61, 35),
+            fill_secondary_fg_emphasis: Color::Rgb(66, 51, 29),
+            text_fg: Color::Rgb(247, 224, 166),
+            text_fg_emphasis: Color::Rgb(255, 213, 138),
+            text_secondary_fg: Color::Rgb(221, 193, 129),
+            text_secondary_fg_emphasis: Color::Rgb(236, 205, 142),
+            mono_text_fg: Color::Rgb(228, 214, 181),
+            mono_text_secondary_fg: Color::Rgb(204, 187, 151),
+        },
+        SelectionHighlightPreset::Mint => SelectionHighlightPalette {
+            fill_bg: Color::Rgb(212, 241, 223),
+            fill_bg_emphasis: Color::Rgb(191, 232, 207),
+            fill_fg: Color::Black,
+            fill_secondary_fg: Color::Rgb(34, 73, 55),
+            fill_secondary_fg_emphasis: Color::Rgb(28, 62, 47),
+            text_fg: Color::Rgb(190, 238, 208),
+            text_fg_emphasis: Color::Rgb(163, 228, 187),
+            text_secondary_fg: Color::Rgb(153, 208, 177),
+            text_secondary_fg_emphasis: Color::Rgb(171, 220, 191),
+            mono_text_fg: Color::Rgb(192, 226, 204),
+            mono_text_secondary_fg: Color::Rgb(161, 198, 177),
+        },
+        SelectionHighlightPreset::Rose => SelectionHighlightPalette {
+            fill_bg: Color::Rgb(246, 213, 224),
+            fill_bg_emphasis: Color::Rgb(239, 193, 210),
+            fill_fg: Color::Black,
+            fill_secondary_fg: Color::Rgb(87, 51, 67),
+            fill_secondary_fg_emphasis: Color::Rgb(74, 43, 57),
+            text_fg: Color::Rgb(244, 198, 217),
+            text_fg_emphasis: Color::Rgb(236, 178, 202),
+            text_secondary_fg: Color::Rgb(220, 165, 189),
+            text_secondary_fg_emphasis: Color::Rgb(231, 181, 202),
+            mono_text_fg: Color::Rgb(228, 200, 211),
+            mono_text_secondary_fg: Color::Rgb(205, 175, 188),
+        },
+    }
+}
+
+fn custom_selection_highlight_palette(base: Color) -> SelectionHighlightPalette {
+    let fill_fg = contrast_text_color(base);
+    let fill_bg_emphasis = if matches!(fill_fg, Color::Black) {
+        darken_color(base, 0.08)
+    } else {
+        lighten_color(base, 0.08)
+    };
+    let fill_secondary_fg = mix_color(fill_fg, base, 0.28);
+    let fill_secondary_fg_emphasis = mix_color(fill_fg, fill_bg_emphasis, 0.22);
+    let text_fg_emphasis = if color_luminance(base).unwrap_or(0.0) >= 0.55 {
+        darken_color(base, 0.14)
+    } else {
+        lighten_color(base, 0.14)
+    };
+    let text_secondary_fg = mix_color(base, Color::Gray, 0.32);
+    let text_secondary_fg_emphasis = mix_color(text_fg_emphasis, Color::Gray, 0.22);
+    let mono_text_fg = mix_color(base, contrast_text_color(base), 0.12);
+    let mono_text_secondary_fg = mix_color(text_secondary_fg, contrast_text_color(base), 0.14);
+
+    SelectionHighlightPalette {
+        fill_bg: base,
+        fill_bg_emphasis,
+        fill_fg,
+        fill_secondary_fg,
+        fill_secondary_fg_emphasis,
+        text_fg: base,
+        text_fg_emphasis,
+        text_secondary_fg,
+        text_secondary_fg_emphasis,
+        mono_text_fg,
+        mono_text_secondary_fg,
+    }
+}
+
+fn selection_highlight_palette_from_choice(
+    choice: UiColorChoice,
+    fallback_preset: SelectionHighlightPreset,
+) -> SelectionHighlightPalette {
+    match choice {
+        UiColorChoice::Auto => selection_highlight_palette_for_preset(fallback_preset),
+        UiColorChoice::Preset(preset) => selection_highlight_palette_for_preset(preset),
+        UiColorChoice::Custom(hex) => parse_hex_color(hex)
+            .map(custom_selection_highlight_palette)
+            .unwrap_or_else(|| selection_highlight_palette_for_preset(fallback_preset)),
+    }
+}
+
+fn resolve_text_color_choice(
+    choice: UiColorChoice,
+    is_secondary: bool,
+    _fallback_preset: SelectionHighlightPreset,
+) -> Option<Color> {
+    match choice {
+        UiColorChoice::Auto => None,
+        UiColorChoice::Preset(preset) => {
+            let palette = selection_highlight_palette_for_preset(preset);
+            Some(if is_secondary {
+                palette.text_secondary_fg
+            } else {
+                palette.text_fg
+            })
+        }
+        UiColorChoice::Custom(hex) => parse_hex_color(hex).map(|base| {
+            if is_secondary {
+                mix_color(base, Color::Gray, 0.3)
+            } else {
+                base
+            }
+        }),
+    }
+    .map(|color| ensure_visible_text_color(color, is_secondary))
+}
+
+fn ensure_visible_text_color(color: Color, is_secondary: bool) -> Color {
+    let Some(luminance) = color_luminance(color) else {
+        return color;
+    };
+    let threshold = if is_secondary { 0.62 } else { 0.72 };
+    if luminance < threshold {
+        return color;
+    }
+    let darken_weight = if is_secondary { 0.58 } else { 0.72 };
+    darken_color(color, darken_weight)
+}
+
+fn apply_terminal_safe_formats(
+    mut style: Style,
+    formats: SelectionHighlightTextFormats,
+    allow_dim: bool,
+    allow_reversed: bool,
+) -> Style {
+    if formats.contains(SelectionHighlightTextFormat::Bold)
+        || formats.contains(SelectionHighlightTextFormat::Semibold)
+    {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if formats.contains(SelectionHighlightTextFormat::Italic) {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if formats.contains(SelectionHighlightTextFormat::Underlined) {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    if allow_dim && formats.contains(SelectionHighlightTextFormat::Dim) {
+        style = style.add_modifier(Modifier::DIM);
+    }
+    if allow_reversed && formats.contains(SelectionHighlightTextFormat::Reversed) {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    if formats.contains(SelectionHighlightTextFormat::CrossedOut) {
+        style = style.add_modifier(Modifier::CROSSED_OUT);
+    }
+    style
+}
+
+fn unselected_row_styles() -> (Style, Style) {
+    let preferences = popup_ui_preferences();
+    let mut primary = Style::default();
+    if let Some(color) = resolve_text_color_choice(
+        preferences.list_primary_color,
+        false,
+        current_selection_highlight_preset(),
+    ) {
+        primary = primary.fg(color);
+    }
+    primary = apply_terminal_safe_formats(
+        primary,
+        preferences.list_text_formats,
+        true,
+        true,
+    );
+
+    let mut secondary = Style::default();
+    if let Some(color) = resolve_text_color_choice(
+        preferences.list_secondary_color,
+        true,
+        current_selection_highlight_preset(),
+    ) {
+        secondary = secondary.fg(color);
+    } else {
+        secondary = secondary.dim();
+    }
+    secondary = apply_terminal_safe_formats(
+        secondary,
+        preferences.list_text_formats,
+        preferences.list_secondary_color != UiColorChoice::Auto,
+        true,
+    );
+
+    (primary, secondary)
+}
+
+fn style_is_plain(style: Style) -> bool {
+    style.fg.is_none()
+        && style.bg.is_none()
+        && style.add_modifier.is_empty()
+        && style.sub_modifier.is_empty()
+}
+
+fn style_has_visible_background(style: Style) -> bool {
+    style.bg.is_some_and(|background| background != Color::Reset)
+}
+
+fn apply_base_style_to_prefix_span(mut span: Span<'static>, base_style: Style) -> Span<'static> {
+    if style_is_plain(span.style) {
+        span.style = span.style.patch(base_style);
+    }
+    span
+}
+
+fn span_is_secondary(style: Style, normal_secondary_style: Style) -> bool {
+    style.add_modifier.contains(Modifier::DIM)
+        || matches!(style.fg, Some(Color::Gray | Color::DarkGray))
+        || normal_secondary_style
+            .fg
+            .is_some_and(|foreground| style.fg == Some(foreground))
+}
+
+fn state_badge_kind(label: &str) -> Option<bool> {
+    let normalized = label.trim().to_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let enabled = [
+        "✓",
+        "✔",
+        "enabled",
+        "active",
+        "current",
+        "selected",
+        "on",
+        "true",
+        "yes",
+        "вкл",
+        "включ",
+        "актив",
+        "текущ",
+        "выбран",
+        "да",
+    ];
+    if enabled.iter().any(|token| normalized.contains(token)) {
+        return Some(true);
+    }
+
+    let disabled = [
+        "✕",
+        "✖",
+        "✗",
+        "disabled",
+        "inactive",
+        "off",
+        "false",
+        "no",
+        "выкл",
+        "откл",
+        "неактив",
+        "нет",
+    ];
+    if disabled.iter().any(|token| normalized.contains(token)) {
+        return Some(false);
+    }
+
+    None
+}
+
+pub(crate) fn tag_has_state_badge(label: &str) -> bool {
+    state_badge_kind(label).is_some()
+}
+
+fn badge_display_text(label: &str) -> Cow<'_, str> {
+    match state_badge_kind(label) {
+        Some(true) => Cow::Borrowed("✓"),
+        Some(false) => Cow::Borrowed("✕"),
+        None => Cow::Borrowed(label.trim()),
+    }
 }
 
 /// Apply the shared "menu surface" padding used by bottom-pane overlays.
@@ -242,6 +681,7 @@ fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> 
     let Some(description) = row.description.as_deref() else {
         return Vec::new();
     };
+    let (primary_style, secondary_style) = unselected_row_styles();
 
     let width = width.max(1);
     let max_desc_col = width.saturating_sub(1) as usize;
@@ -273,7 +713,7 @@ fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> 
     for idx in 0..rows {
         let mut spans: Vec<Span<'static>> = Vec::new();
         if let Some(name) = name_lines.get(idx) {
-            spans.push(name.to_string().into());
+            spans.push(Span::styled(name.to_string(), primary_style));
         }
 
         if let Some(desc) = desc_lines.get(idx) {
@@ -289,7 +729,7 @@ fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> 
             if gap > 0 {
                 spans.push(" ".repeat(gap).into());
             }
-            spans.push(desc.to_string().dim());
+            spans.push(Span::styled(desc.to_string(), secondary_style));
         }
 
         out.push(Line::from(spans));
@@ -302,7 +742,7 @@ fn wrap_standard_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Ve
     use crate::wrapping::RtOptions;
     use crate::wrapping::word_wrap_line;
 
-    let full_line = build_full_line(row, desc_col);
+    let full_line = build_full_line(row, desc_col, width.max(1) as usize);
     let continuation_indent = wrap_indent(row, desc_col, width);
     let options = RtOptions::new(width.max(1) as usize)
         .initial_indent(Line::from(""))
@@ -355,73 +795,11 @@ fn current_selection_highlight_text_formats() -> SelectionHighlightTextFormats {
 }
 
 fn selection_highlight_palette() -> SelectionHighlightPalette {
-    match current_selection_highlight_preset() {
-        SelectionHighlightPreset::Light => SelectionHighlightPalette {
-            fill_bg: Color::White,
-            fill_bg_emphasis: Color::Rgb(236, 236, 236),
-            fill_fg: Color::Black,
-            fill_secondary_fg: Color::Rgb(62, 62, 62),
-            fill_secondary_fg_emphasis: Color::Rgb(47, 47, 47),
-            text_fg: Color::White,
-            text_fg_emphasis: Color::Rgb(245, 245, 245),
-            text_secondary_fg: Color::Rgb(214, 214, 214),
-            text_secondary_fg_emphasis: Color::Rgb(230, 230, 230),
-            mono_text_fg: Color::Rgb(239, 239, 239),
-            mono_text_secondary_fg: Color::Rgb(206, 206, 206),
-        },
-        SelectionHighlightPreset::Graphite => SelectionHighlightPalette {
-            fill_bg: Color::Rgb(73, 78, 87),
-            fill_bg_emphasis: Color::Rgb(61, 66, 74),
-            fill_fg: Color::White,
-            fill_secondary_fg: Color::Rgb(223, 227, 234),
-            fill_secondary_fg_emphasis: Color::Rgb(235, 238, 243),
-            text_fg: Color::Rgb(205, 210, 220),
-            text_fg_emphasis: Color::Rgb(228, 232, 239),
-            text_secondary_fg: Color::Rgb(163, 170, 183),
-            text_secondary_fg_emphasis: Color::Rgb(188, 195, 207),
-            mono_text_fg: Color::Rgb(218, 222, 228),
-            mono_text_secondary_fg: Color::Rgb(189, 194, 201),
-        },
-        SelectionHighlightPreset::Amber => SelectionHighlightPalette {
-            fill_bg: Color::Rgb(248, 229, 191),
-            fill_bg_emphasis: Color::Rgb(240, 214, 162),
-            fill_fg: Color::Black,
-            fill_secondary_fg: Color::Rgb(78, 61, 35),
-            fill_secondary_fg_emphasis: Color::Rgb(66, 51, 29),
-            text_fg: Color::Rgb(247, 224, 166),
-            text_fg_emphasis: Color::Rgb(255, 213, 138),
-            text_secondary_fg: Color::Rgb(221, 193, 129),
-            text_secondary_fg_emphasis: Color::Rgb(236, 205, 142),
-            mono_text_fg: Color::Rgb(228, 214, 181),
-            mono_text_secondary_fg: Color::Rgb(204, 187, 151),
-        },
-        SelectionHighlightPreset::Mint => SelectionHighlightPalette {
-            fill_bg: Color::Rgb(212, 241, 223),
-            fill_bg_emphasis: Color::Rgb(191, 232, 207),
-            fill_fg: Color::Black,
-            fill_secondary_fg: Color::Rgb(34, 73, 55),
-            fill_secondary_fg_emphasis: Color::Rgb(28, 62, 47),
-            text_fg: Color::Rgb(190, 238, 208),
-            text_fg_emphasis: Color::Rgb(163, 228, 187),
-            text_secondary_fg: Color::Rgb(153, 208, 177),
-            text_secondary_fg_emphasis: Color::Rgb(171, 220, 191),
-            mono_text_fg: Color::Rgb(192, 226, 204),
-            mono_text_secondary_fg: Color::Rgb(161, 198, 177),
-        },
-        SelectionHighlightPreset::Rose => SelectionHighlightPalette {
-            fill_bg: Color::Rgb(246, 213, 224),
-            fill_bg_emphasis: Color::Rgb(239, 193, 210),
-            fill_fg: Color::Black,
-            fill_secondary_fg: Color::Rgb(87, 51, 67),
-            fill_secondary_fg_emphasis: Color::Rgb(74, 43, 57),
-            text_fg: Color::Rgb(244, 198, 217),
-            text_fg_emphasis: Color::Rgb(236, 178, 202),
-            text_secondary_fg: Color::Rgb(220, 165, 189),
-            text_secondary_fg_emphasis: Color::Rgb(231, 181, 202),
-            mono_text_fg: Color::Rgb(228, 200, 211),
-            mono_text_secondary_fg: Color::Rgb(205, 175, 188),
-        },
-    }
+    let preferences = popup_ui_preferences();
+    selection_highlight_palette_from_choice(
+        preferences.selection_highlight_color,
+        current_selection_highlight_preset(),
+    )
 }
 
 fn selection_highlight_base_style(is_secondary: bool) -> Style {
@@ -465,20 +843,12 @@ fn selection_highlight_base_style(is_secondary: bool) -> Style {
         } else {
             palette.text_fg
         };
-        Style::default().fg(fg).bg(Color::Reset)
+        Style::default()
+            .fg(ensure_visible_text_color(fg, is_secondary))
+            .bg(Color::Reset)
     };
 
-    if formats.contains(SelectionHighlightTextFormat::Bold) {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    if formats.contains(SelectionHighlightTextFormat::Italic) {
-        style = style.add_modifier(Modifier::ITALIC);
-    }
-    if formats.contains(SelectionHighlightTextFormat::Underlined) {
-        style = style.add_modifier(Modifier::UNDERLINED);
-    }
-
-    style
+    apply_terminal_safe_formats(style, formats, !fill, !fill)
 }
 
 pub(crate) fn selection_highlight_style() -> Style {
@@ -494,8 +864,14 @@ fn selected_secondary_row_style() -> Style {
 }
 
 fn badge_style(label: &str) -> Style {
-    let normalized = label.to_ascii_lowercase();
-    if normalized.contains("fast") || normalized.contains("быстр") {
+    let normalized = label.trim().to_lowercase();
+    if let Some(enabled) = state_badge_kind(label) {
+        if enabled {
+            Style::default().fg(Color::Black).bg(Color::Green).bold()
+        } else {
+            Style::default().fg(Color::White).bg(Color::Red).bold()
+        }
+    } else if normalized.contains("fast") || normalized.contains("быстр") {
         Style::default().fg(Color::Black).bg(Color::Green).bold()
     } else if normalized.contains("latest")
         || normalized.contains("основ")
@@ -525,21 +901,29 @@ fn badge_spans(tags: &[String]) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     for tag in tags.iter().filter(|tag| !tag.trim().is_empty()) {
         spans.push(" ".into());
-        spans.push(Span::styled(format!(" {} ", tag.trim()), badge_style(tag)));
+        spans.push(Span::styled(
+            format!(" {} ", badge_display_text(tag)),
+            badge_style(tag),
+        ));
     }
     spans
 }
 
 fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disabled: bool) {
     if selected {
+        let selected_primary_style = selected_row_style();
+        let selected_secondary_style = selected_secondary_row_style();
+        let normal_secondary_style = unselected_row_styles().1;
         for line in lines.iter_mut() {
             line.spans.iter_mut().for_each(|span| {
-                let is_secondary = span.style.add_modifier.contains(Modifier::DIM)
-                    || matches!(span.style.fg, Some(Color::Gray | Color::DarkGray));
+                if style_has_visible_background(span.style) {
+                    return;
+                }
+                let is_secondary = span_is_secondary(span.style, normal_secondary_style);
                 let mut style = span.style.patch(if is_secondary {
-                    selected_secondary_row_style()
+                    selected_secondary_style
                 } else {
-                    selected_row_style()
+                    selected_primary_style
                 });
                 style.add_modifier.remove(Modifier::DIM);
                 style.sub_modifier.remove(Modifier::DIM);
@@ -658,7 +1042,8 @@ fn adjust_start_for_wrapped_selection_visibility(
 /// Build the full display line for a row with the description padded to start
 /// at `desc_col`. Applies fuzzy-match bolding when indices are present and
 /// dims the description.
-fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
+fn build_full_line(row: &GenericDisplayRow, desc_col: usize, total_width: usize) -> Line<'static> {
+    let (primary_style, secondary_style) = unselected_row_styles();
     let combined_description = match (&row.description, &row.disabled_reason) {
         (Some(desc), Some(reason)) => Some(format!("{desc} (недоступно: {reason})")),
         (Some(desc), None) => Some(desc.clone()),
@@ -691,9 +1076,12 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
 
             if idx_iter.peek().is_some_and(|next| **next == char_idx) {
                 idx_iter.next();
-                name_spans.push(ch.to_string().bold());
+                name_spans.push(Span::styled(
+                    ch.to_string(),
+                    primary_style.add_modifier(Modifier::BOLD),
+                ));
             } else {
-                name_spans.push(ch.to_string().into());
+                name_spans.push(Span::styled(ch.to_string(), primary_style));
             }
         }
     } else {
@@ -705,40 +1093,62 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
                 break;
             }
             used_width = next_width;
-            name_spans.push(ch.to_string().into());
+            name_spans.push(Span::styled(ch.to_string(), primary_style));
         }
     }
 
     if truncated {
         // If there is at least one cell available, add an ellipsis.
         // When name_limit is 0, we still show an ellipsis to indicate truncation.
-        name_spans.push("…".into());
+        name_spans.push(Span::styled("…", primary_style));
     }
 
     if row.disabled_reason.is_some() {
-        name_spans.push(" (недоступно)".dim());
+        name_spans.push(Span::styled(" (недоступно)", secondary_style));
     }
 
     let this_name_width = name_prefix_width + Line::from(name_spans.clone()).width();
-    let mut full_spans: Vec<Span> = row.name_prefix_spans.clone();
+    let mut full_spans: Vec<Span> = row
+        .name_prefix_spans
+        .clone()
+        .into_iter()
+        .map(|span| apply_base_style_to_prefix_span(span, primary_style))
+        .collect();
     full_spans.extend(name_spans);
     if let Some(display_shortcut) = row.display_shortcut {
-        full_spans.push(" (".into());
-        full_spans.push(display_shortcut.into());
-        full_spans.push(")".into());
+        full_spans.push(Span::styled(" (", secondary_style));
+        let shortcut: Span<'static> = display_shortcut.into();
+        full_spans.push(apply_base_style_to_prefix_span(shortcut, secondary_style));
+        full_spans.push(Span::styled(")", secondary_style));
     }
     if let Some(desc) = combined_description.as_ref() {
         let gap = desc_col.saturating_sub(this_name_width);
         if gap > 0 {
             full_spans.push(" ".repeat(gap).into());
         }
-        full_spans.push(desc.clone().dim());
+        full_spans.push(Span::styled(desc.clone(), secondary_style));
     }
     if !row.category_tags.is_empty() {
-        full_spans.extend(badge_spans(&row.category_tags));
+        let badges = badge_spans(&row.category_tags);
+        let content_width = Line::from(full_spans.clone()).width();
+        let badge_width = Line::from(badges.clone()).width();
+        let gap = total_width
+            .saturating_sub(content_width.saturating_add(badge_width))
+            .max(1);
+        if gap > 0 {
+            full_spans.push(" ".repeat(gap).into());
+        }
+        full_spans.extend(badges);
     } else if let Some(tag) = row.category_tag.as_deref().filter(|tag| !tag.is_empty()) {
-        full_spans.push("  ".into());
-        full_spans.push(tag.to_string().dim());
+        let tag_width = UnicodeWidthStr::width(tag);
+        let content_width = Line::from(full_spans.clone()).width();
+        let gap = total_width
+            .saturating_sub(content_width.saturating_add(tag_width))
+            .max(2);
+        if gap > 0 {
+            full_spans.push(" ".repeat(gap).into());
+        }
+        full_spans.push(Span::styled(tag.to_string(), secondary_style));
     }
     Line::from(full_spans)
 }
@@ -966,28 +1376,14 @@ pub(crate) fn render_rows_single_line(
             break;
         }
 
-        let mut full_line = build_full_line(row, desc_col);
-        if Some(i) == state.selected_idx && !row.is_disabled {
-            full_line.spans.iter_mut().for_each(|span| {
-                let is_secondary = span.style.add_modifier.contains(Modifier::DIM)
-                    || matches!(span.style.fg, Some(Color::Gray | Color::DarkGray));
-                let mut style = span.style.patch(if is_secondary {
-                    selected_secondary_row_style()
-                } else {
-                    selected_row_style()
-                });
-                style.add_modifier.remove(Modifier::DIM);
-                style.sub_modifier.remove(Modifier::DIM);
-                span.style = style;
-            });
-        }
-        if row.is_disabled {
-            full_line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.dim();
-            });
-        }
-
-        let full_line = truncate_line_with_ellipsis_if_overflow(full_line, area.width as usize);
+        let mut lines = vec![build_full_line(row, desc_col, area.width.max(1) as usize)];
+        apply_row_state_style(
+            &mut lines,
+            Some(i) == state.selected_idx && !row.is_disabled,
+            row.is_disabled,
+        );
+        let full_line =
+            truncate_line_with_ellipsis_if_overflow(lines.remove(0), area.width as usize);
         full_line.render(
             Rect {
                 x: area.x,
@@ -1209,5 +1605,35 @@ mod tests {
 
         let two_col = wrap_two_column_row(&row, /*desc_col*/ 0, /*width*/ 1);
         assert_eq!(two_col.len(), 0);
+    }
+
+    #[test]
+    fn state_badges_use_compact_icons_with_green_and_red_pills() {
+        let positive = badge_spans(&["enabled".to_string()]);
+        let negative = badge_spans(&["disabled".to_string()]);
+
+        assert_eq!(positive[1].content.as_ref(), " ✓ ");
+        assert_eq!(positive[1].style.bg, Some(Color::Green));
+        assert_eq!(negative[1].content.as_ref(), " ✕ ");
+        assert_eq!(negative[1].style.bg, Some(Color::Red));
+    }
+
+    #[test]
+    fn extended_text_formats_remain_safe_in_text_only_mode() {
+        set_selection_highlight_fill(false);
+        set_selection_highlight_text_formats(
+            SelectionHighlightTextFormats::empty()
+                .with_toggled(SelectionHighlightTextFormat::Dim)
+                .with_toggled(SelectionHighlightTextFormat::Reversed)
+                .with_toggled(SelectionHighlightTextFormat::CrossedOut),
+        );
+
+        let style = selection_highlight_style();
+        assert!(style.add_modifier.contains(Modifier::DIM));
+        assert!(style.add_modifier.contains(Modifier::REVERSED));
+        assert!(style.add_modifier.contains(Modifier::CROSSED_OUT));
+
+        set_selection_highlight_fill(true);
+        set_selection_highlight_text_formats(SelectionHighlightTextFormats::empty());
     }
 }

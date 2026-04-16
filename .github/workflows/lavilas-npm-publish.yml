@@ -299,6 +299,22 @@ jobs:
           echo "release_version=$v" >> "$GITHUB_OUTPUT"
           echo "Release version: $v"
 
+      - name: Resolve npm release channel
+        id: channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.release_version }}'
+          if [[ "$version" == *-beta.* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "base_dist_tag=beta" >> "$GITHUB_OUTPUT"
+            echo "linux_x64_platform_dist_tag=beta-linux-x64" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "base_dist_tag=latest" >> "$GITHUB_OUTPUT"
+            echo "linux_x64_platform_dist_tag=latest-linux-x64" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download staged platform packages
         uses: actions/download-artifact@v4
         with:
@@ -329,19 +345,30 @@ jobs:
         run: |
           set -euo pipefail
 
+          platform_dist_tag_for_package() {
+            local name="$1"
+            local base_dist_tag='${{ steps.channel.outputs.base_dist_tag }}'
+            local short_name platform_suffix
+            short_name="${name#@lavilas/}"
+            platform_suffix="${short_name#codex-}"
+            echo "${base_dist_tag}-${platform_suffix}"
+          }
+
           publish_if_needed() {
             local dir="$1"
-            local pkg_json name version
+            local pkg_json name version dist_tag
             pkg_json="$dir/package.json"
             name="$(node -p "require(process.argv[1]).name" "$pkg_json")"
             version="$(node -p "require(process.argv[1]).version" "$pkg_json")"
+            dist_tag="$(platform_dist_tag_for_package "$name")"
 
             if npm view "${name}@${version}" version >/dev/null 2>&1; then
               echo "Skipping ${name}@${version}: already published"
-              return 0
+            else
+              (cd "$dir" && npm publish --access public --tag "$dist_tag")
             fi
 
-            (cd "$dir" && npm publish --access public)
+            npm dist-tag add "${name}@${version}" "$dist_tag"
           }
 
           for dir in "$RUNNER_TEMP"/npm-artifacts/*; do
@@ -370,6 +397,26 @@ jobs:
 
           bash .github/scripts/wait_for_npm_package.sh --timeout 900 "${refs[@]}"
 
+      - name: Wait for linux x64 platform dist-tag to point at this release
+        shell: bash
+        run: |
+          set -euo pipefail
+          package='@lavilas/codex-linux-x64'
+          dist_tag='${{ steps.channel.outputs.linux_x64_platform_dist_tag }}'
+          version='${{ steps.version.outputs.release_version }}'
+          deadline=$(( $(date +%s) + 900 ))
+          while (( $(date +%s) < deadline )); do
+            current="$(npm view "$package" dist-tags --json 2>/dev/null | node -e "const fs=require('fs'); const data=JSON.parse(fs.readFileSync(0,'utf8')); const key=process.argv[1]; process.stdout.write(String(data?.[key] ?? ''))" "$dist_tag" || true)"
+            if [[ "$current" == "$version" ]]; then
+              echo "$package@$dist_tag -> $version"
+              exit 0
+            fi
+            echo "Waiting for $package@$dist_tag to point at $version (current: ${current:-<missing>})"
+            sleep 10
+          done
+          echo "Timed out waiting for $package@$dist_tag to point at $version" >&2
+          exit 1
+
       - name: Smoke test propagated linux x64 platform package tarball
         shell: bash
         run: |
@@ -377,9 +424,10 @@ jobs:
           work="$RUNNER_TEMP/npm-platform-smoke"
           rm -rf "$work"
           mkdir -p "$work/unpack"
-          (cd "$work" && npm pack "@lavilas/codex-linux-x64@${{ steps.version.outputs.release_version }}" --silent >/dev/null)
+          (cd "$work" && npm pack "@lavilas/codex-linux-x64@${{ steps.channel.outputs.linux_x64_platform_dist_tag }}" --silent >/dev/null)
           tarball="$(echo "$work"/*.tgz)"
           tar -xzf "$tarball" -C "$work/unpack"
+          test "$(node -p "require(process.argv[1]).version" "$work/unpack/package/package.json")" = "${{ steps.version.outputs.release_version }}"
           "$work/unpack/package/vendor/x86_64-unknown-linux-musl/codex/codex" --version
 
       - name: Smoke test staged base package against propagated platform packages (linux x64)
@@ -416,17 +464,19 @@ jobs:
 
           publish_if_needed() {
             local dir="$1"
-            local pkg_json name version
+            local pkg_json name version dist_tag
             pkg_json="$dir/package.json"
             name="$(node -p "require(process.argv[1]).name" "$pkg_json")"
             version="$(node -p "require(process.argv[1]).version" "$pkg_json")"
+            dist_tag='${{ steps.channel.outputs.base_dist_tag }}'
 
             if npm view "${name}@${version}" version >/dev/null 2>&1; then
               echo "Skipping ${name}@${version}: already published"
-              return 0
+            else
+              (cd "$dir" && npm publish --access public --tag "$dist_tag")
             fi
 
-            (cd "$dir" && npm publish --access public)
+            npm dist-tag add "${name}@${version}" "$dist_tag"
           }
 
           publish_if_needed "$RUNNER_TEMP/pkg-codex"
@@ -437,12 +487,33 @@ jobs:
           set -euo pipefail
           bash .github/scripts/wait_for_npm_package.sh --timeout 900 "@lavilas/codex@${{ steps.version.outputs.release_version }}"
 
-      - name: Smoke test npm install (linux x64)
+      - name: Wait for base dist-tag to point at this release
+        shell: bash
+        run: |
+          set -euo pipefail
+          package='@lavilas/codex'
+          dist_tag='${{ steps.channel.outputs.base_dist_tag }}'
+          version='${{ steps.version.outputs.release_version }}'
+          deadline=$(( $(date +%s) + 900 ))
+          while (( $(date +%s) < deadline )); do
+            current="$(npm view "$package" dist-tags --json 2>/dev/null | node -e "const fs=require('fs'); const data=JSON.parse(fs.readFileSync(0,'utf8')); const key=process.argv[1]; process.stdout.write(String(data?.[key] ?? ''))" "$dist_tag" || true)"
+            if [[ "$current" == "$version" ]]; then
+              echo "$package@$dist_tag -> $version"
+              exit 0
+            fi
+            echo "Waiting for $package@$dist_tag to point at $version (current: ${current:-<missing>})"
+            sleep 10
+          done
+          echo "Timed out waiting for $package@$dist_tag to point at $version" >&2
+          exit 1
+
+      - name: Smoke test npm install via dist-tag (linux x64)
         shell: bash
         run: |
           set -euo pipefail
           prefix="$RUNNER_TEMP/npm-smoke"
           rm -rf "$prefix"
-          npm install -g --prefix "$prefix" "@lavilas/codex@${{ steps.version.outputs.release_version }}"
+          npm install -g --prefix "$prefix" "@lavilas/codex@${{ steps.channel.outputs.base_dist_tag }}"
+          test "$(node -p "require(process.argv[1]).version" "$prefix/lib/node_modules/@lavilas/codex/package.json")" = "${{ steps.version.outputs.release_version }}"
           "$prefix/bin/lavilas" --version
           test ! -e "$prefix/bin/codex"
