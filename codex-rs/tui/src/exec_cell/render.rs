@@ -9,6 +9,8 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::shimmer::shimmer_spans;
+use crate::ui_runtime_style::RuntimeTextRole;
+use crate::ui_runtime_style::patch_lines_for_role;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
@@ -218,16 +220,26 @@ impl HistoryCell for ExecCell {
                     .initial_indent("$ ".magenta().into())
                     .subsequent_indent("    ".into()),
             );
-            lines.extend(cmd_display);
+            lines.extend(patch_lines_for_role(
+                cmd_display,
+                RuntimeTextRole::Command,
+                /*only_plain*/ true,
+            ));
 
             if let Some(output) = call.output.as_ref() {
                 if !call.is_unified_exec_interaction() {
                     let wrap_width = width.max(1) as usize;
                     let wrap_opts = RtOptions::new(wrap_width);
+                    let mut output_lines = Vec::new();
                     for unwrapped in output.formatted_output.lines().map(ansi_escape_line) {
                         let wrapped = adaptive_wrap_line(&unwrapped, wrap_opts.clone());
-                        push_owned_lines(&wrapped, &mut lines);
+                        push_owned_lines(&wrapped, &mut output_lines);
                     }
+                    lines.extend(patch_lines_for_role(
+                        output_lines,
+                        RuntimeTextRole::CommandOutput,
+                        /*only_plain*/ true,
+                    ));
                 }
                 let duration = call
                     .duration
@@ -430,6 +442,8 @@ impl ExecCell {
             ));
         }
 
+        lines = patch_lines_for_role(lines, RuntimeTextRole::Command, /*only_plain*/ true);
+
         if let Some(output) = call.output.as_ref() {
             let line_limit = if call.is_user_shell_command() {
                 USER_SHELL_TOOL_CALL_MAX_LINES
@@ -479,6 +493,8 @@ impl ExecCell {
                     Span::from(layout.output_block.initial_prefix).dim(),
                     Span::from(layout.output_block.subsequent_prefix),
                 );
+                let prefixed_output =
+                    patch_lines_for_role(prefixed_output, RuntimeTextRole::CommandOutput, true);
                 let trimmed_output = Self::truncate_lines_middle(
                     &prefixed_output,
                     display_limit,

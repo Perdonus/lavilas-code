@@ -4,6 +4,9 @@ use std::io::IsTerminal;
 use std::io::Write;
 use std::io::stdout;
 
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_info;
 use crossterm::Command;
 use ratatui::crossterm::execute;
 
@@ -12,6 +15,54 @@ pub(crate) enum SetTerminalFontResult {
     Applied,
     NotTerminal,
     NoVisibleContent,
+    ManualOnly,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum TerminalFontSupport {
+    BestEffort,
+    ManualOnly,
+}
+
+pub(crate) fn terminal_font_support() -> TerminalFontSupport {
+    let info = terminal_info();
+    if info.is_zellij() || matches!(info.multiplexer, Some(Multiplexer::Tmux { .. })) {
+        return TerminalFontSupport::ManualOnly;
+    }
+
+    match info.name {
+        TerminalName::VsCode
+        | TerminalName::WindowsTerminal
+        | TerminalName::WarpTerminal
+        | TerminalName::Dumb => TerminalFontSupport::ManualOnly,
+        _ => TerminalFontSupport::BestEffort,
+    }
+}
+
+pub(crate) fn terminal_font_support_summary(is_ru: bool) -> &'static str {
+    match (is_ru, terminal_font_support()) {
+        (true, TerminalFontSupport::BestEffort) => "Автоприменение: best-effort",
+        (true, TerminalFontSupport::ManualOnly) => "Автоприменение: вручную",
+        (false, TerminalFontSupport::BestEffort) => "Auto-apply: best effort",
+        (false, TerminalFontSupport::ManualOnly) => "Auto-apply: manual only",
+    }
+}
+
+pub(crate) fn terminal_font_support_note(is_ru: bool) -> &'static str {
+    match (is_ru, terminal_font_support()) {
+        (true, TerminalFontSupport::BestEffort) => {
+            "Lavilas попробует переключить гарнитуру сам, но итог зависит от терминала."
+        }
+        (true, TerminalFontSupport::ManualOnly) => {
+            "Этот терминал не обещает автосмену гарнитуры. Шрифт сохранится как предпочтение, а применить его лучше вручную в настройках терминала."
+        }
+        (false, TerminalFontSupport::BestEffort) => {
+            "Lavilas will try to switch the terminal font, but the result still depends on the terminal."
+        }
+        (false, TerminalFontSupport::ManualOnly) => {
+            "This terminal does not reliably support automatic font switching. The font will be saved as a preference; apply it manually in the terminal settings."
+        }
+    }
 }
 
 pub(crate) fn set_terminal_font(family: &str) -> io::Result<SetTerminalFontResult> {
@@ -22,6 +73,10 @@ pub(crate) fn set_terminal_font(family: &str) -> io::Result<SetTerminalFontResul
 
     if !stdout().is_terminal() {
         return Ok(SetTerminalFontResult::NotTerminal);
+    }
+
+    if matches!(terminal_font_support(), TerminalFontSupport::ManualOnly) {
+        return Ok(SetTerminalFontResult::ManualOnly);
     }
 
     #[cfg(unix)]

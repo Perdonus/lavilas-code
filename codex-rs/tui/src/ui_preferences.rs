@@ -325,12 +325,21 @@ pub(crate) enum PopupColorTarget {
     Selection,
     ListPrimary,
     ListSecondary,
+    Reply,
+    Reasoning,
+    Command,
+    CommandOutput,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PopupFormatTarget {
     Selection,
-    List,
+    ListPrimary,
+    ListSecondary,
+    Reply,
+    Reasoning,
+    Command,
+    CommandOutput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,7 +359,16 @@ pub(crate) struct UiPreferences {
     pub(crate) selection_highlight_text_formats: SelectionHighlightTextFormats,
     pub(crate) list_primary_color: UiColorChoice,
     pub(crate) list_secondary_color: UiColorChoice,
-    pub(crate) list_text_formats: SelectionHighlightTextFormats,
+    pub(crate) list_primary_text_formats: SelectionHighlightTextFormats,
+    pub(crate) list_secondary_text_formats: SelectionHighlightTextFormats,
+    pub(crate) reply_text_color: UiColorChoice,
+    pub(crate) reply_text_formats: SelectionHighlightTextFormats,
+    pub(crate) reasoning_text_color: UiColorChoice,
+    pub(crate) reasoning_text_formats: SelectionHighlightTextFormats,
+    pub(crate) command_text_color: UiColorChoice,
+    pub(crate) command_text_formats: SelectionHighlightTextFormats,
+    pub(crate) command_output_text_color: UiColorChoice,
+    pub(crate) command_output_text_formats: SelectionHighlightTextFormats,
     pub(crate) installed_fonts: Vec<StoredFontProfile>,
     pub(crate) active_font_id: Option<String>,
     pub(crate) command_prefix: char,
@@ -369,7 +387,16 @@ impl Default for UiPreferences {
             selection_highlight_text_formats: SelectionHighlightTextFormats::empty(),
             list_primary_color: UiColorChoice::Auto,
             list_secondary_color: UiColorChoice::Auto,
-            list_text_formats: SelectionHighlightTextFormats::empty(),
+            list_primary_text_formats: SelectionHighlightTextFormats::empty(),
+            list_secondary_text_formats: SelectionHighlightTextFormats::empty(),
+            reply_text_color: UiColorChoice::Auto,
+            reply_text_formats: SelectionHighlightTextFormats::empty(),
+            reasoning_text_color: UiColorChoice::Auto,
+            reasoning_text_formats: SelectionHighlightTextFormats::empty(),
+            command_text_color: UiColorChoice::Auto,
+            command_text_formats: SelectionHighlightTextFormats::empty(),
+            command_output_text_color: UiColorChoice::Auto,
+            command_output_text_formats: SelectionHighlightTextFormats::empty(),
             installed_fonts: Vec::new(),
             active_font_id: None,
             command_prefix: '/',
@@ -578,8 +605,34 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
         UiColorChoice::from_setting_value(value.get("list_primary_color"), UiColorChoice::Auto);
     let list_secondary_color =
         UiColorChoice::from_setting_value(value.get("list_secondary_color"), UiColorChoice::Auto);
-    let list_text_formats =
+    let legacy_list_text_formats =
         SelectionHighlightTextFormats::from_setting_value(value.get("list_text_formats"));
+    let list_primary_text_formats = value
+        .get("list_primary_text_formats")
+        .map(|value| SelectionHighlightTextFormats::from_setting_value(Some(value)))
+        .unwrap_or(legacy_list_text_formats);
+    let list_secondary_text_formats = value
+        .get("list_secondary_text_formats")
+        .map(|value| SelectionHighlightTextFormats::from_setting_value(Some(value)))
+        .unwrap_or(legacy_list_text_formats);
+    let reply_text_color =
+        UiColorChoice::from_setting_value(value.get("reply_text_color"), UiColorChoice::Auto);
+    let reply_text_formats =
+        SelectionHighlightTextFormats::from_setting_value(value.get("reply_text_formats"));
+    let reasoning_text_color =
+        UiColorChoice::from_setting_value(value.get("reasoning_text_color"), UiColorChoice::Auto);
+    let reasoning_text_formats =
+        SelectionHighlightTextFormats::from_setting_value(value.get("reasoning_text_formats"));
+    let command_text_color =
+        UiColorChoice::from_setting_value(value.get("command_text_color"), UiColorChoice::Auto);
+    let command_text_formats =
+        SelectionHighlightTextFormats::from_setting_value(value.get("command_text_formats"));
+    let command_output_text_color = UiColorChoice::from_setting_value(
+        value.get("command_output_text_color"),
+        UiColorChoice::Auto,
+    );
+    let command_output_text_formats =
+        SelectionHighlightTextFormats::from_setting_value(value.get("command_output_text_formats"));
     let command_prefix = value
         .get("command_prefix")
         .and_then(serde_json::Value::as_str)
@@ -646,7 +699,16 @@ pub(crate) fn load_ui_preferences(codex_home: &Path) -> UiPreferences {
         selection_highlight_text_formats,
         list_primary_color,
         list_secondary_color,
-        list_text_formats,
+        list_primary_text_formats,
+        list_secondary_text_formats,
+        reply_text_color,
+        reply_text_formats,
+        reasoning_text_color,
+        reasoning_text_formats,
+        command_text_color,
+        command_text_formats,
+        command_output_text_color,
+        command_output_text_formats,
         installed_fonts,
         active_font_id,
         command_prefix,
@@ -722,7 +784,91 @@ pub(crate) fn save_list_text_formats(
     codex_home: &Path,
     formats: SelectionHighlightTextFormats,
 ) -> io::Result<()> {
-    persist_setting(codex_home, "list_text_formats", formats.to_setting_value())
+    let mut json = load_settings_json(codex_home);
+    if !json.is_object() {
+        json = serde_json::json!({});
+    }
+    let value = formats.to_setting_value();
+    json["list_text_formats"] = value.clone();
+    json["list_primary_text_formats"] = value.clone();
+    json["list_secondary_text_formats"] = value;
+    save_settings_json(codex_home, &json)
+}
+
+pub(crate) fn save_list_primary_text_formats(
+    codex_home: &Path,
+    formats: SelectionHighlightTextFormats,
+) -> io::Result<()> {
+    persist_setting(
+        codex_home,
+        "list_primary_text_formats",
+        formats.to_setting_value(),
+    )
+}
+
+pub(crate) fn save_list_secondary_text_formats(
+    codex_home: &Path,
+    formats: SelectionHighlightTextFormats,
+) -> io::Result<()> {
+    persist_setting(
+        codex_home,
+        "list_secondary_text_formats",
+        formats.to_setting_value(),
+    )
+}
+
+pub(crate) fn save_reply_text_color(codex_home: &Path, choice: UiColorChoice) -> io::Result<()> {
+    persist_setting(codex_home, "reply_text_color", choice.to_setting_value())
+}
+
+pub(crate) fn save_reply_text_formats(
+    codex_home: &Path,
+    formats: SelectionHighlightTextFormats,
+) -> io::Result<()> {
+    persist_setting(codex_home, "reply_text_formats", formats.to_setting_value())
+}
+
+pub(crate) fn save_reasoning_text_color(
+    codex_home: &Path,
+    choice: UiColorChoice,
+) -> io::Result<()> {
+    persist_setting(codex_home, "reasoning_text_color", choice.to_setting_value())
+}
+
+pub(crate) fn save_reasoning_text_formats(
+    codex_home: &Path,
+    formats: SelectionHighlightTextFormats,
+) -> io::Result<()> {
+    persist_setting(codex_home, "reasoning_text_formats", formats.to_setting_value())
+}
+
+pub(crate) fn save_command_text_color(codex_home: &Path, choice: UiColorChoice) -> io::Result<()> {
+    persist_setting(codex_home, "command_text_color", choice.to_setting_value())
+}
+
+pub(crate) fn save_command_text_formats(
+    codex_home: &Path,
+    formats: SelectionHighlightTextFormats,
+) -> io::Result<()> {
+    persist_setting(codex_home, "command_text_formats", formats.to_setting_value())
+}
+
+pub(crate) fn save_command_output_text_color(
+    codex_home: &Path,
+    choice: UiColorChoice,
+) -> io::Result<()> {
+    persist_setting(codex_home, "command_output_text_color", choice.to_setting_value())
+}
+
+pub(crate) fn save_command_output_text_formats(
+    codex_home: &Path,
+    formats: SelectionHighlightTextFormats,
+) -> io::Result<()> {
+    persist_setting(
+        codex_home,
+        "command_output_text_formats",
+        formats.to_setting_value(),
+    )
 }
 
 pub(crate) fn save_command_prefix(codex_home: &Path, prefix: char) -> io::Result<()> {

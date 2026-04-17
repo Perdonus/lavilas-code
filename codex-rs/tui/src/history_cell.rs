@@ -34,6 +34,8 @@ use crate::text_formatting::truncate_text;
 use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
+use crate::ui_runtime_style::RuntimeTextRole;
+use crate::ui_runtime_style::patch_lines_for_role;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
@@ -423,12 +425,13 @@ impl ReasoningSummaryCell {
             })
             .collect::<Vec<_>>();
 
-        adaptive_wrap_lines(
+        let wrapped = adaptive_wrap_lines(
             &summary_lines,
             RtOptions::new(width as usize)
                 .initial_indent("• ".dim().into())
                 .subsequent_indent("  ".into()),
-        )
+        );
+        patch_lines_for_role(wrapped, RuntimeTextRole::Reasoning, /*only_plain*/ false)
     }
 }
 
@@ -463,7 +466,7 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        adaptive_wrap_lines(
+        let wrapped = adaptive_wrap_lines(
             &self.lines,
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
@@ -472,7 +475,8 @@ impl HistoryCell for AgentMessageCell {
                     "  ".into()
                 })
                 .subsequent_indent("  ".into()),
-        )
+        );
+        patch_lines_for_role(wrapped, RuntimeTextRole::Reply, /*only_plain*/ true)
     }
 
     fn is_stream_continuation(&self) -> bool {

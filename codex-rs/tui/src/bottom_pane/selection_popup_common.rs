@@ -31,6 +31,8 @@ use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
+use crate::ui_appearance::best_terminal_color;
+use crate::ui_appearance::selection_palette_for_choice;
 use crate::ui_appearance::selection_preset_color;
 use crate::ui_preferences::UiColorChoice;
 use crate::ui_preferences::UiPreferences;
@@ -454,7 +456,9 @@ fn apply_terminal_safe_formats(
     allow_dim: bool,
     allow_reversed: bool,
 ) -> Style {
-    if formats.contains(SelectionHighlightTextFormat::Bold) {
+    if formats.contains(SelectionHighlightTextFormat::Bold)
+        || formats.contains(SelectionHighlightTextFormat::Semibold)
+    {
         style = style.add_modifier(Modifier::BOLD);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
@@ -472,32 +476,53 @@ fn apply_terminal_safe_formats(
     if formats.contains(SelectionHighlightTextFormat::CrossedOut) {
         style = style.add_modifier(Modifier::CROSSED_OUT);
     }
+    if style.fg.is_none() {
+        if formats.contains(SelectionHighlightTextFormat::Mono) {
+            style = style.fg(best_terminal_color((120, 193, 255)));
+        } else if formats.contains(SelectionHighlightTextFormat::Italic) {
+            style = style.fg(best_terminal_color((193, 168, 235)));
+        } else if formats.contains(SelectionHighlightTextFormat::Semibold) {
+            style = style.fg(best_terminal_color((214, 218, 224)));
+        }
+    }
     style
 }
 
 fn unselected_row_styles() -> (Style, Style) {
     let preferences = popup_ui_preferences();
-    let list_formats = preferences.list_text_formats;
-    let bold = list_formats.contains(SelectionHighlightTextFormat::Bold);
+    let primary_formats = preferences.list_primary_text_formats;
+    let secondary_formats = preferences.list_secondary_text_formats;
+    let primary_bold = primary_formats.contains(SelectionHighlightTextFormat::Bold)
+        || primary_formats.contains(SelectionHighlightTextFormat::Semibold);
+    let primary_mono = primary_formats.contains(SelectionHighlightTextFormat::Mono);
+    let secondary_bold = secondary_formats.contains(SelectionHighlightTextFormat::Bold)
+        || secondary_formats.contains(SelectionHighlightTextFormat::Semibold);
+    let secondary_mono = secondary_formats.contains(SelectionHighlightTextFormat::Mono);
+    let primary_palette = selection_palette_for_choice(
+        &preferences.list_primary_color,
+        current_selection_highlight_preset(),
+    );
+    let secondary_palette = selection_palette_for_choice(
+        &preferences.list_secondary_color,
+        current_selection_highlight_preset(),
+    );
     let mut primary = Style::default();
     if let Some(color) = resolve_text_color_choice(
         preferences.list_primary_color,
         false,
         current_selection_highlight_preset(),
     ) {
-        let color = if bold {
+        let color = if primary_bold {
             ensure_visible_text_color(lighten_color(color, 0.12), false)
         } else {
             color
         };
         primary = primary.fg(color);
     }
-    primary = apply_terminal_safe_formats(
-        primary,
-        list_formats,
-        true,
-        true,
-    );
+    if primary_mono {
+        primary = primary.fg(best_terminal_color(primary_palette.mono_text_fg));
+    }
+    primary = apply_terminal_safe_formats(primary, primary_formats, true, true);
 
     let secondary_choice = preferences.list_secondary_color.clone();
     let mut secondary = Style::default();
@@ -506,7 +531,7 @@ fn unselected_row_styles() -> (Style, Style) {
         true,
         current_selection_highlight_preset(),
     ) {
-        let color = if bold {
+        let color = if secondary_bold {
             ensure_visible_text_color(lighten_color(color, 0.08), true)
         } else {
             color
@@ -515,9 +540,12 @@ fn unselected_row_styles() -> (Style, Style) {
     } else {
         secondary = secondary.dim();
     }
+    if secondary_mono {
+        secondary = secondary.fg(best_terminal_color(secondary_palette.mono_text_secondary_fg));
+    }
     secondary = apply_terminal_safe_formats(
         secondary,
-        list_formats,
+        secondary_formats,
         secondary_choice != UiColorChoice::Auto,
         true,
     );
@@ -1034,6 +1062,7 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
                 if style_has_visible_background(span.style) {
                     return;
                 }
+                let explicit_fg = span.style.fg;
                 let is_secondary = span_is_secondary(span.style, normal_secondary_style);
                 let is_whitespace = span.content.trim().is_empty();
                 let mut style = span.style.patch(if is_secondary {
@@ -1043,11 +1072,14 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
                 });
                 style.add_modifier.remove(Modifier::DIM);
                 style.sub_modifier.remove(Modifier::DIM);
-                if is_whitespace {
+                if is_whitespace || is_secondary {
                     style.add_modifier.remove(Modifier::UNDERLINED);
                     style.sub_modifier.remove(Modifier::UNDERLINED);
                     style.add_modifier.remove(Modifier::CROSSED_OUT);
                     style.sub_modifier.remove(Modifier::CROSSED_OUT);
+                }
+                if explicit_fg.is_some() {
+                    style.fg = explicit_fg;
                 }
                 span.style = style;
             });
@@ -1189,7 +1221,7 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize, total_width: usize)
     // Enforce single-line name: allow at most desc_col - 2 cells for name,
     // reserving two spaces before the description column.
     let has_list_mono_prefix = preferences
-        .list_text_formats
+        .list_primary_text_formats
         .contains(SelectionHighlightTextFormat::Mono);
     let name_prefix_width = Line::from(row.name_prefix_spans.clone()).width()
         + usize::from(has_list_mono_prefix) * 4;

@@ -50,6 +50,15 @@ const NAMED_COLORS: &[NamedColor] = &[
     NamedColor { name_ru: "Чернильный", name_en: "Ink", hex: "#263042", rgb: (38, 48, 66) },
     NamedColor { name_ru: "Оникс", name_en: "Onyx", hex: "#202428", rgb: (32, 36, 40) },
     NamedColor { name_ru: "Уголь", name_en: "Coal", hex: "#17191c", rgb: (23, 25, 28) },
+    NamedColor { name_ru: "Глубокий графит", name_en: "Deep Graphite", hex: "#30363d", rgb: (48, 54, 61) },
+    NamedColor { name_ru: "Тёмный шифер", name_en: "Dark Slate", hex: "#37404a", rgb: (55, 64, 74) },
+    NamedColor { name_ru: "Базальт", name_en: "Basalt", hex: "#2b3138", rgb: (43, 49, 56) },
+    NamedColor { name_ru: "Вулканический", name_en: "Volcanic", hex: "#23282d", rgb: (35, 40, 45) },
+    NamedColor { name_ru: "Сумеречный", name_en: "Dusk", hex: "#3d4357", rgb: (61, 67, 87) },
+    NamedColor { name_ru: "Тёмная хвоя", name_en: "Dark Pine", hex: "#223a34", rgb: (34, 58, 52) },
+    NamedColor { name_ru: "Тёмный мох", name_en: "Dark Moss", hex: "#364637", rgb: (54, 70, 55) },
+    NamedColor { name_ru: "Ночной бордо", name_en: "Night Bordeaux", hex: "#4c2933", rgb: (76, 41, 51) },
+    NamedColor { name_ru: "Тёмная слива", name_en: "Dark Plum", hex: "#432b49", rgb: (67, 43, 73) },
     NamedColor { name_ru: "Полночный", name_en: "Midnight", hex: "#1f2a44", rgb: (31, 42, 68) },
     NamedColor { name_ru: "Ночной синий", name_en: "Navy", hex: "#24324f", rgb: (36, 50, 79) },
     NamedColor { name_ru: "Петрольный", name_en: "Petrol", hex: "#335b63", rgb: (51, 91, 99) },
@@ -377,6 +386,40 @@ pub(crate) fn styled_choice_label_spans(
     fallback_preset: SelectionHighlightPreset,
     is_secondary: bool,
 ) -> Vec<Span<'static>> {
+    if let UiColorChoice::Gradient { .. } = choice {
+        let primary_rgb = resolve_color_choice_label_rgb(choice, fallback_preset, false);
+        let secondary_rgb = resolve_color_choice_label_rgb(choice, fallback_preset, true);
+        let characters = label.chars().collect::<Vec<_>>();
+        if characters.len() <= 1 {
+            return vec![Span::styled(
+                label.to_string(),
+                Style::default().fg(best_terminal_color(if is_secondary {
+                    secondary_rgb
+                } else {
+                    primary_rgb
+                })),
+            )];
+        }
+
+        let midpoint = (characters.len() / 2).max(1);
+        let left = characters[..midpoint].iter().collect::<String>();
+        let right = characters[midpoint..].iter().collect::<String>();
+        let mut spans = Vec::new();
+        if !left.is_empty() {
+            spans.push(Span::styled(
+                left,
+                Style::default().fg(best_terminal_color(primary_rgb)),
+            ));
+        }
+        if !right.is_empty() {
+            spans.push(Span::styled(
+                right,
+                Style::default().fg(best_terminal_color(secondary_rgb)),
+            ));
+        }
+        return spans;
+    }
+
     let rgb = resolve_color_choice_label_rgb(choice, fallback_preset, is_secondary);
     vec![Span::styled(
         label.to_string(),
@@ -406,7 +449,9 @@ pub(crate) fn color_swatch_spans(
 }
 
 pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTextFormats) -> Style {
-    if formats.contains(SelectionHighlightTextFormat::Bold) {
+    if formats.contains(SelectionHighlightTextFormat::Bold)
+        || formats.contains(SelectionHighlightTextFormat::Semibold)
+    {
         style = style.add_modifier(Modifier::BOLD);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
@@ -424,6 +469,15 @@ pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTe
     if formats.contains(SelectionHighlightTextFormat::CrossedOut) {
         style = style.add_modifier(Modifier::CROSSED_OUT);
     }
+    if style.fg.is_none() {
+        if formats.contains(SelectionHighlightTextFormat::Mono) {
+            style = style.fg(best_terminal_color((120, 193, 255)));
+        } else if formats.contains(SelectionHighlightTextFormat::Italic) {
+            style = style.fg(best_terminal_color((193, 168, 235)));
+        } else if formats.contains(SelectionHighlightTextFormat::Semibold) {
+            style = style.fg(best_terminal_color((214, 218, 224)));
+        }
+    }
     style
 }
 
@@ -434,14 +488,30 @@ pub(crate) fn format_preview_label(
     match (is_ru, format) {
         (true, SelectionHighlightTextFormat::Bold) => ("Жирный", Style::default().add_modifier(Modifier::BOLD), None),
         (false, SelectionHighlightTextFormat::Bold) => ("Жирный", Style::default().add_modifier(Modifier::BOLD), None),
-        (true, SelectionHighlightTextFormat::Semibold) => ("Полужирный", Style::default(), Some("◧")),
-        (false, SelectionHighlightTextFormat::Semibold) => ("Полужирный", Style::default(), Some("◧")),
+        (true, SelectionHighlightTextFormat::Semibold) => (
+            "Полужирный",
+            Style::default().add_modifier(Modifier::BOLD).fg(best_terminal_color((208, 214, 224))),
+            Some("◧"),
+        ),
+        (false, SelectionHighlightTextFormat::Semibold) => (
+            "Полужирный",
+            Style::default().add_modifier(Modifier::BOLD).fg(best_terminal_color((208, 214, 224))),
+            Some("◧"),
+        ),
         (true, SelectionHighlightTextFormat::Italic) => ("Курсив", Style::default().add_modifier(Modifier::ITALIC), None),
         (false, SelectionHighlightTextFormat::Italic) => ("Курсив", Style::default().add_modifier(Modifier::ITALIC), None),
         (true, SelectionHighlightTextFormat::Underlined) => ("Подчёркнутый", Style::default().add_modifier(Modifier::UNDERLINED), None),
         (false, SelectionHighlightTextFormat::Underlined) => ("Подчёркнутый", Style::default().add_modifier(Modifier::UNDERLINED), None),
-        (true, SelectionHighlightTextFormat::Mono) => ("Моно", Style::default(), Some("</>")),
-        (false, SelectionHighlightTextFormat::Mono) => ("Моно", Style::default(), Some("</>")),
+        (true, SelectionHighlightTextFormat::Mono) => (
+            "Моно",
+            Style::default().fg(best_terminal_color((120, 193, 255))),
+            Some("</>"),
+        ),
+        (false, SelectionHighlightTextFormat::Mono) => (
+            "Моно",
+            Style::default().fg(best_terminal_color((120, 193, 255))),
+            Some("</>"),
+        ),
         (true, SelectionHighlightTextFormat::Dim) => ("Приглушённый", Style::default().add_modifier(Modifier::DIM), None),
         (false, SelectionHighlightTextFormat::Dim) => ("Приглушённый", Style::default().add_modifier(Modifier::DIM), None),
         (true, SelectionHighlightTextFormat::Reversed) => ("Инверсия", Style::default().add_modifier(Modifier::REVERSED), None),
