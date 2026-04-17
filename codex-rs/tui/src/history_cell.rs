@@ -520,9 +520,9 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         use ratatui_macros::text;
         let update_instruction = if let Some(update_action) = self.update_action {
             line![
-                "Выполните ".into(),
+                "Выполните ",
                 update_action.command_str().cyan(),
-                " для обновления.".into()
+                " для обновления."
             ]
         } else {
             line![
@@ -2262,7 +2262,7 @@ pub(crate) fn new_mcp_inventory_loading(animations_enabled: bool) -> McpInventor
 pub(crate) struct RequestUserInputResultCell {
     pub(crate) questions: Vec<RequestUserInputQuestion>,
     pub(crate) answers: HashMap<String, RequestUserInputAnswer>,
-    pub(crate) прервано: bool,
+    pub(crate) interrupted: bool,
 }
 
 impl HistoryCell for RequestUserInputResultCell {
@@ -2282,7 +2282,7 @@ impl HistoryCell for RequestUserInputResultCell {
 
         let mut header = vec!["•".dim(), " ".into(), "Вопросы".bold()];
         header.push(format!(" {answered}/{total} отвечено").dim());
-        if self.прервано {
+        if self.interrupted {
             header.push(" (прервано)".cyan());
         }
 
@@ -2349,7 +2349,7 @@ impl HistoryCell for RequestUserInputResultCell {
             }
         }
 
-        if self.прервано && unanswered > 0 {
+        if self.interrupted && unanswered > 0 {
             let summary = format!("прервано, без ответа осталось: {unanswered}");
             lines.extend(wrap_with_prefix(
                 &summary,

@@ -4992,7 +4992,7 @@ impl ChatWidget {
                 self.paste_text_from_system_clipboard();
                 return;
             }
-            other if other.kind == KeyEventKind::Нажмите => {
+            other if other.kind == KeyEventKind::Press => {
                 self.bottom_pane.clear_quit_shortcut_hint();
                 self.quit_shortcut_expires_at = None;
                 self.quit_shortcut_key = None;
@@ -5000,7 +5000,7 @@ impl ChatWidget {
             _ => {}
         }
 
-        if key_event.kind == KeyEventKind::Нажмите && self.queued_message_edit_binding.is_press(key_event)
+        if key_event.kind == KeyEventKind::Press && self.queued_message_edit_binding.is_press(key_event)
         {
             if self.has_queued_follow_up_messages() {
                 if let Some(user_message) = self.pop_latest_queued_user_message() {
@@ -5021,7 +5021,7 @@ impl ChatWidget {
         }
 
         if matches!(key_event.code, KeyCode::Esc)
-            && matches!(key_event.kind, KeyEventKind::Нажмите | KeyEventKind::Repeat)
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && !self.pending_steers.is_empty()
             && self.bottom_pane.is_task_running()
             && self.bottom_pane.no_modal_or_popup_active()
@@ -8393,7 +8393,7 @@ impl ChatWidget {
                 name: if is_ru {
                     "← Назад к голосу и звуку".to_string()
                 } else {
-                    "← Назад to audio settings".to_string()
+                    "← Назад к настройкам аудио".to_string()
                 },
                 description: Some(if is_ru {
                     "Вернуться к выбору микрофона и вывода для голосового режима.".to_string()
@@ -10557,7 +10557,9 @@ impl ChatWidget {
                 format!("{state}. Подчеркивает активную строку.")
             }
             (true, SelectionHighlightTextFormat::Mono) => {
-                format!("{state}. Добавляет code-подобный акцент и моно-оформление там, где терминал это умеет.")
+                format!(
+                    "{state}. Добавляет акцент в стиле кода и моно-оформление там, где терминал это умеет."
+                )
             }
             (true, SelectionHighlightTextFormat::Dim) => {
                 format!("{state}. Делает текст мягче и спокойнее.")
@@ -14296,7 +14298,7 @@ impl ChatWidget {
             Line::from(vec![
                 "Нажмите ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " to open profile actions, ".into(),
+                ", чтобы открыть действия профиля, ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
                 " для возврата".into(),
             ])
