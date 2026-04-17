@@ -1069,7 +1069,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "codex_oauth" | "openai" => vec![
             ProfileCatalogSeed {
                 model: "gpt-5.3-codex",
-                description: "Стартовый профиль Lavilas Codex для основного coding-потока.",
+                description: "Стартовый профиль Lavilas Codex для основного потока работы с кодом.",
                 default_reasoning_level: "medium",
                 supported_reasoning_levels: OPENAI_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1087,7 +1087,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "openrouter" => vec![
             ProfileCatalogSeed {
                 model: "openai/gpt-5.3-codex",
-                description: "Совместимый coding-профиль через OpenRouter.",
+                description: "Совместимый профиль для работы с кодом через OpenRouter.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1149,7 +1149,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
             },
             ProfileCatalogSeed {
                 model: "deepseek-reasoner",
-                description: "Профиль DeepSeek для более тяжёлых разборов и reasoning-проходов.",
+                description: "Профиль DeepSeek для более тяжёлых разборов и этапов размышления.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1167,7 +1167,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
             },
             ProfileCatalogSeed {
                 model: MISTRAL_FAST_PROFILE_MODEL,
-                description: "Быстрый профиль Mistral для коротких coding-проходов и частых повторов.",
+                description: "Быстрый профиль Mistral для коротких проходов по коду и частых повторов.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1175,7 +1175,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
             },
             ProfileCatalogSeed {
                 model: MISTRAL_REASONING_PROFILE_MODEL,
-                description: "Reasoning-профиль Mistral для тяжёлых инженерных и аналитических задач.",
+                description: "Профиль Mistral с размышлением для тяжёлых инженерных и аналитических задач.",
                 default_reasoning_level: "high",
                 supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1183,7 +1183,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
             },
             ProfileCatalogSeed {
                 model: "magistral-small-latest",
-                description: "Компактный reasoning-профиль Mistral для быстрых проходов с размышлением.",
+                description: "Компактный профиль Mistral с размышлением для быстрых проходов.",
                 default_reasoning_level: "high",
                 supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1191,7 +1191,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
             },
             ProfileCatalogSeed {
                 model: "mistral-small-latest",
-                description: "Компактная общая модель Mistral с поддержкой reasoning budget.",
+                description: "Компактная общая модель Mistral с поддержкой бюджета размышлений.",
                 default_reasoning_level: "high",
                 supported_reasoning_levels: MISTRAL_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1207,7 +1207,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
             },
             ProfileCatalogSeed {
                 model: "mistral-large-latest",
-                description: "Крупный общий профиль Mistral для тяжёлых coding-задач.",
+                description: "Крупный общий профиль Mistral для тяжёлых задач по коду.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1251,7 +1251,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "groq" => vec![
             ProfileCatalogSeed {
                 model: "llama-3.3-70b-versatile",
-                description: "Стартовый профиль Groq для быстрых coding-задач.",
+                description: "Стартовый профиль Groq для быстрых задач по коду.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1269,7 +1269,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "together" => vec![
             ProfileCatalogSeed {
                 model: "openai/gpt-oss-20b",
-                description: "Стартовый Together-профиль для tool-heavy coding-задач.",
+                description: "Стартовый профиль Together для задач по коду с активным использованием инструментов.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1305,7 +1305,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "cerebras" => vec![
             ProfileCatalogSeed {
                 model: "gpt-oss-120b",
-                description: "Стартовый Cerebras-профиль для длинных и тяжёлых coding-проходов.",
+                description: "Стартовый профиль Cerebras для длинных и тяжёлых проходов по коду.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1359,7 +1359,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         "ollama" => vec![
             ProfileCatalogSeed {
                 model: "qwen2.5-coder:32b",
-                description: "Локальный coding-профиль Ollama с упором на код.",
+                description: "Локальный профиль Ollama с упором на работу с кодом.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: false,
@@ -1377,7 +1377,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
         _ => vec![
             ProfileCatalogSeed {
                 model: "custom-model-with-tools",
-                description: "Стартовый кастомный профиль с поддержкой tool-use.",
+                description: "Стартовый кастомный профиль с поддержкой использования инструментов.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: true,
@@ -1385,7 +1385,7 @@ fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
             },
             ProfileCatalogSeed {
                 model: "custom-model",
-                description: "Стартовый кастомный профиль без расширенного tool-use.",
+                description: "Стартовый кастомный профиль без расширенного использования инструментов.",
                 default_reasoning_level: "none",
                 supported_reasoning_levels: NO_REASONING_LEVELS,
                 supports_parallel_tool_calls: false,

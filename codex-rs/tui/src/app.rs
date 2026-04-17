@@ -2245,12 +2245,12 @@ impl App {
             let message = if provider_spec.requires_base_url {
                 if self.ui_language_is_ru() {
                     format!(
-                        "Не удалось получить каталог моделей для `{profile_key}`. Проверьте API-ключ, base URL и доступность `{}`.",
+                        "Не удалось получить каталог моделей для `{profile_key}`. Проверьте API-ключ, базовый адрес API и доступность `{}`.",
                         catalog_path.display()
                     )
                 } else {
                     format!(
-                        "Не удалось получить каталог моделей для `{profile_key}`. Проверьте API-ключ, base URL и `{}`.",
+                        "Failed to load the model catalog for `{profile_key}`. Check the API key, base URL, and `{}`.",
                         catalog_path.display()
                     )
                 }
@@ -2589,9 +2589,11 @@ impl App {
                 .is_none_or(|value| value.trim().is_empty())
         {
             let message = if is_ru {
-                format!("Для кастомного провайдера `{provider}` нужен OpenAI-compatible базовый URL.")
+                format!(
+                    "Для кастомного провайдера `{provider}` нужен базовый адрес API, совместимый с OpenAI."
+                )
             } else {
-                format!("Для кастомного провайдера `{provider}` нужен OpenAI-compatible базовый URL.")
+                format!("Custom provider `{provider}` requires an OpenAI-compatible base URL.")
             };
             self.chat_widget.add_error_message(message);
             return Ok(true);
@@ -4839,7 +4841,7 @@ impl App {
                     // A `thread/read` fallback without turns would create a blank local replay
                     // channel with no live listener attached, which blocks later real re-attach.
                     return Err(color_eyre::eyre::eyre!(
-                        "Тред агента {thread_id} пока недоступен для воспроизведения или live-подключения."
+                        "Тред агента {thread_id} пока недоступен для воспроизведения или подключения в реальном времени."
                     ));
                 }
                 let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
@@ -4961,7 +4963,7 @@ impl App {
         if is_replay_only {
             let message = if attached_replay_only {
                 format!(
-                    "Не удалось возобновить тред агента {thread_id} в live-режиме. Воспроизводится сохранённая история."
+                    "Не удалось возобновить тред агента {thread_id} в режиме реального времени. Воспроизводится сохранённая история."
                 )
             } else {
                 format!("Тред агента {thread_id} закрыт. Воспроизводится сохранённая история.")
@@ -5043,7 +5045,7 @@ impl App {
                     .await
                 {
                     self.chat_widget.add_error_message(format!(
-                        "Не удалось подключиться к новому треду app server: {err}"
+                        "Не удалось подключиться к новому треду сервера приложения: {err}"
                     ));
                 } else if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
@@ -5059,7 +5061,7 @@ impl App {
             }
             Err(err) => {
                 self.chat_widget.add_error_message(format!(
-                    "Не удалось запустить новую сессию через app server: {err}"
+                    "Не удалось запустить новую сессию через сервер приложения: {err}"
                 ));
                 self.config.model = Some(model);
             }
@@ -7033,7 +7035,7 @@ impl App {
                         } else {
                             "выкл"
                         };
-                        let mut message = format!("Режим Fast: {status}");
+                        let mut message = format!("Быстрый режим: {status}");
                         if let Some(profile) = profile {
                             message.push_str(" в профиле ");
                             message.push_str(profile);
@@ -7044,11 +7046,11 @@ impl App {
                         tracing::error!(error = %err, "failed to persist fast mode selection");
                         if let Some(profile) = profile {
                             self.chat_widget.add_error_message(format!(
-                                "Не удалось сохранить режим Fast для профиля `{profile}`: {err}"
+                                "Не удалось сохранить быстрый режим для профиля `{profile}`: {err}"
                             ));
                         } else {
                             self.chat_widget.add_error_message(format!(
-                                "Не удалось сохранить режим Fast по умолчанию: {err}"
+                                "Не удалось сохранить быстрый режим по умолчанию: {err}"
                             ));
                         }
                     }

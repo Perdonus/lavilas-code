@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use codex_core::config::find_codex_home;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -92,7 +93,9 @@ fn role_choice(
         RuntimeTextRole::Reasoning => (
             preferences.reasoning_text_color.clone(),
             preferences.reasoning_text_formats,
-            Style::default().dim().italic(),
+            Style::default()
+                .add_modifier(Modifier::DIM)
+                .add_modifier(Modifier::ITALIC),
         ),
         RuntimeTextRole::Command => (
             preferences.command_text_color.clone(),
@@ -102,7 +105,7 @@ fn role_choice(
         RuntimeTextRole::CommandOutput => (
             preferences.command_output_text_color.clone(),
             preferences.command_output_text_formats,
-            Style::default().dim(),
+            Style::default().add_modifier(Modifier::DIM),
         ),
     }
 }

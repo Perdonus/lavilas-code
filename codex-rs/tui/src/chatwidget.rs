@@ -5655,7 +5655,7 @@ impl ChatWidget {
                         } else {
                             "off"
                         };
-                        self.add_info_message(format!("Fast-режим: {status}."), /*hint*/ None);
+                        self.add_info_message(format!("Быстрый режим: {status}."), /*hint*/ None);
                     }
                     _ => {
                         self.add_error_message("Использование: /fast [on|off|status]".to_string());

@@ -85,7 +85,7 @@ if (!selectedInstallation) {
   const packageManager = detectPackageManager({ installDir: __dirname });
   const updateCommand = updateCommandForPackageManager(packageManager);
   console.error(
-    `[lavilas/codex] Failed to validate ${platformPackage}. Reinstall Codex: ${updateCommand}`,
+    `[lavilas/codex] Не удалось проверить ${platformPackage}. Переустановите Lavilas Codex: ${updateCommand}`,
   );
   process.exit(1);
 }
@@ -98,14 +98,14 @@ const result = spawnSync(selectedInstallation.binaryPath, ["--version"], {
 
 if (result.error) {
   console.error(
-    `[lavilas/codex] Native binary validation failed: ${result.error.message}`,
+    `[lavilas/codex] Проверка нативного бинаря завершилась ошибкой: ${result.error.message}`,
   );
   process.exit(1);
 }
 
 if (result.signal) {
   console.error(
-    `[lavilas/codex] Native binary exited with signal ${result.signal} during install validation.`,
+    `[lavilas/codex] Нативный бинарь завершился по сигналу ${result.signal} во время проверки установки.`,
   );
   process.exit(1);
 }

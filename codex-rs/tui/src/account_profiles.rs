@@ -915,11 +915,11 @@ pub(crate) fn build_create_profile_request(
     };
     let base_url_prompt = match account_provider_spec(provider) {
         Some(spec) if spec.requires_base_url && is_ru => Some(
-            "Введите base URL OpenAI-compatible API. Это поле обязательно для кастомного провайдера."
+            "Введите базовый адрес OpenAI-совместимого API. Это поле обязательно для кастомного провайдера."
                 .to_string(),
         ),
         Some(spec) if spec.requires_base_url => Some(
-            "Введите base URL OpenAI-compatible API. Это поле обязательно для кастомного провайдера."
+            "Enter the base URL for the OpenAI-compatible API. This field is required for a custom provider."
                 .to_string(),
         ),
         None => None,
