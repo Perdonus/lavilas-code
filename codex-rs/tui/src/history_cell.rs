@@ -519,25 +519,29 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         use ratatui_macros::line;
         use ratatui_macros::text;
         let update_instruction = if let Some(update_action) = self.update_action {
-            line!["Run ", update_action.command_str().cyan(), " to update."]
+            line![
+                "Выполните ".into(),
+                update_action.command_str().cyan(),
+                " для обновления.".into()
+            ]
         } else {
             line![
-                "See ",
+                "Смотрите ",
                 "https://github.com/openai/codex".cyan().underlined(),
-                " for installation options."
+                " — там есть варианты установки."
             ]
         };
 
         let content = text![
             line![
                 padded_emoji("✨").bold().cyan(),
-                "Update available!".bold().cyan(),
+                "Доступно обновление!".bold().cyan(),
                 " ",
                 format!("{CODEX_CLI_VERSION} -> {}", self.latest_version).bold(),
             ],
             update_instruction,
             "",
-            "See full release notes:",
+            "Полный список изменений:",
             "https://github.com/openai/codex/releases/latest"
                 .cyan()
                 .underlined(),
@@ -608,9 +612,9 @@ impl HistoryCell for UnifiedExecInteractionCell {
         let waited_only = self.stdin.is_empty();
 
         let mut header_spans = if waited_only {
-            vec!["• Waited for background terminal".bold()]
+            vec!["• Ожидание фонового терминала".bold()]
         } else {
-            vec!["↳ ".dim(), "Interacted with background terminal".bold()]
+            vec!["↳ ".dim(), "Работа с фоновым терминалом".bold()]
         };
         if let Some(command) = &self.command_display
             && !command.is_empty()
@@ -678,11 +682,11 @@ impl HistoryCell for UnifiedExecProcessesCell {
         let wrap_width = width as usize;
         let max_processes = 16usize;
         let mut out: Vec<Line<'static>> = Vec::new();
-        out.push(vec!["Background terminals".bold()].into());
+        out.push(vec!["Фоновые терминалы".bold()].into());
         out.push("".into());
 
         if self.processes.is_empty() {
-            out.push("  • No background terminals running.".italic().into());
+            out.push("  • Сейчас нет фоновых терминалов.".italic().into());
             return out;
         }
 
@@ -761,7 +765,7 @@ impl HistoryCell for UnifiedExecProcessesCell {
 
         let remaining = self.processes.len().saturating_sub(shown);
         if remaining > 0 {
-            let more_text = format!("... and {remaining} more running");
+            let more_text = format!("... и ещё {remaining} выполняются");
             if wrap_width <= prefix_width {
                 out.push(Line::from(prefix.dim()));
             } else {
@@ -812,80 +816,117 @@ pub fn new_approval_decision_cell(
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => {
             let snippet = Span::from(exec_snippet(&command)).dim();
-            (
-                "✔ ".green(),
-                vec![
+            let summary = match actor {
+                ApprovalDecisionActor::User => vec![
                     actor.subject().into(),
-                    "approved".bold(),
-                    " codex to run ".into(),
+                    "разрешили".bold(),
+                    " Lavilas Codex выполнить ".into(),
                     snippet,
-                    " this time".bold(),
+                    " один раз".bold(),
                 ],
-            )
+                ApprovalDecisionActor::Guardian => vec![
+                    actor.subject().into(),
+                    "разрешила".bold(),
+                    " Lavilas Codex выполнить ".into(),
+                    snippet,
+                    " один раз".bold(),
+                ],
+            };
+            ("✔ ".green(), summary)
         }
         ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } => {
             let snippet = Span::from(exec_snippet(&proposed_execpolicy_amendment.command)).dim();
-            (
-                "✔ ".green(),
-                vec![
+            let summary = match actor {
+                ApprovalDecisionActor::User => vec![
                     actor.subject().into(),
-                    "approved".bold(),
-                    " codex to always run commands that start with ".into(),
+                    "разрешили".bold(),
+                    " Lavilas Codex всегда выполнять команды, которые начинаются с ".into(),
                     snippet,
                 ],
-            )
+                ApprovalDecisionActor::Guardian => vec![
+                    actor.subject().into(),
+                    "разрешила".bold(),
+                    " Lavilas Codex всегда выполнять команды, которые начинаются с ".into(),
+                    snippet,
+                ],
+            };
+            ("✔ ".green(), summary)
         }
         ApprovedForSession => {
             let snippet = Span::from(exec_snippet(&command)).dim();
-            (
-                "✔ ".green(),
-                vec![
+            let summary = match actor {
+                ApprovalDecisionActor::User => vec![
                     actor.subject().into(),
-                    "approved".bold(),
-                    " codex to run ".into(),
+                    "разрешили".bold(),
+                    " Lavilas Codex выполнять ".into(),
                     snippet,
-                    " every time this session".bold(),
+                    " до конца этой сессии".bold(),
                 ],
-            )
+                ApprovalDecisionActor::Guardian => vec![
+                    actor.subject().into(),
+                    "разрешила".bold(),
+                    " Lavilas Codex выполнять ".into(),
+                    snippet,
+                    " до конца этой сессии".bold(),
+                ],
+            };
+            ("✔ ".green(), summary)
         }
         NetworkPolicyAmendment {
             network_policy_amendment,
         } => match network_policy_amendment.action {
-            NetworkPolicyRuleAction::Allow => (
-                "✔ ".green(),
-                vec![
-                    actor.subject().into(),
-                    "persisted".bold(),
-                    " Codex network access to ".into(),
-                    Span::from(network_policy_amendment.host).dim(),
-                ],
-            ),
-            NetworkPolicyRuleAction::Deny => (
-                "✗ ".red(),
-                vec![
-                    actor.subject().into(),
-                    "denied".bold(),
-                    " codex network access to ".into(),
-                    Span::from(network_policy_amendment.host).dim(),
-                    " and saved that rule".into(),
-                ],
-            ),
+            NetworkPolicyRuleAction::Allow => {
+                let summary = match actor {
+                    ApprovalDecisionActor::User => vec![
+                        actor.subject().into(),
+                        "сохранили".bold(),
+                        " сетевой доступ Lavilas Codex к ".into(),
+                        Span::from(network_policy_amendment.host).dim(),
+                    ],
+                    ApprovalDecisionActor::Guardian => vec![
+                        actor.subject().into(),
+                        "сохранила".bold(),
+                        " сетевой доступ Lavilas Codex к ".into(),
+                        Span::from(network_policy_amendment.host).dim(),
+                    ],
+                };
+                ("✔ ".green(), summary)
+            }
+            NetworkPolicyRuleAction::Deny => {
+                let summary = match actor {
+                    ApprovalDecisionActor::User => vec![
+                        actor.subject().into(),
+                        "запретили".bold(),
+                        " Lavilas Codex доступ к сети: ".into(),
+                        Span::from(network_policy_amendment.host).dim(),
+                        " — правило сохранено".into(),
+                    ],
+                    ApprovalDecisionActor::Guardian => vec![
+                        actor.subject().into(),
+                        "запретила".bold(),
+                        " Lavilas Codex доступ к сети: ".into(),
+                        Span::from(network_policy_amendment.host).dim(),
+                        " — правило сохранено".into(),
+                    ],
+                };
+                ("✗ ".red(), summary)
+            }
         },
         Denied => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             let summary = match actor {
                 ApprovalDecisionActor::User => vec![
                     actor.subject().into(),
-                    "did not approve".bold(),
-                    " codex to run ".into(),
+                    "не разрешили".bold(),
+                    " Lavilas Codex выполнить ".into(),
                     snippet,
                 ],
                 ApprovalDecisionActor::Guardian => vec![
-                    "Request ".into(),
-                    "denied".bold(),
-                    " for codex to run ".into(),
+                    "Запрос ".into(),
+                    "отклонён".bold(),
+                    " — Lavilas Codex не сможет выполнить ".into(),
                     snippet,
                 ],
             };
@@ -893,15 +934,21 @@ pub fn new_approval_decision_cell(
         }
         Abort => {
             let snippet = Span::from(exec_snippet(&command)).dim();
-            (
-                "✗ ".red(),
-                vec![
+            let summary = match actor {
+                ApprovalDecisionActor::User => vec![
                     actor.subject().into(),
-                    "canceled".bold(),
-                    " the request to run ".into(),
+                    "отменили".bold(),
+                    " запрос на выполнение ".into(),
                     snippet,
                 ],
-            )
+                ApprovalDecisionActor::Guardian => vec![
+                    actor.subject().into(),
+                    "отменила".bold(),
+                    " запрос на выполнение ".into(),
+                    snippet,
+                ],
+            };
+            ("✗ ".red(), summary)
         }
     };
 
@@ -921,25 +968,25 @@ pub enum ApprovalDecisionActor {
 impl ApprovalDecisionActor {
     fn subject(self) -> &'static str {
         match self {
-            Self::User => "You ",
-            Self::Guardian => "Auto-reviewer ",
+            Self::User => "Вы ",
+            Self::Guardian => "Автопроверка ",
         }
     }
 }
 
 pub fn new_guardian_denied_patch_request(files: Vec<String>) -> Box<dyn HistoryCell> {
     let mut summary = vec![
-        "Request ".into(),
-        "denied".bold(),
-        " for codex to apply ".into(),
+        "Запрос ".into(),
+        "отклонён".bold(),
+        " — Lavilas Codex не сможет применить патч: ".into(),
     ];
     if files.len() == 1 {
-        summary.push("a patch touching ".into());
+        summary.push("патч затрагивает ".into());
         summary.push(Span::from(files[0].clone()).dim());
     } else {
-        summary.push("a patch touching ".into());
+        summary.push("патч затрагивает ".into());
         summary.push(Span::from(files.len().to_string()).dim());
-        summary.push(" files".into());
+        summary.push(" файлов".into());
     }
 
     Box::new(PrefixedWrappedHistoryCell::new(
@@ -951,9 +998,9 @@ pub fn new_guardian_denied_patch_request(files: Vec<String>) -> Box<dyn HistoryC
 
 pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCell> {
     let line = Line::from(vec![
-        "Request ".into(),
-        "denied".bold(),
-        " for ".into(),
+        "Запрос ".into(),
+        "отклонён".bold(),
+        " — ".into(),
         Span::from(summary).dim(),
     ]);
     Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
@@ -961,9 +1008,9 @@ pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCel
 
 pub fn new_guardian_approved_action_request(summary: String) -> Box<dyn HistoryCell> {
     let line = Line::from(vec![
-        "Request ".into(),
-        "approved".bold(),
-        " for ".into(),
+        "Запрос ".into(),
+        "подтверждён".bold(),
+        " — ".into(),
         Span::from(summary).dim(),
     ]);
     Box::new(PrefixedWrappedHistoryCell::new(line, "✔ ".green(), "  "))
@@ -994,7 +1041,7 @@ struct CompletedMcpToolCallWithImageOutput {
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        vec!["tool result (image output)".into()]
+        vec!["результат инструмента (изображение)".into()]
     }
 }
 
@@ -1098,7 +1145,7 @@ impl HistoryCell for TooltipHistoryCell {
             .max(1);
         let mut lines: Vec<Line<'static>> = Vec::new();
         append_markdown(
-            &format!("**Tip:** {}", self.tip),
+            &format!("**Подсказка:** {}", self.tip),
             Some(wrap_width),
             Some(self.cwd.as_path()),
             &mut lines,
@@ -1152,34 +1199,34 @@ pub(crate) fn new_session_info(
     if is_first_event {
         // Help lines below the header (new copy and list)
         let help_lines: Vec<Line<'static>> = vec![
-            "  To get started, describe a task or try one of these commands:"
+            "  Чтобы начать, опишите задачу или попробуйте одну из этих команд:"
                 .dim()
                 .into(),
             Line::from(""),
             Line::from(vec![
                 "  ".into(),
                 "/init".into(),
-                " - create an AGENTS.md file with instructions for Codex".dim(),
+                " — создать AGENTS.md с инструкциями для Lavilas Codex".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
                 "/status".into(),
-                " - show current session configuration".dim(),
+                " — показать текущую конфигурацию сессии".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
                 "/permissions".into(),
-                " - choose what Codex is allowed to do".dim(),
+                " — выбрать, что разрешено Lavilas Codex".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
                 "/model".into(),
-                " - choose what model and reasoning effort to use".dim(),
+                " — выбрать модель и режим размышлений".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
                 "/review".into(),
-                " - review any changes and find issues".dim(),
+                " — проверить изменения и найти проблемы".dim(),
             ]),
         ];
 
@@ -1199,9 +1246,9 @@ pub(crate) fn new_session_info(
         }
         if requested_model != model {
             let lines = vec![
-                "model changed:".magenta().bold().into(),
-                format!("requested: {requested_model}").into(),
-                format!("used: {model}").into(),
+                "модель изменена:".magenta().bold().into(),
+                format!("запрошено: {requested_model}").into(),
+                format!("использовано: {model}").into(),
             ];
             parts.push(Box::new(PlainHistoryCell { lines }));
         }
@@ -1299,12 +1346,12 @@ impl SessionHeaderHistoryCell {
 
     fn reasoning_label(&self) -> Option<&'static str> {
         self.reasoning_effort.map(|effort| match effort {
-            ReasoningEffortConfig::Minimal => "minimal",
-            ReasoningEffortConfig::Low => "low",
-            ReasoningEffortConfig::Medium => "medium",
-            ReasoningEffortConfig::High => "high",
-            ReasoningEffortConfig::XHigh => "xhigh",
-            ReasoningEffortConfig::None => "none",
+            ReasoningEffortConfig::Minimal => "минимум",
+            ReasoningEffortConfig::Low => "низкий",
+            ReasoningEffortConfig::Medium => "средний",
+            ReasoningEffortConfig::High => "высокий",
+            ReasoningEffortConfig::XHigh => "максимальный",
+            ReasoningEffortConfig::None => "без размышлений",
         })
     }
 }
@@ -1326,13 +1373,13 @@ impl HistoryCell for SessionHeaderHistoryCell {
         ];
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
-        const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
-        const DIR_LABEL: &str = "directory:";
+        const CHANGE_MODEL_HINT_EXPLANATION: &str = " для смены";
+        const DIR_LABEL: &str = "каталог:";
         let label_width = DIR_LABEL.len();
 
         let model_label = format!(
             "{model_label:<label_width$}",
-            model_label = "model:",
+            model_label = "модель:",
             label_width = label_width
         );
         let reasoning_label = self.reasoning_label();
@@ -1455,7 +1502,7 @@ impl McpToolCallCell {
     pub(crate) fn mark_failed(&mut self) {
         let elapsed = self.start_time.elapsed();
         self.duration = Some(elapsed);
-        self.result = Some(Err("interrupted".to_string()));
+        self.result = Some(Err("прервано".to_string()));
     }
 
     fn render_content_block(block: &serde_json::Value, width: usize) -> String {
@@ -1474,16 +1521,16 @@ impl McpToolCallCell {
             rmcp::model::RawContent::Text(text) => {
                 format_and_truncate_tool_result(&text.text, TOOL_CALL_MAX_LINES, width)
             }
-            rmcp::model::RawContent::Image(_) => "<image content>".to_string(),
-            rmcp::model::RawContent::Audio(_) => "<audio content>".to_string(),
+            rmcp::model::RawContent::Image(_) => "<содержимое изображения>".to_string(),
+            rmcp::model::RawContent::Audio(_) => "<содержимое аудио>".to_string(),
             rmcp::model::RawContent::Resource(resource) => {
                 let uri = match resource.resource {
                     rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri,
                     rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => uri,
                 };
-                format!("embedded resource: {uri}")
+                format!("встроенный ресурс: {uri}")
             }
-            rmcp::model::RawContent::ResourceLink(link) => format!("link: {}", link.uri),
+            rmcp::model::RawContent::ResourceLink(link) => format!("ссылка: {}", link.uri),
         }
     }
 }
@@ -1498,9 +1545,9 @@ impl HistoryCell for McpToolCallCell {
             None => spinner(Some(self.start_time), self.animations_enabled),
         };
         let header_text = if status.is_some() {
-            "Called"
+            "Вызван"
         } else {
-            "Calling"
+            "Вызов"
         };
 
         let invocation_line = line_to_static(&format_mcp_invocation(self.invocation.clone()));
@@ -1551,7 +1598,7 @@ impl HistoryCell for McpToolCallCell {
                 }
                 Err(err) => {
                     let err_text = format_and_truncate_tool_result(
-                        &format!("Error: {err}"),
+                        &format!("Ошибка: {err}"),
                         TOOL_CALL_MAX_LINES,
                         width as usize,
                     );
@@ -1597,9 +1644,9 @@ pub(crate) fn new_active_mcp_tool_call(
 
 fn web_search_header(completed: bool) -> &'static str {
     if completed {
-        "Searched"
+        "Поиск выполнен"
     } else {
-        "Searching the web"
+        "Ищу в интернете"
     }
 }
 
@@ -1727,14 +1774,14 @@ fn decode_mcp_image(block: &serde_json::Value) -> Option<DynamicImage> {
     let raw_data = base64::engine::general_purpose::STANDARD
         .decode(base64_data)
         .map_err(|e| {
-            error!("Failed to decode image data: {e}");
+            error!("Не удалось декодировать данные изображения: {e}");
             e
         })
         .ok()?;
     let reader = ImageReader::new(Cursor::new(raw_data))
         .with_guessed_format()
         .map_err(|e| {
-            error!("Failed to guess image format: {e}");
+            error!("Не удалось определить формат изображения: {e}");
             e
         })
         .ok()?;
@@ -1792,10 +1839,10 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "".into(),
         "  • MCP-серверы ещё не настроены.".italic().into(),
         Line::from(vec![
-            "    See the ".into(),
-            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}MCP docs\u{1b}]8;;\u{7}"
+            "    Откройте ".into(),
+            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}документация MCP\u{1b}]8;;\u{7}"
                 .underlined(),
-            " to configure them.".into(),
+            ", чтобы настроить серверы.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
     ];
@@ -1845,17 +1892,17 @@ pub(crate) fn new_mcp_tools_output(
         let mut header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
         if !cfg.enabled {
             header.push(" ".into());
-            header.push("(disabled)".red());
+            header.push("(отключён)".red());
             lines.push(header.into());
             if let Some(reason) = cfg.disabled_reason.as_ref().map(ToString::to_string) {
-                lines.push(vec!["    • Reason: ".into(), reason.dim()].into());
+                lines.push(vec!["    • Причина: ".into(), reason.dim()].into());
             }
             lines.push(Line::from(""));
             continue;
         }
         lines.push(header.into());
-        lines.push(vec!["    • Status: ".into(), "enabled".green()].into());
-        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
+        lines.push(vec!["    • Статус: ".into(), "включён".green()].into());
+        lines.push(vec!["    • Авторизация: ".into(), auth_status.to_string().into()].into());
 
         match &cfg.transport {
             McpServerTransportConfig::Stdio {
@@ -1871,15 +1918,15 @@ pub(crate) fn new_mcp_tools_output(
                     format!(" {}", args.join(" "))
                 };
                 let cmd_display = format!("{command}{args_suffix}");
-                lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+                lines.push(vec!["    • Команда: ".into(), cmd_display.into()].into());
 
                 if let Some(cwd) = cwd.as_ref() {
-                    lines.push(vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into());
+                    lines.push(vec!["    • Каталог: ".into(), cwd.display().to_string().into()].into());
                 }
 
                 let env_display = format_env_display(env.as_ref(), env_vars);
                 if env_display != "-" {
-                    lines.push(vec!["    • Env: ".into(), env_display.into()].into());
+                    lines.push(vec!["    • Переменные: ".into(), env_display.into()].into());
                 }
             }
             McpServerTransportConfig::StreamableHttp {
@@ -1899,7 +1946,7 @@ pub(crate) fn new_mcp_tools_output(
                         .map(|(name, _)| format!("{name}=*****"))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    lines.push(vec!["    • HTTP headers: ".into(), display.into()].into());
+                    lines.push(vec!["    • HTTP-заголовки: ".into(), display.into()].into());
                 }
                 if let Some(headers) = env_http_headers.as_ref()
                     && !headers.is_empty()
@@ -1911,23 +1958,23 @@ pub(crate) fn new_mcp_tools_output(
                         .map(|(name, var)| format!("{name}={var}"))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
+                    lines.push(vec!["    • Заголовки из переменных: ".into(), display.into()].into());
                 }
             }
         }
 
         if names.is_empty() {
-            lines.push("    • Tools: (none)".into());
+            lines.push("    • Инструменты: (нет)".into());
         } else {
-            lines.push(vec!["    • Tools: ".into(), names.join(", ").into()].into());
+            lines.push(vec!["    • Инструменты: ".into(), names.join(", ").into()].into());
         }
 
         let server_resources: Vec<Resource> =
             resources.get(server.as_str()).cloned().unwrap_or_default();
         if server_resources.is_empty() {
-            lines.push("    • Resources: (none)".into());
+            lines.push("    • Ресурсы: (нет)".into());
         } else {
-            let mut spans: Vec<Span<'static>> = vec!["    • Resources: ".into()];
+            let mut spans: Vec<Span<'static>> = vec!["    • Ресурсы: ".into()];
 
             for (idx, resource) in server_resources.iter().enumerate() {
                 if idx > 0 {
@@ -1948,9 +1995,9 @@ pub(crate) fn new_mcp_tools_output(
             .cloned()
             .unwrap_or_default();
         if server_templates.is_empty() {
-            lines.push("    • Resource templates: (none)".into());
+            lines.push("    • Шаблоны ресурсов: (нет)".into());
         } else {
-            let mut spans: Vec<Span<'static>> = vec!["    • Resource templates: ".into()];
+            let mut spans: Vec<Span<'static>> = vec!["    • Шаблоны ресурсов: ".into()];
 
             for (idx, template) in server_templates.iter().enumerate() {
                 if idx > 0 {
@@ -2019,7 +2066,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
                 codex_app_server_protocol::McpAuthStatus::OAuth => McpAuthStatus::OAuth,
             })
             .unwrap_or(McpAuthStatus::Unsupported);
-        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
+        lines.push(vec!["    • Авторизация: ".into(), auth_status.to_string().into()].into());
 
         if let Some(cfg) = cfg {
             match &cfg.transport {
@@ -2036,17 +2083,17 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
                         format!(" {}", args.join(" "))
                     };
                     let cmd_display = format!("{command}{args_suffix}");
-                    lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+                    lines.push(vec!["    • Команда: ".into(), cmd_display.into()].into());
 
                     if let Some(cwd) = cwd.as_ref() {
                         lines.push(
-                            vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into(),
+                            vec!["    • Каталог: ".into(), cwd.display().to_string().into()].into(),
                         );
                     }
 
                     let env_display = format_env_display(env.as_ref(), env_vars.as_slice());
                     if env_display != "-" {
-                        lines.push(vec!["    • Env: ".into(), env_display.into()].into());
+                        lines.push(vec!["    • Переменные: ".into(), env_display.into()].into());
                     }
                 }
                 McpServerTransportConfig::StreamableHttp {
@@ -2066,7 +2113,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
                             .map(|(name, _)| format!("{name}=*****"))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        lines.push(vec!["    • HTTP headers: ".into(), display.into()].into());
+                        lines.push(vec!["    • HTTP-заголовки: ".into(), display.into()].into());
                     }
                     if let Some(headers) = env_http_headers.as_ref()
                         && !headers.is_empty()
@@ -2078,7 +2125,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
                             .map(|(name, var)| format!("{name}={var}"))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
+                        lines.push(vec!["    • Заголовки из переменных: ".into(), display.into()].into());
                     }
                 }
             }
@@ -2089,18 +2136,18 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
             .unwrap_or_default();
         names.sort();
         if names.is_empty() {
-            lines.push("    • Tools: (none)".into());
+            lines.push("    • Инструменты: (нет)".into());
         } else {
-            lines.push(vec!["    • Tools: ".into(), names.join(", ").into()].into());
+            lines.push(vec!["    • Инструменты: ".into(), names.join(", ").into()].into());
         }
 
         let server_resources = status
             .map(|status| status.resources.clone())
             .unwrap_or_default();
         if server_resources.is_empty() {
-            lines.push("    • Resources: (none)".into());
+            lines.push("    • Ресурсы: (нет)".into());
         } else {
-            let mut spans: Vec<Span<'static>> = vec!["    • Resources: ".into()];
+            let mut spans: Vec<Span<'static>> = vec!["    • Ресурсы: ".into()];
 
             for (idx, resource) in server_resources.iter().enumerate() {
                 if idx > 0 {
@@ -2120,9 +2167,9 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
             .map(|status| status.resource_templates.clone())
             .unwrap_or_default();
         if server_templates.is_empty() {
-            lines.push("    • Resource templates: (none)".into());
+            lines.push("    • Шаблоны ресурсов: (нет)".into());
         } else {
-            let mut spans: Vec<Span<'static>> = vec!["    • Resource templates: ".into()];
+            let mut spans: Vec<Span<'static>> = vec!["    • Шаблоны ресурсов: ".into()];
 
             for (idx, template) in server_templates.iter().enumerate() {
                 if idx > 0 {
@@ -2210,12 +2257,12 @@ pub(crate) fn new_mcp_inventory_loading(animations_enabled: bool) -> McpInventor
     McpInventoryLoadingCell::new(animations_enabled)
 }
 
-/// Renders a completed (or interrupted) request_user_input exchange in history.
+/// Renders a completed (or прервано) request_user_input exchange in history.
 #[derive(Debug)]
 pub(crate) struct RequestUserInputResultCell {
     pub(crate) questions: Vec<RequestUserInputQuestion>,
     pub(crate) answers: HashMap<String, RequestUserInputAnswer>,
-    pub(crate) interrupted: bool,
+    pub(crate) прервано: bool,
 }
 
 impl HistoryCell for RequestUserInputResultCell {
@@ -2233,10 +2280,10 @@ impl HistoryCell for RequestUserInputResultCell {
             .count();
         let unanswered = total.saturating_sub(answered);
 
-        let mut header = vec!["•".dim(), " ".into(), "Questions".bold()];
-        header.push(format!(" {answered}/{total} answered").dim());
-        if self.interrupted {
-            header.push(" (interrupted)".cyan());
+        let mut header = vec!["•".dim(), " ".into(), "Вопросы".bold()];
+        header.push(format!(" {answered}/{total} отвечено").dim());
+        if self.прервано {
+            header.push(" (прервано)".cyan());
         }
 
         let mut lines: Vec<Line<'static>> = vec![header.into()];
@@ -2255,7 +2302,7 @@ impl HistoryCell for RequestUserInputResultCell {
                 Style::default(),
             );
             if answer_missing && let Some(last) = question_lines.last_mut() {
-                last.spans.push(" (unanswered)".dim());
+                last.spans.push(" (без ответа)".dim());
             }
             lines.extend(question_lines);
 
@@ -2266,7 +2313,7 @@ impl HistoryCell for RequestUserInputResultCell {
                 lines.extend(wrap_with_prefix(
                     "••••••",
                     width,
-                    "    answer: ".dim(),
+                    "    ответ: ".dim(),
                     "            ".dim(),
                     Style::default().fg(Color::Cyan),
                 ));
@@ -2279,7 +2326,7 @@ impl HistoryCell for RequestUserInputResultCell {
                 lines.extend(wrap_with_prefix(
                     &option,
                     width,
-                    "    answer: ".dim(),
+                    "    ответ: ".dim(),
                     "            ".dim(),
                     Style::default().fg(Color::Cyan),
                 ));
@@ -2287,13 +2334,13 @@ impl HistoryCell for RequestUserInputResultCell {
             if let Some(note) = note {
                 let (label, continuation, style) = if question.options.is_some() {
                     (
-                        "    note: ".dim(),
+                        "    примечание: ".dim(),
                         "          ".dim(),
                         Style::default().fg(Color::Cyan),
                     )
                 } else {
                     (
-                        "    answer: ".dim(),
+                        "    ответ: ".dim(),
                         "            ".dim(),
                         Style::default().fg(Color::Cyan),
                     )
@@ -2302,8 +2349,8 @@ impl HistoryCell for RequestUserInputResultCell {
             }
         }
 
-        if self.interrupted && unanswered > 0 {
-            let summary = format!("interrupted with {unanswered} unanswered");
+        if self.прервано && unanswered > 0 {
+            let summary = format!("прервано, без ответа осталось: {unanswered}");
             lines.extend(wrap_with_prefix(
                 &summary,
                 width,
@@ -2392,7 +2439,7 @@ pub(crate) struct ProposedPlanStreamCell {
 impl HistoryCell for ProposedPlanCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
+        lines.push(vec!["• ".dim(), "Предложенный план".bold()].into());
         lines.push(Line::from(" "));
 
         let mut plan_lines: Vec<Line<'static>> = vec![Line::from(" ")];
@@ -2406,7 +2453,7 @@ impl HistoryCell for ProposedPlanCell {
             &mut body,
         );
         if body.is_empty() {
-            body.push(Line::from("(empty)".dim().italic()));
+            body.push(Line::from("(пусто)".dim().italic()));
         }
         plan_lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
         plan_lines.push(Line::from(" "));
@@ -2461,7 +2508,7 @@ impl HistoryCell for PlanUpdateCell {
         };
 
         let mut lines: Vec<Line<'static>> = vec![];
-        lines.push(vec!["• ".dim(), "Updated Plan".bold()].into());
+        lines.push(vec!["• ".dim(), "Обновлённый план".bold()].into());
 
         let mut indented_lines = vec![];
         let note = self
@@ -2474,7 +2521,7 @@ impl HistoryCell for PlanUpdateCell {
         };
 
         if self.plan.is_empty() {
-            indented_lines.push(Line::from("(no steps provided)".dim().italic()));
+            indented_lines.push(Line::from("(шаги не переданы)".dim().italic()));
         } else {
             for PlanItemArg { step, status } in self.plan.iter() {
                 indented_lines.extend(render_step(status, step));
@@ -2503,7 +2550,7 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Failure title
-    lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
+    lines.push(Line::from("✘ Не удалось применить патч".magenta().bold()));
 
     if !stderr.trim().is_empty() {
         let output = output_lines(
@@ -2529,7 +2576,7 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     let display_path = display_path_for(&path, cwd);
 
     let lines: Vec<Line<'static>> = vec![
-        vec!["• ".dim(), "Viewed Image".bold()].into(),
+        vec!["• ".dim(), "Открыто изображение".bold()].into(),
         vec!["  └ ".dim(), display_path.dim()].into(),
     ];
 
@@ -2544,11 +2591,11 @@ pub(crate) fn new_image_generation_call(
     let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
 
     let mut lines: Vec<Line<'static>> = vec![
-        vec!["• ".dim(), "Generated Image:".bold()].into(),
+        vec!["• ".dim(), "Сгенерировано изображение:".bold()].into(),
         vec!["  └ ".dim(), detail.dim()].into(),
     ];
     if let Some(saved_path) = saved_path {
-        lines.push(vec!["  └ ".dim(), "Saved to: ".dim(), saved_path.into()].into());
+        lines.push(vec!["  └ ".dim(), "Сохранено в: ".dim(), saved_path.into()].into());
     }
 
     PlainHistoryCell { lines }
@@ -2622,7 +2669,7 @@ impl HistoryCell for FinalMessageSeparator {
             .filter(|seconds| *seconds > 60)
             .map(super::status_indicator_widget::fmt_elapsed_compact)
         {
-            label_parts.push(format!("Worked for {elapsed_seconds}"));
+            label_parts.push(format!("Работал {elapsed_seconds}"));
         }
         if let Some(metrics_label) = self.runtime_metrics.and_then(runtime_metrics_label) {
             label_parts.push(metrics_label);
@@ -2648,50 +2695,46 @@ pub(crate) fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<St
     let mut parts = Vec::new();
     if summary.tool_calls.count > 0 {
         let duration = format_duration_ms(summary.tool_calls.duration_ms);
-        let calls = pluralize(summary.tool_calls.count, "call", "calls");
         parts.push(format!(
-            "Local tools: {} {calls} ({duration})",
+            "Локальные инструменты: {} выз. ({duration})",
             summary.tool_calls.count
         ));
     }
     if summary.api_calls.count > 0 {
         let duration = format_duration_ms(summary.api_calls.duration_ms);
-        let calls = pluralize(summary.api_calls.count, "call", "calls");
         parts.push(format!(
-            "Inference: {} {calls} ({duration})",
+            "Инференс: {} выз. ({duration})",
             summary.api_calls.count
         ));
     }
     if summary.websocket_calls.count > 0 {
         let duration = format_duration_ms(summary.websocket_calls.duration_ms);
         parts.push(format!(
-            "WebSocket: {} events send ({duration})",
+            "WebSocket: отправлено {} соб. ({duration})",
             summary.websocket_calls.count
         ));
     }
     if summary.streaming_events.count > 0 {
         let duration = format_duration_ms(summary.streaming_events.duration_ms);
-        let stream_label = pluralize(summary.streaming_events.count, "Stream", "Streams");
-        let events = pluralize(summary.streaming_events.count, "event", "events");
         parts.push(format!(
-            "{stream_label}: {} {events} ({duration})",
+            "Потоки: {} соб. ({duration})",
             summary.streaming_events.count
         ));
     }
     if summary.websocket_events.count > 0 {
         let duration = format_duration_ms(summary.websocket_events.duration_ms);
         parts.push(format!(
-            "{} events received ({duration})",
+            "Получено по WebSocket: {} соб. ({duration})",
             summary.websocket_events.count
         ));
     }
     if summary.responses_api_overhead_ms > 0 {
         let duration = format_duration_ms(summary.responses_api_overhead_ms);
-        parts.push(format!("Responses API overhead: {duration}"));
+        parts.push(format!("Накладные расходы Responses API: {duration}"));
     }
     if summary.responses_api_inference_time_ms > 0 {
         let duration = format_duration_ms(summary.responses_api_inference_time_ms);
-        parts.push(format!("Responses API inference: {duration}"));
+        parts.push(format!("Инференс Responses API: {duration}"));
     }
     if summary.responses_api_engine_iapi_ttft_ms > 0
         || summary.responses_api_engine_service_ttft_ms > 0
@@ -3830,7 +3873,7 @@ mod tests {
         let result = CallToolResult {
             content: vec![
                 text_block("Latency summary: p50=120ms, p95=480ms."),
-                text_block("No anomalies detected."),
+            text_block("Аномалии не обнаружены."),
             ],
             is_error: None,
             structured_content: None,

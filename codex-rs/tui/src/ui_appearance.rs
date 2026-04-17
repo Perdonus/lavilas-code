@@ -149,7 +149,7 @@ pub(crate) fn describe_color_choice(
             if is_ru {
                 format!("Авто · {}", named.name_ru)
             } else {
-                format!("Auto · {}", named.name_en)
+                format!("Авто · {}", named.name_ru)
             }
         }
         UiColorChoice::Preset(preset) => {
@@ -157,7 +157,7 @@ pub(crate) fn describe_color_choice(
             if is_ru {
                 named.name_ru.to_string()
             } else {
-                named.name_en.to_string()
+                named.name_ru.to_string()
             }
         }
         UiColorChoice::Custom(hex) => {
@@ -165,7 +165,7 @@ pub(crate) fn describe_color_choice(
             if is_ru {
                 format!("{} {}", named.name_ru, hex.to_ascii_uppercase())
             } else {
-                format!("{} {}", named.name_en, hex.to_ascii_uppercase())
+                format!("{} {}", named.name_ru, hex.to_ascii_uppercase())
             }
         }
         UiColorChoice::Gradient { start, end } => {
@@ -174,7 +174,7 @@ pub(crate) fn describe_color_choice(
             if is_ru {
                 format!("Градиент · {} → {}", start_named.name_ru, end_named.name_ru)
             } else {
-                format!("Gradient · {} → {}", start_named.name_en, end_named.name_en)
+                format!("Градиент · {} → {}", start_named.name_ru, end_named.name_ru)
             }
         }
     }
@@ -184,7 +184,7 @@ pub(crate) fn named_color_for_hex(hex: &str) -> NamedColor {
     let Some(rgb) = parse_hex_color(hex) else {
         return NamedColor {
             name_ru: "Свой цвет",
-            name_en: "Custom",
+            name_en: "Свой цвет",
             hex: "#000000",
             rgb: (0, 0, 0),
         };
@@ -433,21 +433,21 @@ pub(crate) fn format_preview_label(
 ) -> (&'static str, Style, Option<&'static str>) {
     match (is_ru, format) {
         (true, SelectionHighlightTextFormat::Bold) => ("Жирный", Style::default().add_modifier(Modifier::BOLD), None),
-        (false, SelectionHighlightTextFormat::Bold) => ("Bold", Style::default().add_modifier(Modifier::BOLD), None),
+        (false, SelectionHighlightTextFormat::Bold) => ("Жирный", Style::default().add_modifier(Modifier::BOLD), None),
         (true, SelectionHighlightTextFormat::Semibold) => ("Полужирный", Style::default(), Some("◧")),
-        (false, SelectionHighlightTextFormat::Semibold) => ("Semi-bold", Style::default(), Some("◧")),
+        (false, SelectionHighlightTextFormat::Semibold) => ("Полужирный", Style::default(), Some("◧")),
         (true, SelectionHighlightTextFormat::Italic) => ("Курсив", Style::default().add_modifier(Modifier::ITALIC), None),
-        (false, SelectionHighlightTextFormat::Italic) => ("Italic", Style::default().add_modifier(Modifier::ITALIC), None),
+        (false, SelectionHighlightTextFormat::Italic) => ("Курсив", Style::default().add_modifier(Modifier::ITALIC), None),
         (true, SelectionHighlightTextFormat::Underlined) => ("Подчёркнутый", Style::default().add_modifier(Modifier::UNDERLINED), None),
-        (false, SelectionHighlightTextFormat::Underlined) => ("Underlined", Style::default().add_modifier(Modifier::UNDERLINED), None),
+        (false, SelectionHighlightTextFormat::Underlined) => ("Подчёркнутый", Style::default().add_modifier(Modifier::UNDERLINED), None),
         (true, SelectionHighlightTextFormat::Mono) => ("Моно", Style::default(), Some("</>")),
-        (false, SelectionHighlightTextFormat::Mono) => ("Monospace", Style::default(), Some("</>")),
+        (false, SelectionHighlightTextFormat::Mono) => ("Моно", Style::default(), Some("</>")),
         (true, SelectionHighlightTextFormat::Dim) => ("Приглушённый", Style::default().add_modifier(Modifier::DIM), None),
-        (false, SelectionHighlightTextFormat::Dim) => ("Dim", Style::default().add_modifier(Modifier::DIM), None),
+        (false, SelectionHighlightTextFormat::Dim) => ("Приглушённый", Style::default().add_modifier(Modifier::DIM), None),
         (true, SelectionHighlightTextFormat::Reversed) => ("Инверсия", Style::default().add_modifier(Modifier::REVERSED), None),
-        (false, SelectionHighlightTextFormat::Reversed) => ("Reversed", Style::default().add_modifier(Modifier::REVERSED), None),
+        (false, SelectionHighlightTextFormat::Reversed) => ("Инверсия", Style::default().add_modifier(Modifier::REVERSED), None),
         (true, SelectionHighlightTextFormat::CrossedOut) => ("Зачёркнутый", Style::default().add_modifier(Modifier::CROSSED_OUT), None),
-        (false, SelectionHighlightTextFormat::CrossedOut) => ("Crossed out", Style::default().add_modifier(Modifier::CROSSED_OUT), None),
+        (false, SelectionHighlightTextFormat::CrossedOut) => ("Зачёркнутый", Style::default().add_modifier(Modifier::CROSSED_OUT), None),
     }
 }
 
@@ -458,7 +458,7 @@ pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset:
             if is_ru {
                 format!("Авто · {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
             } else {
-                format!("Auto · {} · {}", named.name_en, named.hex.to_ascii_uppercase())
+                format!("Авто · {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
             }
         }
         UiColorChoice::Gradient { start, end } => {
@@ -474,10 +474,10 @@ pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset:
                 )
             } else {
                 format!(
-                    "Gradient: {} {} → {} {}",
-                    start_named.name_en,
+                    "Градиент: {} {} → {} {}",
+                    start_named.name_ru,
                     start.to_ascii_uppercase(),
-                    end_named.name_en,
+                    end_named.name_ru,
                     end.to_ascii_uppercase()
                 )
             }
@@ -491,7 +491,7 @@ pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset:
             if is_ru {
                 format!("Оттенок: {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
             } else {
-                format!("Shade: {} · {}", named.name_en, named.hex.to_ascii_uppercase())
+                format!("Оттенок: {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
             }
         }
     }

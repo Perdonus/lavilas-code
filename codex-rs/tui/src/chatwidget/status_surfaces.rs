@@ -561,9 +561,9 @@ impl ChatWidget {
                     "Быстрый режим: выкл.".to_string()
                 }
             } else if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
-                "Fast on".to_string()
+                "Быстрый режим: вкл.".to_string()
             } else {
-                "Fast off".to_string()
+                "Быстрый режим: выкл.".to_string()
             }),
         }
     }
@@ -614,7 +614,7 @@ impl ChatWidget {
             return if is_ru {
                 "Запуск".to_string()
             } else {
-                "Starting".to_string()
+                "Запуск".to_string()
             };
         }
 
@@ -623,7 +623,7 @@ impl ChatWidget {
                 if is_ru {
                     "Готово".to_string()
                 } else {
-                    "Ready".to_string()
+                    "Готово".to_string()
                 }
             }
             TerminalTitleStatusKind::WaitingForBackgroundTerminal
@@ -632,42 +632,42 @@ impl ChatWidget {
                 if is_ru {
                     "Готово".to_string()
                 } else {
-                    "Ready".to_string()
+                    "Готово".to_string()
                 }
             }
             TerminalTitleStatusKind::Thinking if !self.bottom_pane.is_task_running() => {
                 if is_ru {
                     "Готово".to_string()
                 } else {
-                    "Ready".to_string()
+                    "Готово".to_string()
                 }
             }
             TerminalTitleStatusKind::Working => {
                 if is_ru {
                     "В работе".to_string()
                 } else {
-                    "Working".to_string()
+                    "В работе".to_string()
                 }
             }
             TerminalTitleStatusKind::WaitingForBackgroundTerminal => {
                 if is_ru {
                     "Ожидание".to_string()
                 } else {
-                    "Waiting".to_string()
+                    "Ожидание".to_string()
                 }
             }
             TerminalTitleStatusKind::Undoing => {
                 if is_ru {
                     "Откат".to_string()
                 } else {
-                    "Undoing".to_string()
+                    "Откат".to_string()
                 }
             }
             TerminalTitleStatusKind::Thinking => {
                 if is_ru {
                     "Анализ".to_string()
                 } else {
-                    "Thinking".to_string()
+                    "Анализ".to_string()
                 }
             }
         }
@@ -755,7 +755,7 @@ impl ChatWidget {
         Some(if self.ui_language().is_ru() {
             format!("Шаги {completed}/{total}")
         } else {
-            format!("Tasks {completed}/{total}")
+            format!("Шаги {completed}/{total}")
         })
     }
 

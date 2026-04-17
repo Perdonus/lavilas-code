@@ -256,15 +256,15 @@ impl StatusHistoryCell {
         refreshing_rate_limits: bool,
     ) -> (Self, StatusHistoryHandle) {
         let mut config_entries = vec![
-            ("workdir", config.cwd.display().to_string()),
-            ("model", model_name.to_string()),
-            ("provider", config.model_provider_id.clone()),
+            ("каталог", config.cwd.display().to_string()),
+            ("модель", model_name.to_string()),
+            ("провайдер", config.model_provider_id.clone()),
             (
-                "approval",
+                "подтверждения",
                 config.permissions.approval_policy.value().to_string(),
             ),
             (
-                "sandbox",
+                "песочница",
                 summarize_sandbox_policy(config.permissions.sandbox_policy.get()),
             ),
         ];
@@ -272,20 +272,20 @@ impl StatusHistoryCell {
             let effort_value = reasoning_effort_override
                 .unwrap_or(None)
                 .map(|effort| effort.to_string())
-                .unwrap_or_else(|| "none".to_string());
-            config_entries.push(("reasoning effort", effort_value));
+                .unwrap_or_else(|| "без размышлений".to_string());
+            config_entries.push(("режим размышлений", effort_value));
             config_entries.push((
-                "reasoning summaries",
+                "сводки размышлений",
                 config
                     .model_reasoning_summary
                     .map(|summary| summary.to_string())
-                    .unwrap_or_else(|| "auto".to_string()),
+                    .unwrap_or_else(|| "авто".to_string()),
             ));
         }
         let (model_name, model_details) = compose_model_display(model_name, &config_entries);
         let approval = config_entries
             .iter()
-            .find(|(k, _)| *k == "approval")
+            .find(|(k, _)| *k == "подтверждения")
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<неизвестно>".to_string());
         let sandbox = match config.permissions.sandbox_policy.get() {
@@ -564,7 +564,7 @@ impl HistoryCell for StatusHistoryCell {
                 (None, None) => "ChatGPT".to_string(),
             },
             StatusAccountDisplay::ApiKey => {
-                "API-ключ настроен (выполните codex login, если хотите вход через ChatGPT)"
+                "API-ключ настроен (выполните lavilas login, если хотите вход через ChatGPT)"
                     .to_string()
             }
         });

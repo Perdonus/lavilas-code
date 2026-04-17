@@ -29,12 +29,12 @@ const { platform, arch } = process;
 const targetTriple = resolveTargetTriple(platform, arch);
 
 if (!targetTriple) {
-  throw new Error(`Unsupported platform: ${platform} (${arch})`);
+  throw new Error(`Неподдерживаемая платформа: ${platform} (${arch})`);
 }
 
 const platformPackage = PLATFORM_PACKAGE_BY_TARGET[targetTriple];
 if (!platformPackage) {
-  throw new Error(`Unsupported target triple: ${targetTriple}`);
+  throw new Error(`Неподдерживаемая целевая платформа: ${targetTriple}`);
 }
 
 const codexBinaryName = getCodexBinaryName(process.platform);
@@ -55,7 +55,7 @@ if (!selectedInstallation) {
   const packageManager = detectPackageManager({ installDir: __dirname });
   const updateCommand = updateCommandForPackageManager(packageManager);
   throw new Error(
-    `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
+    `Не найдена платформенная зависимость ${platformPackage}. Переустановите Lavilas Codex: ${updateCommand}`,
   );
 }
 

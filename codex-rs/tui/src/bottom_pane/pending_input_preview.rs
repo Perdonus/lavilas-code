@@ -85,10 +85,10 @@ impl PendingInputPreview {
                 &mut lines,
                 width,
                 Line::from(vec![
-                    "Messages to be submitted after next tool call".into(),
-                    " (press ".dim(),
+                    "Сообщения, которые отправятся после следующего вызова инструмента".into(),
+                    " (нажмите ".dim(),
                     key_hint::plain(KeyCode::Esc).into(),
-                    " to interrupt and send immediately)".dim(),
+                    ", чтобы прервать и отправить сразу)".dim(),
                 ]),
             );
 
@@ -110,7 +110,7 @@ impl PendingInputPreview {
             Self::push_section_header(
                 &mut lines,
                 width,
-                "Messages to be submitted at end of turn".into(),
+                "Сообщения, которые будут отправлены в конце хода".into(),
             );
 
             for steer in &self.rejected_steers {
@@ -128,7 +128,7 @@ impl PendingInputPreview {
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
-            Self::push_section_header(&mut lines, width, "Queued follow-up messages".into());
+            Self::push_section_header(&mut lines, width, "Сообщения в очереди на следующий ход".into());
 
             for message in &self.queued_messages {
                 let wrapped = adaptive_wrap_lines(

@@ -35,12 +35,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "Список навыков".to_string()
                 } else {
-                    "List skills".to_string()
+                    "Список навыков".to_string()
                 },
                 description: Some(if is_ru {
                     "Подсказка: нажмите $, чтобы открыть этот список напрямую.".to_string()
                 } else {
-                    "Tip: press $ to open this list directly.".to_string()
+                    "Подсказка: нажмите $, чтобы открыть этот список напрямую.".to_string()
                 }),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::OpenSkillsList);
@@ -52,12 +52,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "Управление навыками".to_string()
                 } else {
-                    "Enable/Disable Skills".to_string()
+                    "Управление навыками".to_string()
                 },
                 description: Some(if is_ru {
                     "Включайте и отключайте навыки для текущей сессии.".to_string()
                 } else {
-                    "Enable or disable skills.".to_string()
+                    "Включайте и отключайте навыки для текущей сессии.".to_string()
                 }),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::OpenManageSkillsPopup);
@@ -71,12 +71,12 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Навыки".to_string()
             } else {
-                "Skills".to_string()
+                "Навыки".to_string()
             }),
             subtitle: Some(if is_ru {
                 "Выберите действие".to_string()
             } else {
-                "Choose an action".to_string()
+                "Выберите действие".to_string()
             }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -90,7 +90,7 @@ impl ChatWidget {
                 if self.ui_language().is_ru() {
                     "Нет доступных навыков.".to_string()
                 } else {
-                    "No skills available.".to_string()
+                    "Нет доступных навыков.".to_string()
                 },
                 /*hint*/ None,
             );
@@ -166,7 +166,7 @@ impl ChatWidget {
         let message = if self.ui_language().is_ru() {
             format!("Навыки: включено {enabled_count}, выключено {disabled_count}")
         } else {
-            format!("{enabled_count} skills enabled, {disabled_count} skills disabled")
+            format!("Навыки: включено {enabled_count}, выключено {disabled_count}")
         };
         self.add_info_message(message, /*hint*/ None);
     }

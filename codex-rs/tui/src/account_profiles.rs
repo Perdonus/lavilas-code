@@ -192,7 +192,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 16] = [
     },
     AccountProviderSpec {
         id: "custom",
-        name_en: "Custom provider",
+        name_en: "Свой провайдер",
         name_ru: "Свой провайдер",
         base_url: "",
         wire_api: "chat_completions",
@@ -304,7 +304,7 @@ fn wire_api_from_spec(spec: AccountProviderSpec) -> io::Result<WireApi> {
         other => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "unsupported wire_api `{other}` in provider spec `{}`",
+        "неподдерживаемый wire_api `{other}` в описании провайдера `{}`",
                 spec.id
             ),
         )),
@@ -833,7 +833,7 @@ pub(crate) fn create_or_update_stored_profile(
     let spec = account_provider_spec(provider).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("unsupported provider `{provider}`"),
+            format!("неподдерживаемый провайдер `{provider}`"),
         )
     })?;
     let profile_key = sanitize_profile_key(requested_name, provider);
@@ -902,16 +902,16 @@ pub(crate) fn build_create_profile_request(
             "API-ключ не нужен. Оставьте поле пустым и будет использоваться стандартный вход Codex/OpenAI.".to_string()
         }
         Some(spec) if spec.builtin_model_provider_id.is_some() => {
-            "No API key is required. Leave this blank to use the standard Codex/OpenAI login.".to_string()
+            "API-ключ не нужен. Оставьте поле пустым и будет использоваться стандартный вход Codex/OpenAI.".to_string()
         }
         Some(spec) if spec.api_key_optional && is_ru => {
             "Введите API-ключ. Для локальных провайдеров вроде Ollama поле можно оставить пустым.".to_string()
         }
         Some(spec) if spec.api_key_optional => {
-            "Enter the API key. For local providers like Ollama this field may be left empty.".to_string()
+            "Введите API-ключ. Для локальных провайдеров вроде Ollama поле можно оставить пустым.".to_string()
         }
         _ if is_ru => format!("Введите API-ключ для {display_name}."),
-        _ => format!("Enter the API key for {display_name}."),
+        _ => format!("Введите API-ключ для {display_name}."),
     };
     let base_url_prompt = match account_provider_spec(provider) {
         Some(spec) if spec.requires_base_url && is_ru => Some(
@@ -919,7 +919,7 @@ pub(crate) fn build_create_profile_request(
                 .to_string(),
         ),
         Some(spec) if spec.requires_base_url => Some(
-            "Enter the OpenAI-compatible API base URL. This is required for the custom provider."
+            "Введите base URL OpenAI-compatible API. Это поле обязательно для кастомного провайдера."
                 .to_string(),
         ),
         None => None,
@@ -932,14 +932,14 @@ pub(crate) fn build_create_profile_request(
             header: if is_ru {
                 "Профиль".to_string()
             } else {
-                "Profile".to_string()
+                "Профиль".to_string()
             },
             question: if is_ru {
                 format!(
                     "Название профиля. Можно оставить пустым, тогда будет использовано `{fallback_name}`."
                 )
             } else {
-                format!("Profile name. Leave it empty to use `{fallback_name}`.")
+                format!("Название профиля. Можно оставить пустым, тогда будет использовано `{fallback_name}`.")
             },
             is_other: false,
             is_secret: false,
@@ -950,7 +950,7 @@ pub(crate) fn build_create_profile_request(
             header: if is_ru {
                 "API-ключ".to_string()
             } else {
-                "API key".to_string()
+                "API-ключ".to_string()
             },
             question: key_prompt,
             is_other: false,
@@ -962,7 +962,7 @@ pub(crate) fn build_create_profile_request(
     if let Some(base_url_prompt) = base_url_prompt {
         questions.push(RequestUserInputQuestion {
             id: BASE_URL_QUESTION_ID.to_string(),
-            header: "Base URL".to_string(),
+            header: "Базовый URL".to_string(),
             question: base_url_prompt,
             is_other: false,
             is_secret: false,

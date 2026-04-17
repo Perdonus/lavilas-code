@@ -709,12 +709,12 @@ fn provider_supports_reasoning_controls(provider: &ModelProviderInfo) -> bool {
 fn fallback_reasoning_description(effort: ReasoningEffortConfig) -> &'static str {
     match effort {
         ReasoningEffortConfig::Minimal | ReasoningEffortConfig::Low => {
-            "Fast responses with lighter reasoning"
+            "Быстрые ответы с облегчённым режимом размышлений"
         }
-        ReasoningEffortConfig::Medium => "Balances speed and reasoning depth for everyday tasks",
-        ReasoningEffortConfig::High => "Greater reasoning depth for complex problems",
-        ReasoningEffortConfig::XHigh => "Extra high reasoning depth for complex problems",
-        ReasoningEffortConfig::None => "Balances speed and reasoning depth for everyday tasks",
+        ReasoningEffortConfig::Medium => "Баланс скорости и глубины размышлений для повседневных задач",
+        ReasoningEffortConfig::High => "Больше глубины размышлений для сложных задач",
+        ReasoningEffortConfig::XHigh => "Максимальная глубина размышлений для сложных задач",
+        ReasoningEffortConfig::None => "Баланс скорости и глубины размышлений для повседневных задач",
     }
 }
 
@@ -730,11 +730,11 @@ fn fallback_reasoning_options(
         return vec![
             ReasoningEffortPreset {
                 effort: ReasoningEffortConfig::None,
-                description: "Disables the extended reasoning budget for this model".to_string(),
+                description: "Отключает расширенный бюджет размышлений для этой модели".to_string(),
             },
             ReasoningEffortPreset {
                 effort: ReasoningEffortConfig::High,
-                description: "Uses the extended reasoning budget available for this model"
+                description: "Включает расширенный бюджет размышлений, доступный для этой модели"
                     .to_string(),
             },
         ];
@@ -2198,9 +2198,9 @@ impl App {
             .unwrap_or_else(|| format!("{profile_key}-provider"));
         if !provider_spec.api_key_optional && !stored_profile_has_saved_key(stored) {
             let recreate_hint = if self.ui_language_is_ru() {
-                "Сохранённый API-ключ не найден. Пересоздайте аккаунт через /profiles -> Add account."
+                "Сохранённый API-ключ не найден. Пересоздайте аккаунт через /profiles -> Добавить аккаунт."
             } else {
-                "Saved API key not found. Re-create the account through /profiles -> Add account."
+                "Сохранённый API-ключ не найден. Пересоздайте аккаунт через /profiles -> Добавить аккаунт."
             };
             self.chat_widget
                 .add_error_message(recreate_hint.to_string());
@@ -2250,7 +2250,7 @@ impl App {
                     )
                 } else {
                     format!(
-                        "Failed to resolve a model catalog for `{profile_key}`. Check the API key, base URL, and `{}`.",
+                        "Не удалось получить каталог моделей для `{profile_key}`. Проверьте API-ключ, base URL и `{}`.",
                         catalog_path.display()
                     )
                 }
@@ -2261,7 +2261,7 @@ impl App {
                 )
             } else {
                 format!(
-                    "Failed to resolve a model catalog for `{profile_key}`. Check the API key and `{}`.",
+                    "Не удалось получить каталог моделей для `{profile_key}`. Проверьте API-ключ и `{}`.",
                     catalog_path.display()
                 )
             };
@@ -2474,7 +2474,7 @@ impl App {
                 )
             } else {
                 format!(
-                    "Active profile: {config_profile}. Local catalog snapshot: {}.",
+                    "Активный профиль: {config_profile}. Локальный слепок каталога: {}.",
                     path.display()
                 )
             }
@@ -2486,7 +2486,7 @@ impl App {
             );
         } else {
             self.chat_widget.add_info_message(
-                format!("Account switched: {provider_name} ({config_profile})"),
+                format!("Аккаунт переключен: {provider_name} ({config_profile})"),
                 hint,
             );
         }
@@ -2502,7 +2502,7 @@ impl App {
             let message = if self.ui_language_is_ru() {
                 format!("Неподдерживаемый провайдер: {provider}")
             } else {
-                format!("Unsupported provider: {provider}")
+                format!("Неподдерживаемый провайдер: {provider}")
             };
             self.chat_widget.add_error_message(message);
             return;
@@ -2535,7 +2535,7 @@ impl App {
                 let message = if is_ru {
                     format!("Не удалось прочитать профиль `{profile_key}`: {err}")
                 } else {
-                    format!("Failed to read profile `{profile_key}`: {err}")
+                    format!("Не удалось прочитать профиль `{profile_key}`: {err}")
                 };
                 self.chat_widget.add_error_message(message);
                 return Ok(());
@@ -2544,11 +2544,11 @@ impl App {
         if !stored_profile_has_saved_key(&stored) {
             let message = if is_ru {
                 format!(
-                    "Профиль `{profile_key}` не содержит сохранённый API-ключ. Пересоздайте его через /profiles -> Add account."
+                    "Профиль `{profile_key}` не содержит сохранённый API-ключ. Пересоздайте его через /profiles -> Добавить аккаунт."
                 )
             } else {
                 format!(
-                    "Profile `{profile_key}` has no saved API key. Re-create it through /profiles -> Add account."
+                    "Профиль `{profile_key}` не содержит сохранённый API-ключ. Пересоздайте его через /profiles -> Добавить аккаунт."
                 )
             };
             self.chat_widget.add_error_message(message);
@@ -2578,7 +2578,7 @@ impl App {
             let message = if is_ru {
                 format!("Неподдерживаемый провайдер: {provider}")
             } else {
-                format!("Unsupported provider: {provider}")
+                format!("Неподдерживаемый провайдер: {provider}")
             };
             self.chat_widget.add_error_message(message);
             return Ok(true);
@@ -2589,9 +2589,9 @@ impl App {
                 .is_none_or(|value| value.trim().is_empty())
         {
             let message = if is_ru {
-                format!("Для кастомного провайдера `{provider}` нужен OpenAI-compatible base URL.")
+                format!("Для кастомного провайдера `{provider}` нужен OpenAI-compatible базовый URL.")
             } else {
-                format!("Custom provider `{provider}` requires an OpenAI-compatible base URL.")
+                format!("Для кастомного провайдера `{provider}` нужен OpenAI-compatible базовый URL.")
             };
             self.chat_widget.add_error_message(message);
             return Ok(true);
@@ -2604,7 +2604,7 @@ impl App {
             let message = if is_ru {
                 format!("Для провайдера `{provider}` нужен API-ключ.")
             } else {
-                format!("Provider `{provider}` requires an API key.")
+                format!("Для провайдера `{provider}` нужен API-ключ.")
             };
             self.chat_widget.add_error_message(message);
             return Ok(true);
@@ -2648,7 +2648,7 @@ impl App {
                 .add_error_message(if self.ui_language_is_ru() {
                     "Не удалось прочитать введённый префикс команд.".to_string()
                 } else {
-                    "Failed to read the entered command prefix.".to_string()
+                    "Не удалось прочитать введённый префикс команд.".to_string()
                 });
             return Ok(true);
         };
@@ -2659,7 +2659,7 @@ impl App {
                 .add_error_message(if self.ui_language_is_ru() {
                     "Префикс команд не может быть пустым.".to_string()
                 } else {
-                    "Command prefix cannot be empty.".to_string()
+                    "Префикс команды не может быть пустым.".to_string()
                 });
             return Ok(true);
         };
@@ -2668,7 +2668,7 @@ impl App {
                 .add_error_message(if self.ui_language_is_ru() {
                     "Префикс команд должен быть одним ASCII-символом без пробела.".to_string()
                 } else {
-                    "Command prefix must be a single non-space ASCII character.".to_string()
+                    "Префикс команд должен быть одним ASCII-символом без пробела.".to_string()
                 });
             return Ok(true);
         }
@@ -2790,7 +2790,7 @@ impl App {
                     self.chat_widget.add_error_message(if is_ru {
                         format!("Не удалось удалить `{}`: {err}", path.display())
                     } else {
-                        format!("Failed to delete `{}`: {err}", path.display())
+                        format!("Не удалось удалить `{}`: {err}", path.display())
                     });
                     return;
                 }
@@ -2828,7 +2828,7 @@ impl App {
             self.chat_widget.add_error_message(if is_ru {
                 format!("Не удалось очистить конфигурацию профиля `{profile_key}`: {err}")
             } else {
-                format!("Failed to clean config for profile `{profile_key}`: {err}")
+                format!("Не удалось очистить конфигурацию профиля `{profile_key}`: {err}")
             });
             return;
         }
@@ -2841,7 +2841,7 @@ impl App {
                     "Удалён только сохранённый профиль. Текущая сессия останется активной до переключения аккаунта."
                         .to_string()
                 } else {
-                    "Only the saved profile was removed. The current session stays active until you switch accounts."
+                    "Удалён только сохранённый профиль. Текущая сессия останется активной до переключения аккаунта."
                         .to_string()
                 })
             } else {
@@ -2851,7 +2851,7 @@ impl App {
                 if is_ru {
                     format!("Профиль `{profile_key}` удалён.")
                 } else {
-                    format!("Profile `{profile_key}` deleted.")
+                    format!("Профиль `{profile_key}` удалён.")
                 },
                 active_hint,
             );
@@ -2860,7 +2860,7 @@ impl App {
                 if is_ru {
                     format!("Профиль `{profile_key}` уже отсутствует.")
                 } else {
-                    format!("Profile `{profile_key}` is already missing.")
+                    format!("Профиль `{profile_key}` уже отсутствует.")
                 },
                 None,
             );
@@ -3041,7 +3041,7 @@ impl App {
                             .into(),
                     });
                     if previous_approvals_reviewer != guardian_approvals_preset.approvals_reviewer {
-                        permissions_history_label = Some("Guardian Approvals");
+                        permissions_history_label = Some("Подтверждения Guardian");
                     }
                 } else if !effective_enabled {
                     if profile_approvals_reviewer_configured || self.active_profile.is_none() {
@@ -3051,7 +3051,7 @@ impl App {
                     }
                     feature_config.approvals_reviewer = ApprovalsReviewer::User;
                     if previous_approvals_reviewer != ApprovalsReviewer::User {
-                        permissions_history_label = Some("Default");
+                        permissions_history_label = Some("По умолчанию");
                     }
                 }
                 approvals_reviewer_override = Some(feature_config.approvals_reviewer);
@@ -6422,7 +6422,7 @@ impl App {
                     self.chat_widget.add_error_message(if self.ui_language_is_ru() {
                         format!("Не удалось установить шрифт: {err}")
                     } else {
-                        format!("Failed to install the font: {err}")
+                            format!("Не удалось установить шрифт: {err}")
                     });
                 }
             },
@@ -6448,7 +6448,7 @@ impl App {
                         self.chat_widget.add_error_message(if self.ui_language_is_ru() {
                             format!("Не удалось удалить файлы шрифта: {err}")
                         } else {
-                            format!("Failed to delete font files: {err}")
+                            format!("Не удалось удалить файлы шрифта: {err}")
                         });
                     } else {
                         self.chat_widget.delete_installed_font_preference(font_id.as_str());

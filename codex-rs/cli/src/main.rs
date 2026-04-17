@@ -55,9 +55,9 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
 
-/// Codex CLI
+/// Lavilas Codex CLI
 ///
-/// If no subcommand is specified, options will be forwarded to the interactive CLI.
+/// Если подкоманда не указана, параметры будут переданы в интерактивный режим.
 #[derive(Debug, Parser)]
 #[clap(
     name = "Lavilas Codex",
@@ -65,11 +65,10 @@ use codex_terminal_detection::TerminalName;
     version,
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
-    // The executable is sometimes invoked via a platform‑specific name like
-    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the primary `codex` command name that users run.
-    bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    // Исполняемый файл может запускаться под платформенным именем, но help
+    // должен показывать основную команду пользователя.
+    bin_name = "lavilas",
+    override_usage = "lavilas [OPTIONS] [PROMPT]\n       lavilas [OPTIONS] <КОМАНДА> [АРГУМЕНТЫ]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -90,74 +89,74 @@ struct MultitoolCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
-    /// Run Codex non-interactively.
+    /// Запустить Lavilas Codex без интерактивного режима.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
-    /// Run a code review non-interactively.
+    /// Запустить код-ревью без интерактивного режима.
     Review(ReviewArgs),
 
-    /// Manage login.
+    /// Управление входом.
     Login(LoginCommand),
 
-    /// Remove stored authentication credentials.
+    /// Удалить сохранённые учётные данные.
     Logout(LogoutCommand),
 
-    /// Manage external MCP servers for Codex.
+    /// Управление внешними MCP-серверами для Lavilas Codex.
     Mcp(McpCli),
 
-    /// Start Codex as an MCP server (stdio).
+    /// Запустить Lavilas Codex как MCP-сервер (stdio).
     McpServer,
 
-    /// [experimental] Run the app server or related tooling.
+    /// [экспериментально] Запустить app-server или связанный инструмент.
     AppServer(AppServerCommand),
 
-    /// Launch the Codex desktop app (downloads the macOS installer if missing).
+    /// Запустить настольное приложение Lavilas Codex (при необходимости скачает установщик для macOS).
     #[cfg(target_os = "macos")]
     App(app_cmd::AppCommand),
 
-    /// Generate shell completion scripts.
+    /// Сгенерировать completion-скрипты для shell.
     Completion(CompletionCommand),
 
-    /// Run commands within a Codex-provided sandbox.
+    /// Выполнять команды внутри песочницы Lavilas Codex.
     Sandbox(SandboxArgs),
 
-    /// Debugging tools.
+    /// Инструменты отладки.
     Debug(DebugCommand),
 
-    /// Execpolicy tooling.
+    /// Инструменты execpolicy.
     #[clap(hide = true)]
     Execpolicy(ExecpolicyCommand),
 
-    /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
+    /// Применить последний diff от агента Lavilas Codex через `git apply` к локальному дереву.
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
 
-    /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
+    /// Возобновить предыдущую интерактивную сессию (по умолчанию через picker; `--last` — последнюю).
     Resume(ResumeCommand),
 
-    /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
+    /// Форкнуть предыдущую интерактивную сессию (по умолчанию через picker; `--last` — последнюю).
     Fork(ForkCommand),
 
-    /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
+    /// [экспериментально] Просматривать задачи Codex Cloud и применять изменения локально.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
 
-    /// Internal: run the responses API proxy.
+    /// Внутреннее: запустить proxy для Responses API.
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
 
-    /// Internal: relay stdio to a Unix domain socket.
+    /// Внутреннее: проксировать stdio в Unix domain socket.
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
 
-    /// Inspect feature flags.
+    /// Посмотреть флаги возможностей.
     Features(FeaturesCli),
 }
 
 #[derive(Debug, Parser)]
 struct CompletionCommand {
-    /// Shell to generate completions for
+    /// Shell, для которого нужно сгенерировать completion
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
 }
@@ -170,13 +169,13 @@ struct DebugCommand {
 
 #[derive(Debug, clap::Subcommand)]
 enum DebugSubcommand {
-    /// Tooling: helps debug the app server.
+    /// Инструменты для отладки app-server.
     AppServer(DebugAppServerCommand),
 
-    /// Render the model-visible prompt input list as JSON.
+    /// Показать список входных данных prompt в JSON.
     PromptInput(DebugPromptInputCommand),
 
-    /// Internal: reset local memory state for a fresh start.
+    /// Внутреннее: сбросить локальную память для чистого старта.
     #[clap(hide = true)]
     ClearMemories,
 }
@@ -189,7 +188,7 @@ struct DebugAppServerCommand {
 
 #[derive(Debug, clap::Subcommand)]
 enum DebugAppServerSubcommand {
-    // Send message to app server V2.
+    // Отправить сообщение в app server V2.
     SendMessageV2(DebugAppServerSendMessageV2Command),
 }
 
@@ -201,31 +200,31 @@ struct DebugAppServerSendMessageV2Command {
 
 #[derive(Debug, Parser)]
 struct DebugPromptInputCommand {
-    /// Optional user prompt to append after session context.
+    /// Необязательный пользовательский запрос, который будет добавлен после контекста сессии.
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
 
-    /// Optional image(s) to attach to the user prompt.
+    /// Необязательные изображения, которые будут приложены к пользовательскому запросу.
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     images: Vec<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
 struct ResumeCommand {
-    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
-    /// If omitted, use --last to pick the most recent recorded session.
+    /// Идентификатор сессии/диалога (UUID) или имя треда. Если строка парсится как UUID, приоритет у UUID.
+    /// Если не указано, используйте `--last`, чтобы взять последнюю записанную сессию.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
 
-    /// Continue the most recent session without showing the picker.
+    /// Продолжить последнюю сессию без показа picker.
     #[arg(long = "last", default_value_t = false)]
     last: bool,
 
-    /// Show all sessions (disables cwd filtering and shows CWD column).
+    /// Показать все сессии (отключает фильтрацию по cwd и показывает колонку CWD).
     #[arg(long = "all", default_value_t = false)]
     all: bool,
 
-    /// Include non-interactive sessions in the resume picker and --last selection.
+    /// Включить неинтерактивные сессии в picker возобновления и выбор `--last`.
     #[arg(long = "include-non-interactive", default_value_t = false)]
     include_non_interactive: bool,
 
@@ -238,16 +237,16 @@ struct ResumeCommand {
 
 #[derive(Debug, Parser)]
 struct ForkCommand {
-    /// Conversation/session id (UUID). When provided, forks this session.
-    /// If omitted, use --last to pick the most recent recorded session.
+    /// Идентификатор сессии/диалога (UUID). Если указан, форкает именно эту сессию.
+    /// Если не указано, используйте `--last`, чтобы взять последнюю записанную сессию.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
 
-    /// Fork the most recent session without showing the picker.
+    /// Форкнуть последнюю сессию без показа picker.
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
 
-    /// Show all sessions (disables cwd filtering and shows CWD column).
+    /// Показать все сессии (отключает фильтрацию по cwd и показывает колонку CWD).
     #[arg(long = "all", default_value_t = false)]
     all: bool,
 
@@ -266,15 +265,15 @@ struct SandboxArgs {
 
 #[derive(Debug, clap::Subcommand)]
 enum SandboxCommand {
-    /// Run a command under Seatbelt (macOS only).
+    /// Выполнить команду под Seatbelt (только macOS).
     #[clap(visible_alias = "seatbelt")]
     Macos(SeatbeltCommand),
 
-    /// Run a command under the Linux sandbox (bubblewrap by default).
+    /// Выполнить команду в Linux-песочнице (по умолчанию bubblewrap).
     #[clap(visible_alias = "landlock")]
     Linux(LandlockCommand),
 
-    /// Run a command under Windows restricted token (Windows only).
+    /// Выполнить команду под ограниченным токеном Windows (только Windows).
     Windows(WindowsCommand),
 }
 
@@ -286,7 +285,7 @@ struct ExecpolicyCommand {
 
 #[derive(Debug, clap::Subcommand)]
 enum ExecpolicySubcommand {
-    /// Check execpolicy files against a command.
+    /// Проверить execpolicy-файлы для команды.
     #[clap(name = "check")]
     Check(ExecPolicyCheckCommand),
 }
@@ -298,7 +297,7 @@ struct LoginCommand {
 
     #[arg(
         long = "with-api-key",
-        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
+        help = "Прочитать API-ключ из stdin (например: `printenv OPENAI_API_KEY | lavilas login --with-api-key`)"
     )]
     with_api_key: bool,
 
@@ -307,7 +306,7 @@ struct LoginCommand {
         num_args = 0..=1,
         default_missing_value = "",
         value_name = "API_KEY",
-        help = "(deprecated) Previously accepted the API key directly; now exits with guidance to use --with-api-key",
+        help = "(устарело) Раньше принимал API-ключ напрямую; теперь завершает работу и подсказывает использовать --with-api-key",
         hide = true
     )]
     api_key: Option<String>,
@@ -315,12 +314,12 @@ struct LoginCommand {
     #[arg(long = "device-auth")]
     use_device_code: bool,
 
-    /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
-    /// Override the OAuth issuer base URL (advanced)
+    /// ЭКСПЕРИМЕНТАЛЬНО: использовать собственный base URL OAuth issuer (для продвинутой настройки)
+    /// Переопределить base URL OAuth issuer (для продвинутой настройки)
     #[arg(long = "experimental_issuer", value_name = "URL", hide = true)]
     issuer_base_url: Option<String>,
 
-    /// EXPERIMENTAL: Use custom OAuth client ID (advanced)
+    /// ЭКСПЕРИМЕНТАЛЬНО: использовать собственный OAuth client ID (для продвинутой настройки)
     #[arg(long = "experimental_client-id", value_name = "CLIENT_ID", hide = true)]
     client_id: Option<String>,
 
@@ -330,7 +329,7 @@ struct LoginCommand {
 
 #[derive(Debug, clap::Subcommand)]
 enum LoginSubcommand {
-    /// Show login status.
+    /// Показать состояние входа.
     Status,
 }
 
@@ -342,11 +341,11 @@ struct LogoutCommand {
 
 #[derive(Debug, Parser)]
 struct AppServerCommand {
-    /// Omit to run the app server; specify a subcommand for tooling.
+    /// Оставьте пустым, чтобы запустить app-server; укажите подкоманду для инструмента.
     #[command(subcommand)]
     subcommand: Option<AppServerSubcommand>,
 
-    /// Transport endpoint URL. Supported values: `stdio://` (default),
+    /// URL транспортного endpoint. Поддерживаются: `stdio://` (по умолчанию),
     /// `ws://IP:PORT`.
     #[arg(
         long = "listen",
@@ -355,7 +354,7 @@ struct AppServerCommand {
     )]
     listen: codex_app_server::AppServerTransport,
 
-    /// Controls whether analytics are enabled by default.
+    /// Управляет тем, включена ли аналитика по умолчанию.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
     /// via the `analytics` section in the config.toml file.
@@ -456,7 +455,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         } else {
             resume_cmd
         };
-        lines.push(format!("To continue this session, run {command}"));
+        lines.push(format!("Чтобы продолжить эту сессию, выполните {command}"));
     }
 
     lines
@@ -466,7 +465,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     match exit_info.exit_reason {
         ExitReason::Fatal(message) => {
-            eprintln!("ERROR: {message}");
+            eprintln!("ОШИБКА: {message}");
             std::process::exit(1);
         }
         ExitReason::UserRequested => { /* normal exit */ }
@@ -487,7 +486,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
     let cmd_str = action.command_str();
-    println!("Updating Codex via `{cmd_str}`...");
+    println!("Обновляю Lavilas Codex через `{cmd_str}`...");
 
     let status = {
         #[cfg(windows)]
@@ -511,9 +510,9 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
         }
     };
     if !status.success() {
-        anyhow::bail!("`{cmd_str}` failed with status {status}");
+        anyhow::bail!("`{cmd_str}` завершилась с ошибочным статусом {status}");
     }
-    println!("\n🎉 Update ran successfully! Please restart Codex.");
+    println!("\nОбновление успешно выполнено. Перезапустите Lavilas Codex.");
     Ok(())
 }
 
@@ -574,7 +573,7 @@ impl FeatureToggles {
         if is_known_feature_key(feature) {
             Ok(())
         } else {
-            anyhow::bail!("Unknown feature flag: {feature}")
+            anyhow::bail!("Неизвестный флаг возможности: {feature}")
         }
     }
 }
@@ -587,27 +586,27 @@ struct FeaturesCli {
 
 #[derive(Debug, Parser)]
 enum FeaturesSubcommand {
-    /// List known features with their stage and effective state.
+    /// Показать известные функции, их стадию и текущее состояние.
     List,
-    /// Enable a feature in config.toml.
+    /// Включить функцию в config.toml.
     Enable(FeatureSetArgs),
-    /// Disable a feature in config.toml.
+    /// Выключить функцию в config.toml.
     Disable(FeatureSetArgs),
 }
 
 #[derive(Debug, Parser)]
 struct FeatureSetArgs {
-    /// Feature key to update (for example: unified_exec).
+    /// Ключ функции для изменения (например: unified_exec).
     feature: String,
 }
 
 fn stage_str(stage: Stage) -> &'static str {
     match stage {
-        Stage::UnderDevelopment => "under development",
-        Stage::Experimental { .. } => "experimental",
-        Stage::Stable => "stable",
-        Stage::Deprecated => "deprecated",
-        Stage::Removed => "removed",
+        Stage::UnderDevelopment => "в разработке",
+        Stage::Experimental { .. } => "экспериментально",
+        Stage::Stable => "стабильно",
+        Stage::Deprecated => "устарело",
+        Stage::Removed => "удалено",
     }
 }
 
@@ -828,7 +827,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                            "Флаг --api-key больше не поддерживается. Передайте ключ через stdin, например: `printenv OPENAI_API_KEY | lavilas login --with-api-key`."
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
@@ -1074,7 +1073,7 @@ async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow
         .set_feature_enabled(feature, /*enabled*/ true)
         .apply()
         .await?;
-    println!("Enabled feature `{feature}` in config.toml.");
+    println!("Флаг `{feature}` включён в config.toml.");
     maybe_print_under_development_feature_warning(&codex_home, interactive, feature);
     Ok(())
 }
@@ -1087,7 +1086,7 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
         .set_feature_enabled(feature, /*enabled*/ false)
         .apply()
         .await?;
-    println!("Disabled feature `{feature}` in config.toml.");
+    println!("Флаг `{feature}` выключен в config.toml.");
     Ok(())
 }
 
@@ -1109,7 +1108,7 @@ fn maybe_print_under_development_feature_warning(
 
     let config_path = codex_home.join(codex_config::CONFIG_TOML_FILE);
     eprintln!(
-        "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
+        "Включён экспериментальный флаг `{feature}`. Такие возможности ещё не завершены и могут вести себя нестабильно. Чтобы скрыть это предупреждение, задайте `suppress_unstable_features_warning = true` в {}.",
         config_path.display()
     );
 }
@@ -1212,16 +1211,16 @@ async fn run_debug_clear_memories_command(
     };
 
     let mut message = if cleared_state_db {
-        format!("Cleared memory state from {}.", state_path.display())
+        format!("Состояние памяти очищено: {}.", state_path.display())
     } else {
-        format!("No state db found at {}.", state_path.display())
+        format!("База состояния памяти не найдена: {}.", state_path.display())
     };
 
     if removed_memory_root {
-        message.push_str(&format!(" Removed {}.", memory_root.display()));
+        message.push_str(&format!(" Удалено: {}.", memory_root.display()));
     } else {
         message.push_str(&format!(
-            " No memory directory found at {}.",
+            " Каталог памяти не найден: {}.",
             memory_root.display()
         ));
     }
@@ -1249,12 +1248,12 @@ fn reject_remote_mode_for_subcommand(
 ) -> anyhow::Result<()> {
     if let Some(remote) = remote {
         anyhow::bail!(
-            "`--remote {remote}` is only supported for interactive TUI commands, not `codex {subcommand}`"
+            "`--remote {remote}` поддерживается только для интерактивных TUI-команд, а не для `lavilas {subcommand}`"
         );
     }
     if remote_auth_token_env.is_some() {
         anyhow::bail!(
-            "`--remote-auth-token-env` is only supported for interactive TUI commands, not `codex {subcommand}`"
+            "`--remote-auth-token-env` поддерживается только для интерактивных TUI-команд, а не для `lavilas {subcommand}`"
         );
     }
     Ok(())
@@ -1284,10 +1283,10 @@ where
     F: FnOnce(&str) -> Result<String, std::env::VarError>,
 {
     let auth_token = get_var(env_var_name)
-        .map_err(|_| anyhow::anyhow!("environment variable `{env_var_name}` is not set"))?;
+        .map_err(|_| anyhow::anyhow!("переменная окружения `{env_var_name}` не задана"))?;
     let auth_token = auth_token.trim().to_string();
     if auth_token.is_empty() {
-        anyhow::bail!("environment variable `{env_var_name}` is empty");
+        anyhow::bail!("переменная окружения `{env_var_name}` пуста");
     }
     Ok(auth_token)
 }
@@ -1311,16 +1310,16 @@ async fn run_interactive_tui(
     if terminal_info.name == TerminalName::Dumb {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
             return Ok(AppExitInfo::fatal(
-                "TERM is set to \"dumb\". Refusing to start the interactive TUI because no terminal is available for a confirmation prompt (stdin/stderr is not a TTY). Run in a supported terminal or unset TERM.",
+                "Переменная TERM установлена в \"dumb\". Интерактивный TUI не будет запущен, потому что нет терминала для подтверждения (stdin/stderr не являются TTY). Запустите в поддерживаемом терминале или уберите TERM.",
             ));
         }
 
         eprintln!(
-            "WARNING: TERM is set to \"dumb\". Codex's interactive TUI may not work in this terminal."
+            "ПРЕДУПРЕЖДЕНИЕ: TERM установлена в \"dumb\". Интерактивный TUI Lavilas Codex может не работать в этом терминале."
         );
-        if !confirm("Continue anyway? [y/N]: ")? {
+        if !confirm("Всё равно продолжить? [y/N]: ")? {
             return Ok(AppExitInfo::fatal(
-                "Refusing to start the interactive TUI because TERM is set to \"dumb\". Run in a supported terminal or unset TERM.",
+                "Запуск интерактивного TUI отменён, потому что TERM установлена в \"dumb\". Запустите в поддерживаемом терминале или уберите TERM.",
             ));
         }
     }
@@ -1332,7 +1331,7 @@ async fn run_interactive_tui(
         .map_err(std::io::Error::other)?;
     if remote_auth_token_env.is_some() && normalized_remote.is_none() {
         return Ok(AppExitInfo::fatal(
-            "`--remote-auth-token-env` requires `--remote`.",
+            "Для `--remote-auth-token-env` обязательно нужен `--remote`.",
         ));
     }
     let remote_auth_token = remote_auth_token_env
@@ -1463,7 +1462,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "codex";
+    let name = "lavilas";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
@@ -1653,7 +1652,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
+                "Чтобы продолжить эту сессию, выполните codex resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );
@@ -1681,7 +1680,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume my-thread".to_string(),
+                "Чтобы продолжить эту сессию, выполните codex resume my-thread".to_string(),
             ]
         );
     }
@@ -1949,7 +1948,7 @@ mod tests {
             Err(std::env::VarError::NotPresent)
         })
         .expect_err("missing env vars should be rejected");
-        assert!(err.to_string().contains("is not set"));
+        assert!(err.to_string().contains("не задана"));
     }
 
     #[test]
@@ -1968,7 +1967,7 @@ mod tests {
             Ok(" \n\t ".to_string())
         })
         .expect_err("empty env vars should be rejected");
-        assert!(err.to_string().contains("is empty"));
+        assert!(err.to_string().contains("пуста"));
     }
 
     #[test]
@@ -2130,6 +2129,6 @@ mod tests {
         let err = toggles
             .to_overrides()
             .expect_err("feature should be rejected");
-        assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+        assert_eq!(err.to_string(), "Неизвестный feature flag: does_not_exist");
     }
 }

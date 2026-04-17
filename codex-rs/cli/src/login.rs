@@ -31,10 +31,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
-    "ChatGPT login is disabled. Use API key login instead.";
+    "Вход через ChatGPT отключён. Используйте вход по API-ключу.";
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
-    "API key login is disabled. Use ChatGPT login instead.";
-const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+    "Вход по API-ключу отключён. Используйте вход через ChatGPT.";
+const LOGIN_SUCCESS_MESSAGE: &str = "Вход выполнен успешно";
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -47,14 +47,14 @@ fn init_login_file_logging(config: &Config) -> Option<WorkerGuard> {
     let log_dir = match codex_core::config::log_dir(config) {
         Ok(log_dir) => log_dir,
         Err(err) => {
-            eprintln!("Warning: failed to resolve login log directory: {err}");
+            eprintln!("Предупреждение: не удалось определить каталог логов входа: {err}");
             return None;
         }
     };
 
     if let Err(err) = std::fs::create_dir_all(&log_dir) {
         eprintln!(
-            "Warning: failed to create login log directory {}: {err}",
+            "Предупреждение: не удалось создать каталог логов входа {}: {err}",
             log_dir.display()
         );
         return None;
@@ -74,7 +74,7 @@ fn init_login_file_logging(config: &Config) -> Option<WorkerGuard> {
         Ok(log_file) => log_file,
         Err(err) => {
             eprintln!(
-                "Warning: failed to open login log file {}: {err}",
+            "Предупреждение: не удалось открыть файл логов входа {}: {err}",
                 log_path.display()
             );
             return None;
@@ -95,7 +95,7 @@ fn init_login_file_logging(config: &Config) -> Option<WorkerGuard> {
     // without reproducing them through TUI or app-server.
     if let Err(err) = tracing_subscriber::registry().with(file_layer).try_init() {
         eprintln!(
-            "Warning: failed to initialize login log file {}: {err}",
+            "Предупреждение: не удалось инициализировать файл логов входа {}: {err}",
             log_path.display()
         );
         return None;
@@ -106,7 +106,7 @@ fn init_login_file_logging(config: &Config) -> Option<WorkerGuard> {
 
 fn print_login_server_start(actual_port: u16, auth_url: &str) {
     eprintln!(
-        "Starting local login server on http://localhost:{actual_port}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}\n\nOn a remote or headless machine? Use `codex login --device-auth` instead."
+        "Запускаю локальный сервер входа на http://localhost:{actual_port}.\nЕсли браузер не открылся, перейдите по этой ссылке для входа:\n\n{auth_url}\n\nЕсли машина удалённая или без браузера, используйте `lavilas login --device-auth`."
     );
 }
 
@@ -152,7 +152,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("Error logging in: {e}");
+            eprintln!("Ошибка входа: {e}");
             std::process::exit(1);
         }
     }
@@ -181,7 +181,7 @@ pub async fn run_login_with_api_key(
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("Error logging in: {e}");
+            eprintln!("Ошибка входа: {e}");
             std::process::exit(1);
         }
     }
@@ -192,29 +192,29 @@ pub fn read_api_key_from_stdin() -> String {
 
     if stdin.is_terminal() {
         eprintln!(
-            "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+            "--with-api-key ожидает API-ключ через stdin. Например: `printenv OPENAI_API_KEY | lavilas login --with-api-key`."
         );
         std::process::exit(1);
     }
 
-    eprintln!("Reading API key from stdin...");
+    eprintln!("Читаю API-ключ из stdin...");
 
     let mut buffer = String::new();
     if let Err(err) = stdin.read_to_string(&mut buffer) {
-        eprintln!("Failed to read API key from stdin: {err}");
+        eprintln!("Не удалось прочитать API-ключ из stdin: {err}");
         std::process::exit(1);
     }
 
     let api_key = buffer.trim().to_string();
     if api_key.is_empty() {
-        eprintln!("No API key provided via stdin.");
+        eprintln!("API-ключ через stdin не был передан.");
         std::process::exit(1);
     }
 
     api_key
 }
 
-/// Login using the OAuth device code flow.
+/// Login using the OAuth код устройства flow.
 pub async fn run_login_with_device_code(
     cli_config_overrides: CliConfigOverrides,
     issuer_base_url: Option<String>,
@@ -222,7 +222,7 @@ pub async fn run_login_with_device_code(
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
     let _login_log_guard = init_login_file_logging(&config);
-    tracing::info!("starting device code login flow");
+    tracing::info!("starting код устройства login flow");
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
@@ -243,7 +243,7 @@ pub async fn run_login_with_device_code(
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("Error logging in with device code: {e}");
+            eprintln!("Ошибка входа через код устройства: {e}");
             std::process::exit(1);
         }
     }
@@ -251,7 +251,7 @@ pub async fn run_login_with_device_code(
 
 /// Prefers device-code login (with `open_browser = false`) when headless environment is detected, but keeps
 /// `codex login` working in environments where device-code may be disabled/feature-gated.
-/// If `run_device_code_login` returns `ErrorKind::NotFound` ("device-code unsupported"), this
+/// If `run_device_code_login` returns `ErrorKind::NotFound` ("код устройства не поддерживается"), this
 /// falls back to starting the local browser login server.
 pub async fn run_login_with_device_code_fallback_to_browser(
     cli_config_overrides: CliConfigOverrides,
@@ -260,7 +260,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
     let _login_log_guard = init_login_file_logging(&config);
-    tracing::info!("starting login flow with device code fallback");
+    tracing::info!("starting login flow with код устройства fallback");
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
@@ -285,7 +285,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         }
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
-                eprintln!("Device code login is not enabled; falling back to browser login.");
+                eprintln!("Вход через код устройства недоступен; переключаюсь на вход через браузер.");
                 match run_login_server(opts) {
                     Ok(server) => {
                         print_login_server_start(server.actual_port, &server.auth_url);
@@ -295,18 +295,18 @@ pub async fn run_login_with_device_code_fallback_to_browser(
                                 std::process::exit(0);
                             }
                             Err(e) => {
-                                eprintln!("Error logging in: {e}");
+                                eprintln!("Ошибка входа: {e}");
                                 std::process::exit(1);
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("Error logging in: {e}");
+                        eprintln!("Ошибка входа: {e}");
                         std::process::exit(1);
                     }
                 }
             } else {
-                eprintln!("Error logging in with device code: {e}");
+                eprintln!("Ошибка входа через код устройства: {e}");
                 std::process::exit(1);
             }
         }
@@ -320,25 +320,25 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
         Ok(Some(auth)) => match auth.auth_mode() {
             AuthMode::ApiKey => match auth.get_token() {
                 Ok(api_key) => {
-                    eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
+                    eprintln!("Вход выполнен по API-ключу — {}", safe_format_key(&api_key));
                     std::process::exit(0);
                 }
                 Err(e) => {
-                    eprintln!("Unexpected error retrieving API key: {e}");
+                    eprintln!("Неожиданная ошибка при чтении API-ключа: {e}");
                     std::process::exit(1);
                 }
             },
             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
-                eprintln!("Logged in using ChatGPT");
+                eprintln!("Вход выполнен через ChatGPT");
                 std::process::exit(0);
             }
         },
         Ok(None) => {
-            eprintln!("Not logged in");
+            eprintln!("Вход не выполнен");
             std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("Error checking login status: {e}");
+            eprintln!("Ошибка при проверке состояния входа: {e}");
             std::process::exit(1);
         }
     }
@@ -349,15 +349,15 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
 
     match logout(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(true) => {
-            eprintln!("Successfully logged out");
+            eprintln!("Выход выполнен успешно");
             std::process::exit(0);
         }
         Ok(false) => {
-            eprintln!("Not logged in");
+            eprintln!("Вход не выполнен");
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("Error logging out: {e}");
+            eprintln!("Ошибка при выходе: {e}");
             std::process::exit(1);
         }
     }
@@ -367,7 +367,7 @@ async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config
     let cli_overrides = match cli_config_overrides.parse_overrides() {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("Error parsing -c overrides: {e}");
+            eprintln!("Ошибка разбора параметров -c: {e}");
             std::process::exit(1);
         }
     };
@@ -375,7 +375,7 @@ async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config
     match Config::load_with_cli_overrides(cli_overrides).await {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("Error loading configuration: {e}");
+            eprintln!("Ошибка загрузки конфигурации: {e}");
             std::process::exit(1);
         }
     }
