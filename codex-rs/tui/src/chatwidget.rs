@@ -417,6 +417,7 @@ use crate::font_library::featured_fonts;
 use crate::font_library::find_google_font;
 use crate::font_library::google_font_category;
 use crate::font_library::google_font_preview;
+use crate::font_library::installed_font_requires_repair;
 use crate::font_library::remove_installed_font;
 use crate::font_library::search_google_fonts;
 use crate::ui_preferences::PopupColorTarget;
@@ -11244,6 +11245,12 @@ impl ChatWidget {
                 .into_iter()
                 .find(|font| font.id == active_font_id)
         {
+            if installed_font_requires_repair(self.config.codex_home.as_path(), &font) {
+                self.app_event_tx.send(AppEvent::InstallGoogleFont {
+                    family: font.family.clone(),
+                });
+                return;
+            }
             let _ = set_terminal_font(font.family.as_str());
         }
     }
@@ -11490,6 +11497,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn finish_google_font_install(&mut self, profile: StoredFontProfile) {
+        let should_reapply_active_font = self.current_active_font_id().as_deref() == Some(profile.id.as_str());
         let mut fonts = self.current_installed_fonts();
         if let Some(existing) = fonts.iter_mut().find(|font| font.id == profile.id) {
             *existing = profile;
@@ -11505,6 +11513,13 @@ impl ChatWidget {
             };
             self.add_error_message(message);
             return;
+        }
+        if should_reapply_active_font
+            && let Some(font) = fonts
+                .iter()
+                .find(|font| self.current_active_font_id().as_deref() == Some(font.id.as_str()))
+        {
+            let _ = set_terminal_font(font.family.as_str());
         }
         self.request_redraw();
     }
@@ -11526,6 +11541,13 @@ impl ChatWidget {
             .into_iter()
             .find(|font| font.id == font_id)
         {
+            if installed_font_requires_repair(self.config.codex_home.as_path(), &font) {
+                self.app_event_tx.send(AppEvent::InstallGoogleFont {
+                    family: font.family.clone(),
+                });
+                self.request_redraw();
+                return;
+            }
             match set_terminal_font(font.family.as_str()) {
                 Ok(SetTerminalFontResult::Applied)
                 | Ok(SetTerminalFontResult::ManualOnly)
@@ -13275,10 +13297,22 @@ impl ChatWidget {
             dismiss_on_select: false,
             ..Default::default()
         });
-        let mut fonts = self.current_installed_fonts();
-        fonts.sort_by(|a, b| a.family.to_ascii_lowercase().cmp(&b.family.to_ascii_lowercase()));
-        for font in fonts {
-            let active = self.font_is_active(font.id.as_str());
+        let mut font_records = crate::font_library::list_installed_fonts(
+            self.config.codex_home.as_path(),
+            self.current_installed_fonts().as_slice(),
+            self.current_active_font_id().as_deref(),
+        );
+        font_records.sort_by(|a, b| {
+            a.profile
+                .family
+                .to_ascii_lowercase()
+                .cmp(&b.profile.family.to_ascii_lowercase())
+        });
+        for record in font_records {
+            let font = record.profile;
+            let active = record.active;
+            let available = record.available;
+            let repair_tag = if is_ru { "Починить" } else { "Repair" };
             let category = Self::font_category_for_family(font.family.as_str(), is_ru)
                 .unwrap_or_else(|| {
                     if is_ru {
@@ -13292,17 +13326,27 @@ impl ChatWidget {
                 name: font.family.clone(),
                 description: Some(if is_ru {
                     format!(
-                        "{} · файлов: {} · {}",
+                        "{} · файлов: {} · {}{}",
                         category,
                         font.files.len(),
-                        preview
+                        preview,
+                        if available {
+                            String::new()
+                        } else {
+                            " · требуется перекачка".to_string()
+                        }
                     )
                 } else {
                     format!(
-                        "{} · файлов: {} · {}",
+                        "{} · files: {} · {}{}",
                         category,
                         font.files.len(),
-                        preview
+                        preview,
+                        if available {
+                            String::new()
+                        } else {
+                            " · repair required".to_string()
+                        }
                     )
                 }),
                 search_value: Some(if is_ru {
@@ -13319,7 +13363,13 @@ impl ChatWidget {
                     }
                 })],
                 dismiss_on_select: false,
-                category_tags: Self::popup_target_state_tags(active),
+                category_tags: if available {
+                    Self::popup_target_state_tags(active)
+                } else {
+                    let mut tags = Self::popup_target_state_tags(active);
+                    tags.push(repair_tag.to_string());
+                    tags
+                },
                 ..Default::default()
             });
         }

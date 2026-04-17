@@ -480,6 +480,7 @@ pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTe
         style = style.add_modifier(Modifier::BOLD);
         style = apply_foreground_accent(style, (244, 246, 250), 0.34);
     } else if formats.contains(SelectionHighlightTextFormat::Semibold) {
+        style = style.add_modifier(Modifier::BOLD);
         style = apply_foreground_accent(style, (220, 226, 236), 0.24);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
@@ -528,12 +529,16 @@ pub(crate) fn format_preview_label(
         ),
         (true, SelectionHighlightTextFormat::Semibold) => (
             "Полужирный",
-            Style::default().fg(best_terminal_color((214, 218, 224))),
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(best_terminal_color((214, 218, 224))),
             Some("◧"),
         ),
         (false, SelectionHighlightTextFormat::Semibold) => (
             "Полужирный",
-            Style::default().fg(best_terminal_color((214, 218, 224))),
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(best_terminal_color((214, 218, 224))),
             Some("◧"),
         ),
         (true, SelectionHighlightTextFormat::Italic) => (

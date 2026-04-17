@@ -345,10 +345,12 @@ pub(crate) fn list_installed_fonts(
                 .filter(|file| !fonts_dir(codex_home).join(file).exists())
                 .cloned()
                 .collect::<Vec<_>>();
+            let available = missing_files.is_empty()
+                && installed_font_has_installable_assets(codex_home, &profile);
             InstalledFontRecord {
                 active: active_font_id
                     .is_some_and(|active| active.eq_ignore_ascii_case(profile.id.as_str())),
-                available: missing_files.is_empty(),
+                available,
                 missing_files,
                 profile,
                 terminal_note: TERMINAL_FONT_NOTE,
@@ -363,6 +365,20 @@ pub(crate) fn resolve_font_files(codex_home: &Path, profile: &StoredFontProfile)
         .iter()
         .map(|file| fonts_dir(codex_home).join(file))
         .collect()
+}
+
+pub(crate) fn installed_font_has_installable_assets(
+    codex_home: &Path,
+    profile: &StoredFontProfile,
+) -> bool {
+    resolve_font_files(codex_home, profile)
+        .into_iter()
+        .filter(|path| path.is_file())
+        .any(|path| is_installable_font_path(&path))
+}
+
+pub(crate) fn installed_font_requires_repair(codex_home: &Path, profile: &StoredFontProfile) -> bool {
+    !installed_font_has_installable_assets(codex_home, profile)
 }
 
 pub(crate) fn remove_installed_font(codex_home: &Path, font_id: &str) -> io::Result<()> {
@@ -530,15 +546,28 @@ fn google_fonts_client() -> Result<reqwest::Client, FontLibraryError> {
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_static(
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        ),
+        // Google Fonts serves web-optimized WOFF2 to browser-like agents, but
+        // terminals and system fontconfig need installable desktop assets
+        // (typically TTF). A simple non-browser agent keeps the stylesheet on
+        // the desktop-font path.
+        HeaderValue::from_static("curl/8.5.0 LavilasCodexFontInstaller/1.0"),
     );
     reqwest::Client::builder()
         .default_headers(headers)
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|err| FontLibraryError::Network(err.to_string()))
+}
+
+fn is_installable_font_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "ttf" | "otf" | "ttc" | "otc"
+            )
+        })
 }
 
 fn raw_google_font_catalog() -> &'static [GoogleFontCatalogEntry] {

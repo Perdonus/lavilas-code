@@ -147,6 +147,8 @@ impl SelectionHighlightTextFormats {
         | SelectionHighlightTextFormat::Italic.bit()
         | SelectionHighlightTextFormat::Underlined.bit()
         | SelectionHighlightTextFormat::Mono.bit()
+        | SelectionHighlightTextFormat::Dim.bit()
+        | SelectionHighlightTextFormat::Reversed.bit()
         | SelectionHighlightTextFormat::CrossedOut.bit();
 
     pub(crate) const fn empty() -> Self {

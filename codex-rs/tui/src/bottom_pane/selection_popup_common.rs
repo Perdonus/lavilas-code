@@ -452,6 +452,10 @@ fn resolve_text_color_choice(
 }
 
 fn ensure_visible_text_color(color: Color, is_secondary: bool) -> Color {
+    if let Some(background) = crate::terminal_palette::default_bg().map(rgb_to_color) {
+        return adjust_foreground_for_background(color, background, is_secondary);
+    }
+
     let Some(luminance) = color_luminance(color) else {
         return color;
     };
@@ -1011,6 +1015,8 @@ fn badge_style(label: &str) -> Style {
         Style::default().fg(Color::Black).bg(Color::White).bold()
     } else if normalized.contains("default") || normalized.contains("умолч") {
         Style::default().fg(Color::Black).bg(Color::Gray).bold()
+    } else if normalized.contains("repair") || normalized.contains("почин") {
+        Style::default().fg(Color::Black).bg(Color::Yellow).bold()
     } else if normalized.contains("openai")
         || normalized.contains("mistral")
         || normalized.contains("gemini")

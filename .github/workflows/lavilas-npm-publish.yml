@@ -80,9 +80,51 @@ jobs:
 
       - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
-        with:
-          version: 0.14.0
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="0.14.0"
+          case "$(uname -m)" in
+            x86_64) zig_arch="x86_64" ;;
+            aarch64|arm64) zig_arch="aarch64" ;;
+            *)
+              echo "Unsupported Zig host architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          archive="zig-linux-${zig_arch}-${version}.tar.xz"
+          url="https://ziglang.org/download/${version}/${archive}"
+          workdir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "${workdir}"
+          }
+          trap cleanup EXIT
+          for attempt in 1 2 3 4; do
+            if curl -fL \
+              --retry 3 \
+              --retry-delay 2 \
+              --retry-all-errors \
+              --connect-timeout 20 \
+              --max-time 240 \
+              "${url}" \
+              -o "${workdir}/${archive}"; then
+              break
+            fi
+            if [[ "${attempt}" -eq 4 ]]; then
+              echo "Failed to download Zig from ${url}" >&2
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+          tar -xJf "${workdir}/${archive}" -C "${workdir}"
+          zig_dir="$(find "${workdir}" -maxdepth 1 -type d -name "zig-linux-*" | head -n 1)"
+          if [[ -z "${zig_dir}" ]]; then
+            echo "Zig archive did not unpack into an expected directory" >&2
+            exit 1
+          fi
+          echo "${zig_dir}" >> "$GITHUB_PATH"
+          "${zig_dir}/zig" version
 
       - if: ${{ matrix.target_triple == 'x86_64-unknown-linux-musl' || matrix.target_triple == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools

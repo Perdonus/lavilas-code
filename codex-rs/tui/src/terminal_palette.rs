@@ -38,19 +38,27 @@ pub fn indexed_color(index: u8) -> Color {
 
 /// Returns the closest color to the target color that the terminal can display.
 pub fn best_color(target: (u8, u8, u8)) -> Color {
-    let color_level = stdout_color_level();
-    if color_level == StdoutColorLevel::TrueColor {
-        rgb_color(target)
-    } else if color_level == StdoutColorLevel::Ansi256
-        && let Some((i, _)) = xterm_fixed_colors().min_by(|(_, a), (_, b)| {
-            perceptual_distance(*a, target)
-                .partial_cmp(&perceptual_distance(*b, target))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    {
-        indexed_color(i as u8)
-    } else {
-        Color::default()
+    match stdout_color_level() {
+        StdoutColorLevel::TrueColor => rgb_color(target),
+        StdoutColorLevel::Ansi256 => xterm_fixed_colors()
+            .min_by(|(_, a), (_, b)| {
+                perceptual_distance(*a, target)
+                    .partial_cmp(&perceptual_distance(*b, target))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| indexed_color(i as u8))
+            .unwrap_or_else(|| rgb_color(target)),
+        StdoutColorLevel::Ansi16 => ansi16_colors()
+            .min_by(|(_, a), (_, b)| {
+                perceptual_distance(*a, target)
+                    .partial_cmp(&perceptual_distance(*b, target))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(color, _)| color)
+            .unwrap_or_else(|| rgb_color(target)),
+        // When detection is inconclusive, prefer optimistic RGB over silently
+        // collapsing customization back to the terminal default color.
+        StdoutColorLevel::Unknown => rgb_color(target),
     }
 }
 
@@ -173,6 +181,28 @@ mod imp {
 /// The subset of Xterm colors that are usually consistent across terminals.
 fn xterm_fixed_colors() -> impl Iterator<Item = (usize, (u8, u8, u8))> {
     XTERM_COLORS.into_iter().enumerate().skip(16)
+}
+
+fn ansi16_colors() -> impl Iterator<Item = (Color, (u8, u8, u8))> {
+    [
+        (Color::Black, (0, 0, 0)),
+        (Color::Red, (128, 0, 0)),
+        (Color::Green, (0, 128, 0)),
+        (Color::Yellow, (128, 128, 0)),
+        (Color::Blue, (0, 0, 128)),
+        (Color::Magenta, (128, 0, 128)),
+        (Color::Cyan, (0, 128, 128)),
+        (Color::Gray, (192, 192, 192)),
+        (Color::DarkGray, (128, 128, 128)),
+        (Color::LightRed, (255, 0, 0)),
+        (Color::LightGreen, (0, 255, 0)),
+        (Color::LightYellow, (255, 255, 0)),
+        (Color::LightBlue, (0, 0, 255)),
+        (Color::LightMagenta, (255, 0, 255)),
+        (Color::LightCyan, (0, 255, 255)),
+        (Color::White, (255, 255, 255)),
+    ]
+    .into_iter()
 }
 
 // Xterm colors; derived from https://ss64.com/bash/syntax-colors.html
