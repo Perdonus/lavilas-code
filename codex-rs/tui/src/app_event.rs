@@ -376,6 +376,17 @@ pub(crate) enum AppEvent {
         target: PopupColorTarget,
     },
 
+    /// Open a free-form prompt for a 2-stop custom gradient.
+    OpenSelectionHighlightCustomGradientPrompt {
+        target: PopupColorTarget,
+    },
+
+    /// Parse and apply a raw custom color or gradient input for one target.
+    ApplySelectionHighlightCustomColorInput {
+        target: PopupColorTarget,
+        raw: String,
+    },
+
     /// Persist the selection highlight preset used in popups.
     SetSelectionHighlightPreset {
         preset: SelectionHighlightPreset,

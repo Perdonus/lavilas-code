@@ -6356,6 +6356,14 @@ impl App {
                 self.chat_widget
                     .open_selection_highlight_custom_color_prompt(target);
             }
+            AppEvent::OpenSelectionHighlightCustomGradientPrompt { target } => {
+                self.chat_widget
+                    .open_selection_highlight_custom_gradient_prompt(target);
+            }
+            AppEvent::ApplySelectionHighlightCustomColorInput { target, raw } => {
+                self.chat_widget
+                    .apply_selection_highlight_custom_color_input(target, raw.as_str());
+            }
             AppEvent::SetSelectionHighlightPreset { preset } => {
                 self.chat_widget.apply_selection_highlight_preset(preset);
             }

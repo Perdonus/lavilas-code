@@ -4,6 +4,7 @@ use regex_lite::Regex;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use reqwest::header::USER_AGENT;
+use serde::Deserialize;
 use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeSet;
@@ -14,6 +15,7 @@ use std::hash::Hasher;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -23,6 +25,7 @@ pub(crate) enum FontCategory {
     Sans,
     Serif,
     Display,
+    Handwriting,
 }
 
 impl FontCategory {
@@ -32,6 +35,7 @@ impl FontCategory {
             Self::Sans => "Гротеск",
             Self::Serif => "Антиква",
             Self::Display => "Акцентный",
+            Self::Handwriting => "Рукописный",
         }
     }
 
@@ -41,9 +45,27 @@ impl FontCategory {
             Self::Sans => "Sans",
             Self::Serif => "Serif",
             Self::Display => "Display",
+            Self::Handwriting => "Handwriting",
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct GoogleFontCatalogEntry {
+    pub(crate) family: String,
+    pub(crate) category: String,
+    #[serde(default)]
+    pub(crate) subsets: Vec<String>,
+    #[serde(default)]
+    pub(crate) popularity: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleFontCatalogFile {
+    fonts: Vec<GoogleFontCatalogEntry>,
+}
+
+static GOOGLE_FONT_CATALOG: OnceLock<Vec<GoogleFontCatalogEntry>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FontCatalogEntry {
@@ -262,6 +284,112 @@ pub(crate) fn search_featured_fonts(query: &str) -> Vec<FontCatalogEntry> {
 
 pub(crate) fn terminal_font_note() -> &'static str {
     TERMINAL_FONT_NOTE
+}
+
+pub(crate) fn google_font_catalog() -> &'static [GoogleFontCatalogEntry] {
+    GOOGLE_FONT_CATALOG.get_or_init(|| {
+        let parsed = serde_json::from_str::<GoogleFontCatalogFile>(include_str!(
+            "../assets/google-fonts-catalog.json"
+        ))
+        .unwrap_or_else(|_| GoogleFontCatalogFile { fonts: Vec::new() });
+        parsed.fonts
+    })
+}
+
+pub(crate) fn google_font_category(category: &str) -> FontCategory {
+    match category.trim().to_ascii_lowercase().as_str() {
+        "monospace" => FontCategory::Monospace,
+        "serif" => FontCategory::Serif,
+        "display" => FontCategory::Display,
+        "handwriting" => FontCategory::Handwriting,
+        "sans serif" | "sans-serif" | "sans" => FontCategory::Sans,
+        _ => FontCategory::Sans,
+    }
+}
+
+pub(crate) fn google_font_preview(family: &str, category: &str) -> String {
+    match google_font_category(category) {
+        FontCategory::Monospace => format!("{family}  AaBb 0123 [] {{}} =>"),
+        FontCategory::Serif => format!("{family}  Съешь ещё этих мягких булок"),
+        FontCategory::Display => format!("{family}  Build • Review • Deploy"),
+        FontCategory::Handwriting => format!("{family}  Привет, terminal world"),
+        FontCategory::Sans => format!("{family}  Settings, prompts and answers"),
+    }
+}
+
+pub(crate) fn find_google_font(family: &str) -> Option<&'static GoogleFontCatalogEntry> {
+    let family = family.trim();
+    if family.is_empty() {
+        return None;
+    }
+    google_font_catalog()
+        .iter()
+        .find(|entry| entry.family.eq_ignore_ascii_case(family))
+}
+
+pub(crate) fn search_google_fonts(query: &str) -> Vec<GoogleFontCatalogEntry> {
+    let normalized = query.trim().to_ascii_lowercase();
+    let mut fonts = google_font_catalog()
+        .iter()
+        .filter(|entry| {
+            if normalized.is_empty() {
+                return true;
+            }
+            entry.family.to_ascii_lowercase().contains(normalized.as_str())
+                || entry.category.to_ascii_lowercase().contains(normalized.as_str())
+                || entry
+                    .subsets
+                    .iter()
+                    .any(|subset| subset.to_ascii_lowercase().contains(normalized.as_str()))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    fonts.sort_by(|left, right| {
+        let left_family = left.family.to_ascii_lowercase();
+        let right_family = right.family.to_ascii_lowercase();
+
+        let left_rank = if normalized.is_empty() {
+            0u8
+        } else if left_family == normalized {
+            0
+        } else if left_family.starts_with(normalized.as_str()) {
+            1
+        } else if left_family.contains(normalized.as_str()) {
+            2
+        } else if left
+            .category
+            .to_ascii_lowercase()
+            .starts_with(normalized.as_str())
+        {
+            3
+        } else {
+            4
+        };
+        let right_rank = if normalized.is_empty() {
+            0u8
+        } else if right_family == normalized {
+            0
+        } else if right_family.starts_with(normalized.as_str()) {
+            1
+        } else if right_family.contains(normalized.as_str()) {
+            2
+        } else if right
+            .category
+            .to_ascii_lowercase()
+            .starts_with(normalized.as_str())
+        {
+            3
+        } else {
+            4
+        };
+
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| left_family.cmp(&right_family))
+    });
+
+    fonts
 }
 
 pub(crate) fn list_installed_fonts(

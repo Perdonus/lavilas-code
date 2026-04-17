@@ -23,6 +23,8 @@ pub(crate) struct NamedColor {
 pub(crate) struct SelectionPaletteSpec {
     pub(crate) fill_bg: (u8, u8, u8),
     pub(crate) fill_bg_emphasis: (u8, u8, u8),
+    pub(crate) fill_secondary_bg: (u8, u8, u8),
+    pub(crate) fill_secondary_bg_emphasis: (u8, u8, u8),
     pub(crate) fill_fg: (u8, u8, u8),
     pub(crate) fill_secondary_fg: (u8, u8, u8),
     pub(crate) fill_secondary_fg_emphasis: (u8, u8, u8),
@@ -39,9 +41,22 @@ const NAMED_COLORS: &[NamedColor] = &[
     NamedColor { name_ru: "Фарфор", name_en: "Porcelain", hex: "#f7f6f2", rgb: (247, 246, 242) },
     NamedColor { name_ru: "Жемчужный", name_en: "Pearl", hex: "#f0ece4", rgb: (240, 236, 228) },
     NamedColor { name_ru: "Серебро", name_en: "Silver", hex: "#d8dce3", rgb: (216, 220, 227) },
+    NamedColor { name_ru: "Дымчатый", name_en: "Smoke", hex: "#8d96a3", rgb: (141, 150, 163) },
+    NamedColor { name_ru: "Стальной", name_en: "Steel", hex: "#6a7280", rgb: (106, 114, 128) },
+    NamedColor { name_ru: "Сланцевый", name_en: "Slate", hex: "#58616d", rgb: (88, 97, 109) },
+    NamedColor { name_ru: "Тень", name_en: "Shadow", hex: "#414952", rgb: (65, 73, 82) },
     NamedColor { name_ru: "Графит", name_en: "Graphite", hex: "#495057", rgb: (73, 80, 87) },
     NamedColor { name_ru: "Антрацит", name_en: "Anthracite", hex: "#2f3438", rgb: (47, 52, 56) },
+    NamedColor { name_ru: "Чернильный", name_en: "Ink", hex: "#263042", rgb: (38, 48, 66) },
+    NamedColor { name_ru: "Оникс", name_en: "Onyx", hex: "#202428", rgb: (32, 36, 40) },
     NamedColor { name_ru: "Уголь", name_en: "Coal", hex: "#17191c", rgb: (23, 25, 28) },
+    NamedColor { name_ru: "Полночный", name_en: "Midnight", hex: "#1f2a44", rgb: (31, 42, 68) },
+    NamedColor { name_ru: "Ночной синий", name_en: "Navy", hex: "#24324f", rgb: (36, 50, 79) },
+    NamedColor { name_ru: "Петрольный", name_en: "Petrol", hex: "#335b63", rgb: (51, 91, 99) },
+    NamedColor { name_ru: "Глубокая волна", name_en: "Deep Sea", hex: "#22485e", rgb: (34, 72, 94) },
+    NamedColor { name_ru: "Лесной", name_en: "Forest", hex: "#355a46", rgb: (53, 90, 70) },
+    NamedColor { name_ru: "Моховой", name_en: "Moss", hex: "#51684a", rgb: (81, 104, 74) },
+    NamedColor { name_ru: "Хвойный", name_en: "Pine", hex: "#28453b", rgb: (40, 69, 59) },
     NamedColor { name_ru: "Песочный", name_en: "Sand", hex: "#e9ddc8", rgb: (233, 221, 200) },
     NamedColor { name_ru: "Кремовый", name_en: "Cream", hex: "#f2dfb4", rgb: (242, 223, 180) },
     NamedColor { name_ru: "Янтарный", name_en: "Amber", hex: "#f0d6a2", rgb: (240, 214, 162) },
@@ -64,10 +79,18 @@ const NAMED_COLORS: &[NamedColor] = &[
     NamedColor { name_ru: "Голубой", name_en: "Azure", hex: "#75b8dd", rgb: (117, 184, 221) },
     NamedColor { name_ru: "Индиго", name_en: "Indigo", hex: "#5261a8", rgb: (82, 97, 168) },
     NamedColor { name_ru: "Сливовый", name_en: "Plum", hex: "#875b8d", rgb: (135, 91, 141) },
+    NamedColor { name_ru: "Баклажановый", name_en: "Aubergine", hex: "#5c3b63", rgb: (92, 59, 99) },
+    NamedColor { name_ru: "Бордовый", name_en: "Bordeaux", hex: "#6a3946", rgb: (106, 57, 70) },
+    NamedColor { name_ru: "Шёлковица", name_en: "Mulberry", hex: "#4b324f", rgb: (75, 50, 79) },
     NamedColor { name_ru: "Какао", name_en: "Cocoa", hex: "#8a6d5a", rgb: (138, 109, 90) },
     NamedColor { name_ru: "Шоколадный", name_en: "Chocolate", hex: "#6d4c41", rgb: (109, 76, 65) },
+    NamedColor { name_ru: "Ржавчина", name_en: "Rust", hex: "#7b4d3d", rgb: (123, 77, 61) },
     NamedColor { name_ru: "Красный", name_en: "Red", hex: "#d35b62", rgb: (211, 91, 98) },
 ];
+
+pub(crate) fn all_named_colors() -> &'static [NamedColor] {
+    NAMED_COLORS
+}
 
 pub(crate) fn selection_preset_color(preset: SelectionHighlightPreset) -> NamedColor {
     match preset {
@@ -145,6 +168,15 @@ pub(crate) fn describe_color_choice(
                 format!("{} {}", named.name_en, hex.to_ascii_uppercase())
             }
         }
+        UiColorChoice::Gradient { start, end } => {
+            let start_named = named_color_for_hex(start);
+            let end_named = named_color_for_hex(end);
+            if is_ru {
+                format!("Градиент · {} → {}", start_named.name_ru, end_named.name_ru)
+            } else {
+                format!("Gradient · {} → {}", start_named.name_en, end_named.name_en)
+            }
+        }
     }
 }
 
@@ -167,64 +199,125 @@ pub(crate) fn named_color_for_hex(hex: &str) -> NamedColor {
         .unwrap_or(&NAMED_COLORS[0])
 }
 
+fn resolve_color_choice_pair_rgb(
+    choice: &UiColorChoice,
+    fallback_preset: SelectionHighlightPreset,
+) -> ((u8, u8, u8), (u8, u8, u8)) {
+    match choice {
+        UiColorChoice::Auto => {
+            let rgb = selection_preset_color(fallback_preset).rgb;
+            (rgb, rgb)
+        }
+        UiColorChoice::Preset(preset) => {
+            let rgb = selection_preset_color(*preset).rgb;
+            (rgb, rgb)
+        }
+        UiColorChoice::Custom(hex) => {
+            let rgb = parse_hex_color(hex).unwrap_or(selection_preset_color(fallback_preset).rgb);
+            (rgb, rgb)
+        }
+        UiColorChoice::Gradient { start, end } => (
+            parse_hex_color(start).unwrap_or(selection_preset_color(fallback_preset).rgb),
+            parse_hex_color(end).unwrap_or(selection_preset_color(fallback_preset).rgb),
+        ),
+    }
+}
+
 pub(crate) fn resolve_color_choice_rgb(
     choice: &UiColorChoice,
     fallback_preset: SelectionHighlightPreset,
 ) -> (u8, u8, u8) {
-    match choice {
-        UiColorChoice::Auto => selection_preset_color(fallback_preset).rgb,
-        UiColorChoice::Preset(preset) => selection_preset_color(*preset).rgb,
-        UiColorChoice::Custom(hex) => parse_hex_color(hex).unwrap_or(selection_preset_color(fallback_preset).rgb),
+    let (start, end) = resolve_color_choice_pair_rgb(choice, fallback_preset);
+    if start == end {
+        start
+    } else {
+        blend(start, end, 0.5)
     }
+}
+
+pub(crate) fn resolve_color_choice_label_rgb(
+    choice: &UiColorChoice,
+    fallback_preset: SelectionHighlightPreset,
+    is_secondary: bool,
+) -> (u8, u8, u8) {
+    let (start, end) = resolve_color_choice_pair_rgb(choice, fallback_preset);
+    if is_secondary { end } else { start }
 }
 
 pub(crate) fn selection_palette_for_choice(
     choice: &UiColorChoice,
     fallback_preset: SelectionHighlightPreset,
 ) -> SelectionPaletteSpec {
-    let base = resolve_color_choice_rgb(choice, fallback_preset);
-    let fill_fg = if is_light(base) { (15, 15, 15) } else { (250, 250, 250) };
-    let fill_secondary_fg = if is_light(base) { (58, 58, 58) } else { (220, 223, 228) };
-    let fill_secondary_fg_emphasis = if is_light(base) { (42, 42, 42) } else { (238, 240, 244) };
-    let text_base = if base == (255, 255, 255) {
+    let (primary_base, secondary_base) = resolve_color_choice_pair_rgb(choice, fallback_preset);
+    let fill_fg = if is_light(primary_base) {
+        (15, 15, 15)
+    } else {
+        (250, 250, 250)
+    };
+    let fill_secondary_fg = if is_light(secondary_base) {
+        (58, 58, 58)
+    } else {
+        (220, 223, 228)
+    };
+    let fill_secondary_fg_emphasis = if is_light(secondary_base) {
+        (42, 42, 42)
+    } else {
+        (238, 240, 244)
+    };
+    let text_base = if primary_base == (255, 255, 255) {
         (245, 245, 245)
     } else {
-        blend(base, if is_light(base) { (255, 255, 255) } else { (240, 240, 240) }, if is_light(base) { 0.78 } else { 0.92 })
+        blend(
+            primary_base,
+            if is_light(primary_base) {
+                (255, 255, 255)
+            } else {
+                (240, 240, 240)
+            },
+            if is_light(primary_base) { 0.78 } else { 0.92 },
+        )
     };
-    let text_emphasis = if is_light(base) {
-        blend(base, (255, 255, 255), 0.88)
+    let text_emphasis = if is_light(primary_base) {
+        blend(primary_base, (255, 255, 255), 0.88)
     } else {
-        blend(base, (255, 255, 255), 0.97)
+        blend(primary_base, (255, 255, 255), 0.97)
     };
-    let text_secondary = if is_light(base) {
-        blend(base, (70, 70, 70), 0.72)
+    let text_secondary = if is_light(secondary_base) {
+        blend(secondary_base, (70, 70, 70), 0.72)
     } else {
-        blend(base, (180, 185, 195), 0.82)
+        blend(secondary_base, (180, 185, 195), 0.82)
     };
-    let text_secondary_emphasis = if is_light(base) {
-        blend(base, (55, 55, 55), 0.8)
+    let text_secondary_emphasis = if is_light(secondary_base) {
+        blend(secondary_base, (55, 55, 55), 0.8)
     } else {
-        blend(base, (220, 225, 230), 0.9)
+        blend(secondary_base, (220, 225, 230), 0.9)
     };
-    let fill_bg_emphasis = if is_light(base) {
-        blend(base, (214, 214, 214), 0.88)
+    let fill_bg_emphasis = if is_light(primary_base) {
+        blend(primary_base, (214, 214, 214), 0.88)
     } else {
-        blend(base, (28, 30, 33), 0.9)
+        blend(primary_base, (28, 30, 33), 0.9)
     };
-    let mono_fg = if is_light(base) {
-        blend(text_base, (110, 95, 70), 0.75)
+    let fill_secondary_bg_emphasis = if is_light(secondary_base) {
+        blend(secondary_base, (214, 214, 214), 0.88)
     } else {
-        blend(text_base, (250, 250, 250), 0.92)
+        blend(secondary_base, (28, 30, 33), 0.9)
     };
-    let mono_secondary = if is_light(base) {
-        blend(text_secondary, (105, 90, 72), 0.7)
+    let mono_fg = if is_light(primary_base) {
+        blend(text_base, (92, 64, 42), 0.62)
     } else {
-        blend(text_secondary, (215, 220, 228), 0.9)
+        blend(text_base, (128, 214, 255), 0.36)
+    };
+    let mono_secondary = if is_light(secondary_base) {
+        blend(text_secondary, (92, 64, 42), 0.56)
+    } else {
+        blend(text_secondary, (128, 214, 255), 0.3)
     };
 
     SelectionPaletteSpec {
-        fill_bg: base,
+        fill_bg: primary_base,
         fill_bg_emphasis,
+        fill_secondary_bg: secondary_base,
+        fill_secondary_bg_emphasis,
         fill_fg,
         fill_secondary_fg,
         fill_secondary_fg_emphasis,
@@ -246,16 +339,74 @@ pub(crate) fn styled_color_label_spans(
     fallback_preset: SelectionHighlightPreset,
     is_ru: bool,
 ) -> Vec<Span<'static>> {
-    let label = describe_color_choice(choice, fallback_preset, is_ru);
-    let rgb = resolve_color_choice_rgb(choice, fallback_preset);
-    vec![Span::styled(label, Style::default().fg(best_terminal_color(rgb)))]
+    match choice {
+        UiColorChoice::Gradient { start, end } => {
+            let start_named = named_color_for_hex(start);
+            let end_named = named_color_for_hex(end);
+            vec![
+                Span::styled(
+                    if is_ru {
+                        start_named.name_ru.to_string()
+                    } else {
+                        start_named.name_en.to_string()
+                    },
+                    Style::default().fg(best_terminal_color(start_named.rgb)),
+                ),
+                Span::raw(" → "),
+                Span::styled(
+                    if is_ru {
+                        end_named.name_ru.to_string()
+                    } else {
+                        end_named.name_en.to_string()
+                    },
+                    Style::default().fg(best_terminal_color(end_named.rgb)),
+                ),
+            ]
+        }
+        _ => {
+            let label = describe_color_choice(choice, fallback_preset, is_ru);
+            let rgb = resolve_color_choice_rgb(choice, fallback_preset);
+            vec![Span::styled(label, Style::default().fg(best_terminal_color(rgb)))]
+        }
+    }
+}
+
+pub(crate) fn styled_choice_label_spans(
+    label: &str,
+    choice: &UiColorChoice,
+    fallback_preset: SelectionHighlightPreset,
+    is_secondary: bool,
+) -> Vec<Span<'static>> {
+    let rgb = resolve_color_choice_label_rgb(choice, fallback_preset, is_secondary);
+    vec![Span::styled(
+        label.to_string(),
+        Style::default().fg(best_terminal_color(rgb)),
+    )]
+}
+
+pub(crate) fn color_swatch_spans(
+    choice: &UiColorChoice,
+    fallback_preset: SelectionHighlightPreset,
+    is_secondary: bool,
+) -> Vec<Span<'static>> {
+    match choice {
+        UiColorChoice::Gradient { start, end } => {
+            let start_rgb = parse_hex_color(start).unwrap_or(selection_preset_color(fallback_preset).rgb);
+            let end_rgb = parse_hex_color(end).unwrap_or(selection_preset_color(fallback_preset).rgb);
+            vec![
+                Span::styled("■", Style::default().fg(best_terminal_color(start_rgb))),
+                Span::styled("■", Style::default().fg(best_terminal_color(end_rgb))),
+            ]
+        }
+        _ => {
+            let rgb = resolve_color_choice_label_rgb(choice, fallback_preset, is_secondary);
+            vec![Span::styled("■", Style::default().fg(best_terminal_color(rgb)))]
+        }
+    }
 }
 
 pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTextFormats) -> Style {
     if formats.contains(SelectionHighlightTextFormat::Bold) {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    if formats.contains(SelectionHighlightTextFormat::Semibold) {
         style = style.add_modifier(Modifier::BOLD);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
@@ -283,8 +434,8 @@ pub(crate) fn format_preview_label(
     match (is_ru, format) {
         (true, SelectionHighlightTextFormat::Bold) => ("Жирный", Style::default().add_modifier(Modifier::BOLD), None),
         (false, SelectionHighlightTextFormat::Bold) => ("Bold", Style::default().add_modifier(Modifier::BOLD), None),
-        (true, SelectionHighlightTextFormat::Semibold) => ("Полужирный", Style::default().add_modifier(Modifier::BOLD), None),
-        (false, SelectionHighlightTextFormat::Semibold) => ("Semi-bold", Style::default().add_modifier(Modifier::BOLD), None),
+        (true, SelectionHighlightTextFormat::Semibold) => ("Полужирный", Style::default(), Some("◧")),
+        (false, SelectionHighlightTextFormat::Semibold) => ("Semi-bold", Style::default(), Some("◧")),
         (true, SelectionHighlightTextFormat::Italic) => ("Курсив", Style::default().add_modifier(Modifier::ITALIC), None),
         (false, SelectionHighlightTextFormat::Italic) => ("Italic", Style::default().add_modifier(Modifier::ITALIC), None),
         (true, SelectionHighlightTextFormat::Underlined) => ("Подчёркнутый", Style::default().add_modifier(Modifier::UNDERLINED), None),
@@ -301,14 +452,47 @@ pub(crate) fn format_preview_label(
 }
 
 pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset: SelectionHighlightPreset, is_ru: bool) -> String {
-    let named = match choice {
-        UiColorChoice::Custom(hex) => named_color_for_hex(hex),
-        UiColorChoice::Preset(preset) => selection_preset_color(*preset),
-        UiColorChoice::Auto => selection_preset_color(fallback_preset),
-    };
-    if is_ru {
-        format!("Оттенок: {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
-    } else {
-        format!("Shade: {} · {}", named.name_en, named.hex.to_ascii_uppercase())
+    match choice {
+        UiColorChoice::Auto => {
+            let named = selection_preset_color(fallback_preset);
+            if is_ru {
+                format!("Авто · {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
+            } else {
+                format!("Auto · {} · {}", named.name_en, named.hex.to_ascii_uppercase())
+            }
+        }
+        UiColorChoice::Gradient { start, end } => {
+            let start_named = named_color_for_hex(start);
+            let end_named = named_color_for_hex(end);
+            if is_ru {
+                format!(
+                    "Градиент: {} {} → {} {}",
+                    start_named.name_ru,
+                    start.to_ascii_uppercase(),
+                    end_named.name_ru,
+                    end.to_ascii_uppercase()
+                )
+            } else {
+                format!(
+                    "Gradient: {} {} → {} {}",
+                    start_named.name_en,
+                    start.to_ascii_uppercase(),
+                    end_named.name_en,
+                    end.to_ascii_uppercase()
+                )
+            }
+        }
+        _ => {
+            let named = match choice {
+                UiColorChoice::Custom(hex) => named_color_for_hex(hex),
+                UiColorChoice::Preset(preset) => selection_preset_color(*preset),
+                UiColorChoice::Auto | UiColorChoice::Gradient { .. } => selection_preset_color(fallback_preset),
+            };
+            if is_ru {
+                format!("Оттенок: {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
+            } else {
+                format!("Shade: {} · {}", named.name_en, named.hex.to_ascii_uppercase())
+            }
+        }
     }
 }

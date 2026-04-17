@@ -172,7 +172,29 @@ impl SelectionHighlightTextFormats {
     }
 
     pub(crate) const fn with_toggled(self, format: SelectionHighlightTextFormat) -> Self {
-        Self::from_bits(self.bits ^ format.bit())
+        match format {
+            SelectionHighlightTextFormat::Bold => {
+                if self.contains(SelectionHighlightTextFormat::Bold) {
+                    Self::from_bits(self.bits & !SelectionHighlightTextFormat::Bold.bit())
+                } else {
+                    Self::from_bits(
+                        (self.bits | SelectionHighlightTextFormat::Bold.bit())
+                            & !SelectionHighlightTextFormat::Semibold.bit(),
+                    )
+                }
+            }
+            SelectionHighlightTextFormat::Semibold => {
+                if self.contains(SelectionHighlightTextFormat::Semibold) {
+                    Self::from_bits(self.bits & !SelectionHighlightTextFormat::Semibold.bit())
+                } else {
+                    Self::from_bits(
+                        (self.bits | SelectionHighlightTextFormat::Semibold.bit())
+                            & !SelectionHighlightTextFormat::Bold.bit(),
+                    )
+                }
+            }
+            _ => Self::from_bits(self.bits ^ format.bit()),
+        }
     }
 
     pub(crate) const fn is_empty(self) -> bool {
@@ -225,6 +247,7 @@ pub(crate) enum UiColorChoice {
     Auto,
     Preset(SelectionHighlightPreset),
     Custom(String),
+    Gradient { start: String, end: String },
 }
 
 impl Default for UiColorChoice {
@@ -254,12 +277,34 @@ impl UiColorChoice {
         if normalized == "auto" {
             return Some(Self::Auto);
         }
+        for separator in ["->", "→", ",", ";", "|"] {
+            if let Some((start_raw, end_raw)) = normalized.split_once(separator) {
+                let start = normalize_hex_color(start_raw)?;
+                let end = normalize_hex_color(end_raw)?;
+                return Some(Self::Gradient { start, end });
+            }
+        }
+        if let Some(rest) = normalized.strip_prefix("gradient:") {
+            let mut segments = rest.split(':');
+            let start = normalize_hex_color(segments.next()?)?;
+            let end = normalize_hex_color(segments.next()?)?;
+            if segments.next().is_some() {
+                return None;
+            }
+            return Some(Self::Gradient { start, end });
+        }
         if let Some(hex) = normalize_hex_color(normalized.as_str()) {
             return Some(Self::Custom(hex));
         }
-        Some(Self::Preset(SelectionHighlightPreset::from_code(
-            normalized.as_str(),
-        )))
+        let preset = match normalized.as_str() {
+            "light" => Some(SelectionHighlightPreset::Light),
+            "graphite" => Some(SelectionHighlightPreset::Graphite),
+            "amber" => Some(SelectionHighlightPreset::Amber),
+            "mint" => Some(SelectionHighlightPreset::Mint),
+            "rose" => Some(SelectionHighlightPreset::Rose),
+            _ => None,
+        }?;
+        Some(Self::Preset(preset))
     }
 
     pub(crate) fn to_setting_value(&self) -> serde_json::Value {
@@ -267,6 +312,9 @@ impl UiColorChoice {
             Self::Auto => "auto".to_string(),
             Self::Preset(preset) => preset.code().to_string(),
             Self::Custom(hex) => hex.clone(),
+            Self::Gradient { start, end } => {
+                format!("gradient:{}:{}", start.to_ascii_lowercase(), end.to_ascii_lowercase())
+            }
         };
         serde_json::Value::String(code)
     }
@@ -1332,10 +1380,20 @@ mod tests {
     }
 
     #[test]
-    fn selection_highlight_formats_strip_conflicting_weight() {
+    fn selection_highlight_formats_keep_last_weight_toggle() {
         let formats = SelectionHighlightTextFormats::empty()
             .with_toggled(SelectionHighlightTextFormat::Bold)
             .with_toggled(SelectionHighlightTextFormat::Semibold);
+
+        assert!(!formats.contains(SelectionHighlightTextFormat::Bold));
+        assert!(formats.contains(SelectionHighlightTextFormat::Semibold));
+    }
+
+    #[test]
+    fn selection_highlight_formats_switch_back_to_bold() {
+        let formats = SelectionHighlightTextFormats::empty()
+            .with_toggled(SelectionHighlightTextFormat::Semibold)
+            .with_toggled(SelectionHighlightTextFormat::Bold);
 
         assert!(formats.contains(SelectionHighlightTextFormat::Bold));
         assert!(!formats.contains(SelectionHighlightTextFormat::Semibold));

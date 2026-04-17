@@ -31,6 +31,7 @@ use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
+use crate::ui_appearance::selection_preset_color;
 use crate::ui_preferences::UiColorChoice;
 use crate::ui_preferences::UiPreferences;
 use crate::ui_preferences::load_ui_preferences;
@@ -92,6 +93,8 @@ static POPUP_UI_PREFERENCES: OnceLock<Mutex<CachedPopupUiPreferences>> = OnceLoc
 struct SelectionHighlightPalette {
     fill_bg: Color,
     fill_bg_emphasis: Color,
+    fill_secondary_bg: Color,
+    fill_secondary_bg_emphasis: Color,
     fill_fg: Color,
     fill_secondary_fg: Color,
     fill_secondary_fg_emphasis: Color,
@@ -227,6 +230,8 @@ fn selection_highlight_palette_for_preset(preset: SelectionHighlightPreset) -> S
         SelectionHighlightPreset::Light => SelectionHighlightPalette {
             fill_bg: Color::White,
             fill_bg_emphasis: Color::Rgb(236, 236, 236),
+            fill_secondary_bg: Color::White,
+            fill_secondary_bg_emphasis: Color::Rgb(236, 236, 236),
             fill_fg: Color::Black,
             fill_secondary_fg: Color::Rgb(62, 62, 62),
             fill_secondary_fg_emphasis: Color::Rgb(47, 47, 47),
@@ -240,6 +245,8 @@ fn selection_highlight_palette_for_preset(preset: SelectionHighlightPreset) -> S
         SelectionHighlightPreset::Graphite => SelectionHighlightPalette {
             fill_bg: Color::Rgb(73, 78, 87),
             fill_bg_emphasis: Color::Rgb(61, 66, 74),
+            fill_secondary_bg: Color::Rgb(73, 78, 87),
+            fill_secondary_bg_emphasis: Color::Rgb(61, 66, 74),
             fill_fg: Color::White,
             fill_secondary_fg: Color::Rgb(223, 227, 234),
             fill_secondary_fg_emphasis: Color::Rgb(235, 238, 243),
@@ -253,6 +260,8 @@ fn selection_highlight_palette_for_preset(preset: SelectionHighlightPreset) -> S
         SelectionHighlightPreset::Amber => SelectionHighlightPalette {
             fill_bg: Color::Rgb(248, 229, 191),
             fill_bg_emphasis: Color::Rgb(240, 214, 162),
+            fill_secondary_bg: Color::Rgb(248, 229, 191),
+            fill_secondary_bg_emphasis: Color::Rgb(240, 214, 162),
             fill_fg: Color::Black,
             fill_secondary_fg: Color::Rgb(78, 61, 35),
             fill_secondary_fg_emphasis: Color::Rgb(66, 51, 29),
@@ -266,6 +275,8 @@ fn selection_highlight_palette_for_preset(preset: SelectionHighlightPreset) -> S
         SelectionHighlightPreset::Mint => SelectionHighlightPalette {
             fill_bg: Color::Rgb(212, 241, 223),
             fill_bg_emphasis: Color::Rgb(191, 232, 207),
+            fill_secondary_bg: Color::Rgb(212, 241, 223),
+            fill_secondary_bg_emphasis: Color::Rgb(191, 232, 207),
             fill_fg: Color::Black,
             fill_secondary_fg: Color::Rgb(34, 73, 55),
             fill_secondary_fg_emphasis: Color::Rgb(28, 62, 47),
@@ -279,6 +290,8 @@ fn selection_highlight_palette_for_preset(preset: SelectionHighlightPreset) -> S
         SelectionHighlightPreset::Rose => SelectionHighlightPalette {
             fill_bg: Color::Rgb(246, 213, 224),
             fill_bg_emphasis: Color::Rgb(239, 193, 210),
+            fill_secondary_bg: Color::Rgb(246, 213, 224),
+            fill_secondary_bg_emphasis: Color::Rgb(239, 193, 210),
             fill_fg: Color::Black,
             fill_secondary_fg: Color::Rgb(87, 51, 67),
             fill_secondary_fg_emphasis: Color::Rgb(74, 43, 57),
@@ -314,6 +327,8 @@ fn custom_selection_highlight_palette(base: Color) -> SelectionHighlightPalette 
     SelectionHighlightPalette {
         fill_bg: base,
         fill_bg_emphasis,
+        fill_secondary_bg: base,
+        fill_secondary_bg_emphasis: fill_bg_emphasis,
         fill_fg,
         fill_secondary_fg,
         fill_secondary_fg_emphasis,
@@ -336,6 +351,53 @@ fn selection_highlight_palette_from_choice(
         UiColorChoice::Custom(hex) => parse_hex_color(&hex)
             .map(custom_selection_highlight_palette)
             .unwrap_or_else(|| selection_highlight_palette_for_preset(fallback_preset)),
+        UiColorChoice::Gradient { start, end } => {
+            let primary = parse_hex_color(&start)
+                .unwrap_or_else(|| rgb_to_color(selection_preset_color(fallback_preset).rgb));
+            let secondary = parse_hex_color(&end)
+                .unwrap_or_else(|| rgb_to_color(selection_preset_color(fallback_preset).rgb));
+            let primary_base = primary;
+            let secondary_base = secondary;
+
+            let fill_fg = contrast_text_color(primary_base);
+            let fill_secondary_fg = contrast_text_color(secondary_base);
+            let fill_bg_emphasis = if matches!(fill_fg, Color::Black) {
+                darken_color(primary_base, 0.08)
+            } else {
+                lighten_color(primary_base, 0.08)
+            };
+            let fill_secondary_bg_emphasis = if matches!(fill_secondary_fg, Color::Black) {
+                darken_color(secondary_base, 0.08)
+            } else {
+                lighten_color(secondary_base, 0.08)
+            };
+
+            SelectionHighlightPalette {
+                fill_bg: primary_base,
+                fill_bg_emphasis,
+                fill_secondary_bg: secondary_base,
+                fill_secondary_bg_emphasis,
+                fill_fg,
+                fill_secondary_fg: mix_color(fill_secondary_fg, secondary_base, 0.18),
+                fill_secondary_fg_emphasis: mix_color(
+                    fill_secondary_fg,
+                    fill_secondary_bg_emphasis,
+                    0.14,
+                ),
+                text_fg: ensure_visible_text_color(primary_base, false),
+                text_fg_emphasis: ensure_visible_text_color(
+                    lighten_color(primary_base, 0.14),
+                    false,
+                ),
+                text_secondary_fg: ensure_visible_text_color(secondary_base, true),
+                text_secondary_fg_emphasis: ensure_visible_text_color(
+                    lighten_color(secondary_base, 0.14),
+                    true,
+                ),
+                mono_text_fg: mix_color(primary_base, Color::Cyan, 0.22),
+                mono_text_secondary_fg: mix_color(secondary_base, Color::Cyan, 0.18),
+            }
+        }
     }
 }
 
@@ -361,6 +423,15 @@ fn resolve_text_color_choice(
                 base
             }
         }),
+        UiColorChoice::Gradient { start, end } => {
+            let primary = parse_hex_color(&start);
+            let secondary = parse_hex_color(&end);
+            if is_secondary {
+                secondary.or(primary)
+            } else {
+                primary.or(secondary)
+            }
+        }
     }
     .map(|color| ensure_visible_text_color(color, is_secondary))
 }
@@ -383,9 +454,7 @@ fn apply_terminal_safe_formats(
     allow_dim: bool,
     allow_reversed: bool,
 ) -> Style {
-    if formats.contains(SelectionHighlightTextFormat::Bold)
-        || formats.contains(SelectionHighlightTextFormat::Semibold)
-    {
+    if formats.contains(SelectionHighlightTextFormat::Bold) {
         style = style.add_modifier(Modifier::BOLD);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
@@ -408,17 +477,24 @@ fn apply_terminal_safe_formats(
 
 fn unselected_row_styles() -> (Style, Style) {
     let preferences = popup_ui_preferences();
+    let list_formats = preferences.list_text_formats;
+    let bold = list_formats.contains(SelectionHighlightTextFormat::Bold);
     let mut primary = Style::default();
     if let Some(color) = resolve_text_color_choice(
         preferences.list_primary_color,
         false,
         current_selection_highlight_preset(),
     ) {
+        let color = if bold {
+            ensure_visible_text_color(lighten_color(color, 0.12), false)
+        } else {
+            color
+        };
         primary = primary.fg(color);
     }
     primary = apply_terminal_safe_formats(
         primary,
-        preferences.list_text_formats,
+        list_formats,
         true,
         true,
     );
@@ -430,13 +506,18 @@ fn unselected_row_styles() -> (Style, Style) {
         true,
         current_selection_highlight_preset(),
     ) {
+        let color = if bold {
+            ensure_visible_text_color(lighten_color(color, 0.08), true)
+        } else {
+            color
+        };
         secondary = secondary.fg(color);
     } else {
         secondary = secondary.dim();
     }
     secondary = apply_terminal_safe_formats(
         secondary,
-        preferences.list_text_formats,
+        list_formats,
         secondary_choice != UiColorChoice::Auto,
         true,
     );
@@ -460,6 +541,13 @@ fn apply_base_style_to_prefix_span(mut span: Span<'static>, base_style: Style) -
         span.style = span.style.patch(base_style);
     }
     span
+}
+
+fn spans_end_with_whitespace(spans: &[Span<'_>]) -> bool {
+    spans
+        .last()
+        .and_then(|span| span.content.chars().last())
+        .is_some_and(char::is_whitespace)
 }
 
 fn span_is_secondary(style: Style, normal_secondary_style: Style) -> bool {
@@ -804,20 +892,30 @@ fn selection_highlight_palette() -> SelectionHighlightPalette {
 }
 
 fn selection_highlight_base_style(is_secondary: bool) -> Style {
+    let preferences = popup_ui_preferences();
     let palette = selection_highlight_palette();
     let formats = current_selection_highlight_text_formats();
     let fill = current_selection_highlight_fill();
+    let bold = formats.contains(SelectionHighlightTextFormat::Bold);
     let semibold = formats.contains(SelectionHighlightTextFormat::Semibold);
     let mono = formats.contains(SelectionHighlightTextFormat::Mono);
 
     let mut style = if fill {
-        let bg = if semibold || mono {
-            palette.fill_bg_emphasis
+        let bg = if is_secondary {
+            if bold || mono {
+                palette.fill_secondary_bg_emphasis
+            } else {
+                palette.fill_secondary_bg
+            }
         } else {
-            palette.fill_bg
+            if bold || mono {
+                palette.fill_bg_emphasis
+            } else {
+                palette.fill_bg
+            }
         };
         let fg = if is_secondary {
-            if semibold || mono {
+            if bold || mono {
                 palette.fill_secondary_fg_emphasis
             } else {
                 palette.fill_secondary_fg
@@ -827,22 +925,38 @@ fn selection_highlight_base_style(is_secondary: bool) -> Style {
         };
         Style::default().fg(fg).bg(bg)
     } else {
+        let direct_text_color = resolve_text_color_choice(
+            preferences.selection_highlight_color.clone(),
+            is_secondary,
+            current_selection_highlight_preset(),
+        );
         let fg = if mono {
             if is_secondary {
                 palette.mono_text_secondary_fg
             } else {
                 palette.mono_text_fg
             }
-        } else if is_secondary {
-            if semibold {
-                palette.text_secondary_fg_emphasis
-            } else {
-                palette.text_secondary_fg
-            }
-        } else if semibold {
-            palette.text_fg_emphasis
         } else {
-            palette.text_fg
+            let base = direct_text_color.unwrap_or_else(|| {
+                if is_secondary {
+                    palette.text_secondary_fg
+                } else {
+                    palette.text_fg
+                }
+            });
+            if bold {
+                ensure_visible_text_color(
+                    lighten_color(base, if is_secondary { 0.16 } else { 0.12 }),
+                    is_secondary,
+                )
+            } else if semibold {
+                ensure_visible_text_color(
+                    lighten_color(base, if is_secondary { 0.1 } else { 0.07 }),
+                    is_secondary,
+                )
+            } else {
+                base
+            }
         };
         Style::default()
             .fg(ensure_visible_text_color(fg, is_secondary))
@@ -921,6 +1035,7 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
                     return;
                 }
                 let is_secondary = span_is_secondary(span.style, normal_secondary_style);
+                let is_whitespace = span.content.trim().is_empty();
                 let mut style = span.style.patch(if is_secondary {
                     selected_secondary_style
                 } else {
@@ -928,8 +1043,26 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
                 });
                 style.add_modifier.remove(Modifier::DIM);
                 style.sub_modifier.remove(Modifier::DIM);
+                if is_whitespace {
+                    style.add_modifier.remove(Modifier::UNDERLINED);
+                    style.sub_modifier.remove(Modifier::UNDERLINED);
+                    style.add_modifier.remove(Modifier::CROSSED_OUT);
+                    style.sub_modifier.remove(Modifier::CROSSED_OUT);
+                }
                 span.style = style;
             });
+        }
+        if current_selection_highlight_text_formats().contains(SelectionHighlightTextFormat::Mono)
+            && let Some(first_line) = lines.first_mut()
+            && !first_line
+                .spans
+                .iter()
+                .any(|span| span.content.as_ref().starts_with("</> "))
+        {
+            first_line.spans.insert(
+                0,
+                Span::styled("</> ", selected_primary_style),
+            );
         }
     }
     if is_disabled {
@@ -1044,6 +1177,7 @@ fn adjust_start_for_wrapped_selection_visibility(
 /// at `desc_col`. Applies fuzzy-match bolding when indices are present and
 /// dims the description.
 fn build_full_line(row: &GenericDisplayRow, desc_col: usize, total_width: usize) -> Line<'static> {
+    let preferences = popup_ui_preferences();
     let (primary_style, secondary_style) = unselected_row_styles();
     let combined_description = match (&row.description, &row.disabled_reason) {
         (Some(desc), Some(reason)) => Some(format!("{desc} (недоступно: {reason})")),
@@ -1054,7 +1188,11 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize, total_width: usize)
 
     // Enforce single-line name: allow at most desc_col - 2 cells for name,
     // reserving two spaces before the description column.
-    let name_prefix_width = Line::from(row.name_prefix_spans.clone()).width();
+    let has_list_mono_prefix = preferences
+        .list_text_formats
+        .contains(SelectionHighlightTextFormat::Mono);
+    let name_prefix_width = Line::from(row.name_prefix_spans.clone()).width()
+        + usize::from(has_list_mono_prefix) * 4;
     let name_limit = combined_description
         .as_ref()
         .map(|_| desc_col.saturating_sub(2).saturating_sub(name_prefix_width))
@@ -1108,13 +1246,21 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize, total_width: usize)
         name_spans.push(Span::styled(" (недоступно)", secondary_style));
     }
 
-    let this_name_width = name_prefix_width + Line::from(name_spans.clone()).width();
     let mut full_spans: Vec<Span> = row
         .name_prefix_spans
         .clone()
         .into_iter()
         .map(|span| apply_base_style_to_prefix_span(span, primary_style))
         .collect();
+    if has_list_mono_prefix {
+        full_spans.insert(0, Span::styled("</> ", primary_style));
+    }
+    if (has_list_mono_prefix || !row.name_prefix_spans.is_empty())
+        && !name_spans.is_empty()
+        && !spans_end_with_whitespace(&full_spans)
+    {
+        full_spans.push(Span::raw(" "));
+    }
     full_spans.extend(name_spans);
     if let Some(display_shortcut) = row.display_shortcut {
         full_spans.push(Span::styled(" (", secondary_style));
@@ -1123,11 +1269,44 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize, total_width: usize)
         full_spans.push(Span::styled(")", secondary_style));
     }
     if let Some(desc) = combined_description.as_ref() {
+        let this_name_width = Line::from(full_spans.clone()).width();
         let gap = desc_col.saturating_sub(this_name_width);
         if gap > 0 {
             full_spans.push(" ".repeat(gap).into());
         }
-        full_spans.push(Span::styled(desc.clone(), secondary_style));
+        let text_style = secondary_style;
+        let mut whitespace_style = text_style;
+        whitespace_style.add_modifier.remove(Modifier::UNDERLINED);
+        whitespace_style.add_modifier.remove(Modifier::CROSSED_OUT);
+        whitespace_style.sub_modifier.remove(Modifier::UNDERLINED);
+        whitespace_style.sub_modifier.remove(Modifier::CROSSED_OUT);
+        let mut current = String::new();
+        let mut in_whitespace = false;
+        for ch in desc.chars() {
+            let is_whitespace = ch.is_whitespace();
+            if current.is_empty() {
+                in_whitespace = is_whitespace;
+            }
+            if is_whitespace != in_whitespace {
+                let style = if in_whitespace {
+                    whitespace_style
+                } else {
+                    text_style
+                };
+                full_spans.push(Span::styled(current.clone(), style));
+                current.clear();
+                in_whitespace = is_whitespace;
+            }
+            current.push(ch);
+        }
+        if !current.is_empty() {
+            let style = if in_whitespace {
+                whitespace_style
+            } else {
+                text_style
+            };
+            full_spans.push(Span::styled(current, style));
+        }
     }
     if !row.category_tags.is_empty() {
         let badges = badge_spans(&row.category_tags);
