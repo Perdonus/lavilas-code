@@ -46,7 +46,7 @@ download_with_retry() {
 }
 
 sudo apt-get update "${apt_update_args[@]}"
-sudo apt-get install -y "${apt_install_args[@]}" ca-certificates curl musl-tools pkg-config libcap-dev g++ clang libc++-dev libc++abi-dev lld xz-utils
+sudo apt-get install -y "${apt_install_args[@]}" ca-certificates curl musl-tools pkg-config libcap-dev linux-libc-dev g++ clang libc++-dev libc++abi-dev lld xz-utils
 
 case "${TARGET}" in
   x86_64-unknown-linux-musl)
@@ -265,6 +265,19 @@ fi
 
 cflags="-pthread"
 cxxflags="-pthread"
+# vendored bubblewrap needs Linux UAPI headers (<linux/...>, <asm/...>,
+# <asm-generic/...>) which live in the host linux-libc-dev package rather than
+# the musl sysroot. Expose them only as fallback search paths so musl headers
+# still win whenever both are present.
+multiarch_include="/usr/include/${arch}-linux-gnu"
+if [[ -d /usr/include ]]; then
+  cflags="${cflags} -idirafter/usr/include"
+  cxxflags="${cxxflags} -idirafter/usr/include"
+fi
+if [[ -d "${multiarch_include}" ]]; then
+  cflags="${cflags} -idirafter${multiarch_include}"
+  cxxflags="${cxxflags} -idirafter${multiarch_include}"
+fi
 if [[ "${TARGET}" == "aarch64-unknown-linux-musl" ]]; then
   # BoringSSL enables -Wframe-larger-than=25344 under clang and treats warnings as errors.
   cflags="${cflags} -Wno-error=frame-larger-than"
