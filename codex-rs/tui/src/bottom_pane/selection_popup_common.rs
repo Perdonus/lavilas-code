@@ -31,7 +31,9 @@ use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
+use crate::ui_appearance::apply_text_formats;
 use crate::ui_appearance::best_terminal_color;
+use crate::ui_appearance::resolve_color_choice_label_rgb;
 use crate::ui_appearance::selection_palette_for_choice;
 use crate::ui_appearance::selection_preset_color;
 use crate::ui_preferences::UiColorChoice;
@@ -403,39 +405,50 @@ fn selection_highlight_palette_from_choice(
     }
 }
 
+fn terminal_safe_color(color: Color) -> Color {
+    color_to_rgb(color).map(best_terminal_color).unwrap_or(color)
+}
+
+fn contrast_delta(foreground: Color, background: Color) -> Option<f32> {
+    Some((color_luminance(foreground)? - color_luminance(background)?).abs())
+}
+
+fn adjust_foreground_for_background(
+    foreground: Color,
+    background: Color,
+    is_secondary: bool,
+) -> Color {
+    let minimum_delta = if is_secondary { 0.24 } else { 0.34 };
+    if contrast_delta(foreground, background).unwrap_or(minimum_delta) >= minimum_delta {
+        return terminal_safe_color(foreground);
+    }
+
+    let target = contrast_text_color(background);
+    for weight in [0.18, 0.32, 0.48, 0.64, 0.82, 1.0] {
+        let candidate = mix_color(foreground, target, weight);
+        if contrast_delta(candidate, background).unwrap_or(0.0) >= minimum_delta {
+            return terminal_safe_color(candidate);
+        }
+    }
+
+    terminal_safe_color(target)
+}
+
 fn resolve_text_color_choice(
     choice: UiColorChoice,
     is_secondary: bool,
-    _fallback_preset: SelectionHighlightPreset,
+    fallback_preset: SelectionHighlightPreset,
 ) -> Option<Color> {
-    match choice {
+    let resolved = match &choice {
         UiColorChoice::Auto => None,
-        UiColorChoice::Preset(preset) => {
-            let palette = selection_highlight_palette_for_preset(preset);
-            Some(if is_secondary {
-                palette.text_secondary_fg
-            } else {
-                palette.text_fg
-            })
-        }
-        UiColorChoice::Custom(hex) => parse_hex_color(&hex).map(|base| {
-            if is_secondary {
-                mix_color(base, Color::Gray, 0.3)
-            } else {
-                base
-            }
-        }),
-        UiColorChoice::Gradient { start, end } => {
-            let primary = parse_hex_color(&start);
-            let secondary = parse_hex_color(&end);
-            if is_secondary {
-                secondary.or(primary)
-            } else {
-                primary.or(secondary)
-            }
-        }
+        _ => Some(best_terminal_color(resolve_color_choice_label_rgb(
+            &choice,
+            fallback_preset,
+            is_secondary,
+        ))),
     }
-    .map(|color| ensure_visible_text_color(color, is_secondary))
+    .map(|color| ensure_visible_text_color(color, is_secondary));
+    resolved
 }
 
 fn ensure_visible_text_color(color: Color, is_secondary: bool) -> Color {
@@ -451,41 +464,12 @@ fn ensure_visible_text_color(color: Color, is_secondary: bool) -> Color {
 }
 
 fn apply_terminal_safe_formats(
-    mut style: Style,
+    style: Style,
     formats: SelectionHighlightTextFormats,
-    allow_dim: bool,
-    allow_reversed: bool,
+    _allow_dim: bool,
+    _allow_reversed: bool,
 ) -> Style {
-    if formats.contains(SelectionHighlightTextFormat::Bold)
-        || formats.contains(SelectionHighlightTextFormat::Semibold)
-    {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    if formats.contains(SelectionHighlightTextFormat::Italic) {
-        style = style.add_modifier(Modifier::ITALIC);
-    }
-    if formats.contains(SelectionHighlightTextFormat::Underlined) {
-        style = style.add_modifier(Modifier::UNDERLINED);
-    }
-    if allow_dim && formats.contains(SelectionHighlightTextFormat::Dim) {
-        style = style.add_modifier(Modifier::DIM);
-    }
-    if allow_reversed && formats.contains(SelectionHighlightTextFormat::Reversed) {
-        style = style.add_modifier(Modifier::REVERSED);
-    }
-    if formats.contains(SelectionHighlightTextFormat::CrossedOut) {
-        style = style.add_modifier(Modifier::CROSSED_OUT);
-    }
-    if style.fg.is_none() {
-        if formats.contains(SelectionHighlightTextFormat::Mono) {
-            style = style.fg(best_terminal_color((120, 193, 255)));
-        } else if formats.contains(SelectionHighlightTextFormat::Italic) {
-            style = style.fg(best_terminal_color((193, 168, 235)));
-        } else if formats.contains(SelectionHighlightTextFormat::Semibold) {
-            style = style.fg(best_terminal_color((214, 218, 224)));
-        }
-    }
-    style
+    apply_text_formats(style, formats)
 }
 
 fn unselected_row_styles() -> (Style, Style) {
@@ -1078,8 +1062,17 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
                     style.add_modifier.remove(Modifier::CROSSED_OUT);
                     style.sub_modifier.remove(Modifier::CROSSED_OUT);
                 }
-                if explicit_fg.is_some() {
-                    style.fg = explicit_fg;
+                if let Some(explicit_fg) = explicit_fg {
+                    style.fg = match style.bg {
+                        Some(background) if background != Color::Reset => {
+                            Some(adjust_foreground_for_background(
+                                explicit_fg,
+                                background,
+                                is_secondary,
+                            ))
+                        }
+                        _ => Some(explicit_fg),
+                    };
                 }
                 span.style = style;
             });
@@ -1104,6 +1097,11 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
             });
         }
     }
+}
+
+pub(crate) fn legacy_selection_row_style(dim: bool) -> Style {
+    let (primary, secondary) = unselected_row_styles();
+    if dim { secondary } else { primary }
 }
 
 fn compute_item_window_start(
@@ -1811,6 +1809,33 @@ mod tests {
         set_selection_highlight_text_formats(SelectionHighlightTextFormats::empty());
         set_selection_highlight_fill(true);
         set_selection_highlight_preset(SelectionHighlightPreset::Light);
+    }
+
+    #[test]
+    fn selected_rows_retone_explicit_foreground_when_fill_would_hide_it() {
+        set_selection_highlight_preset(SelectionHighlightPreset::Light);
+        set_selection_highlight_fill(true);
+        set_selection_highlight_text_formats(SelectionHighlightTextFormats::empty());
+
+        let mut lines = vec![Line::from(vec![Span::styled(
+            "Белый swatch",
+            Style::default().fg(Color::White),
+        )])];
+        apply_row_state_style(&mut lines, true, false);
+
+        assert_ne!(lines[0].spans[0].style.fg, Some(Color::White));
+        assert_eq!(lines[0].spans[0].style.bg, Some(Color::White));
+    }
+
+    #[test]
+    fn explicit_secondary_choice_keeps_light_color_without_forced_darkening() {
+        let color = resolve_text_color_choice(
+            UiColorChoice::Custom("#ffffff".to_string()),
+            true,
+            SelectionHighlightPreset::Graphite,
+        );
+
+        assert_eq!(color, Some(Color::White));
     }
 
     #[test]

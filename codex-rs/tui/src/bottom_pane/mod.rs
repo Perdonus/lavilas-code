@@ -99,6 +99,7 @@ pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_success_cell;
 pub(crate) use feedback_view::feedback_upload_consent_params;
+pub(crate) use selection_popup_common::legacy_selection_row_style;
 pub(crate) use selection_popup_common::selection_highlight_style;
 pub(crate) use selection_popup_common::set_selection_highlight_fill;
 pub(crate) use selection_popup_common::set_selection_highlight_preset;

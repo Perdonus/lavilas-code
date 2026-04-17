@@ -170,11 +170,7 @@ fn patch_gradient_line_for_role(
                 return vec![span];
             }
 
-            let patched_style = if only_plain {
-                span.style.patch(base_style)
-            } else {
-                base_style.patch(span.style)
-            };
+            let patched_style = span.style.patch(base_style);
 
             span.content
                 .chars()
@@ -254,10 +250,6 @@ pub(crate) fn patch_span_for_role(
         return span;
     }
 
-    let style = if only_plain {
-        span.style.patch(role_style)
-    } else {
-        role_style.patch(span.style)
-    };
+    let style = span.style.patch(role_style);
     Span { style, ..span }
 }

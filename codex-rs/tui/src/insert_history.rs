@@ -316,6 +316,9 @@ impl ModifierDiff {
         }
         if removed.contains(Modifier::DIM) {
             queue!(w, SetAttribute(CAttribute::NormalIntensity))?;
+            if self.to.contains(Modifier::BOLD) {
+                queue!(w, SetAttribute(CAttribute::Bold))?;
+            }
         }
         if removed.contains(Modifier::CROSSED_OUT) {
             queue!(w, SetAttribute(CAttribute::NotCrossedOut))?;

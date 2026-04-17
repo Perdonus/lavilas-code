@@ -223,7 +223,7 @@ impl HistoryCell for ExecCell {
             lines.extend(patch_lines_for_role(
                 cmd_display,
                 RuntimeTextRole::Command,
-                /*only_plain*/ true,
+                /*only_plain*/ false,
             ));
 
             if let Some(output) = call.output.as_ref() {
@@ -238,7 +238,7 @@ impl HistoryCell for ExecCell {
                     lines.extend(patch_lines_for_role(
                         output_lines,
                         RuntimeTextRole::CommandOutput,
-                        /*only_plain*/ true,
+                        /*only_plain*/ false,
                     ));
                 }
                 let duration = call
@@ -442,7 +442,7 @@ impl ExecCell {
             ));
         }
 
-        lines = patch_lines_for_role(lines, RuntimeTextRole::Command, /*only_plain*/ true);
+        lines = patch_lines_for_role(lines, RuntimeTextRole::Command, /*only_plain*/ false);
 
         if let Some(output) = call.output.as_ref() {
             let line_limit = if call.is_user_shell_command() {
@@ -494,7 +494,7 @@ impl ExecCell {
                     Span::from(layout.output_block.subsequent_prefix),
                 );
                 let prefixed_output =
-                    patch_lines_for_role(prefixed_output, RuntimeTextRole::CommandOutput, true);
+                    patch_lines_for_role(prefixed_output, RuntimeTextRole::CommandOutput, false);
                 let trimmed_output = Self::truncate_lines_middle(
                     &prefixed_output,
                     display_limit,

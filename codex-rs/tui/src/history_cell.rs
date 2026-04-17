@@ -476,7 +476,7 @@ impl HistoryCell for AgentMessageCell {
                 })
                 .subsequent_indent("  ".into()),
         );
-        patch_lines_for_role(wrapped, RuntimeTextRole::Reply, /*only_plain*/ true)
+        patch_lines_for_role(wrapped, RuntimeTextRole::Reply, /*only_plain*/ false)
     }
 
     fn is_stream_continuation(&self) -> bool {

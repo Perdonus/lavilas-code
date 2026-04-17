@@ -343,6 +343,33 @@ pub(crate) fn best_terminal_color(rgb: (u8, u8, u8)) -> Color {
     best_color(rgb)
 }
 
+fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Black => Some((0, 0, 0)),
+        Color::White => Some((255, 255, 255)),
+        Color::Gray => Some((160, 160, 160)),
+        Color::DarkGray => Some((96, 96, 96)),
+        Color::Red => Some((220, 76, 70)),
+        Color::Green => Some((77, 182, 96)),
+        Color::Yellow => Some((240, 201, 76)),
+        Color::Blue => Some((79, 140, 255)),
+        Color::Magenta => Some((203, 105, 190)),
+        Color::Cyan => Some((80, 197, 215)),
+        _ => None,
+    }
+}
+
+fn apply_foreground_accent(mut style: Style, tint: (u8, u8, u8), weight: f32) -> Style {
+    let accented = style
+        .fg
+        .and_then(color_to_rgb)
+        .map(|current| best_terminal_color(blend(current, tint, weight)))
+        .unwrap_or_else(|| best_terminal_color(tint));
+    style.fg = Some(accented);
+    style
+}
+
 pub(crate) fn styled_color_label_spans(
     choice: &UiColorChoice,
     fallback_preset: SelectionHighlightPreset,
@@ -449,34 +476,33 @@ pub(crate) fn color_swatch_spans(
 }
 
 pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTextFormats) -> Style {
-    if formats.contains(SelectionHighlightTextFormat::Bold)
-        || formats.contains(SelectionHighlightTextFormat::Semibold)
-    {
+    if formats.contains(SelectionHighlightTextFormat::Bold) {
         style = style.add_modifier(Modifier::BOLD);
+        style = apply_foreground_accent(style, (244, 246, 250), 0.34);
+    } else if formats.contains(SelectionHighlightTextFormat::Semibold) {
+        style = apply_foreground_accent(style, (220, 226, 236), 0.24);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
         style = style.add_modifier(Modifier::ITALIC);
+        style = apply_foreground_accent(style, (193, 168, 235), 0.24);
     }
     if formats.contains(SelectionHighlightTextFormat::Underlined) {
         style = style.add_modifier(Modifier::UNDERLINED);
+        style = apply_foreground_accent(style, (255, 210, 120), 0.18);
     }
     if formats.contains(SelectionHighlightTextFormat::Dim) {
         style = style.add_modifier(Modifier::DIM);
+        style = apply_foreground_accent(style, (168, 176, 189), 0.12);
     }
     if formats.contains(SelectionHighlightTextFormat::Reversed) {
         style = style.add_modifier(Modifier::REVERSED);
     }
     if formats.contains(SelectionHighlightTextFormat::CrossedOut) {
         style = style.add_modifier(Modifier::CROSSED_OUT);
+        style = apply_foreground_accent(style, (227, 130, 136), 0.18);
     }
-    if style.fg.is_none() {
-        if formats.contains(SelectionHighlightTextFormat::Mono) {
-            style = style.fg(best_terminal_color((120, 193, 255)));
-        } else if formats.contains(SelectionHighlightTextFormat::Italic) {
-            style = style.fg(best_terminal_color((193, 168, 235)));
-        } else if formats.contains(SelectionHighlightTextFormat::Semibold) {
-            style = style.fg(best_terminal_color((214, 218, 224)));
-        }
+    if formats.contains(SelectionHighlightTextFormat::Mono) {
+        style = apply_foreground_accent(style, (120, 193, 255), 0.3);
     }
     style
 }
@@ -486,22 +512,58 @@ pub(crate) fn format_preview_label(
     is_ru: bool,
 ) -> (&'static str, Style, Option<&'static str>) {
     match (is_ru, format) {
-        (true, SelectionHighlightTextFormat::Bold) => ("Жирный", Style::default().add_modifier(Modifier::BOLD), None),
-        (false, SelectionHighlightTextFormat::Bold) => ("Жирный", Style::default().add_modifier(Modifier::BOLD), None),
+        (true, SelectionHighlightTextFormat::Bold) => (
+            "Жирный",
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(best_terminal_color((244, 246, 250))),
+            None,
+        ),
+        (false, SelectionHighlightTextFormat::Bold) => (
+            "Жирный",
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(best_terminal_color((244, 246, 250))),
+            None,
+        ),
         (true, SelectionHighlightTextFormat::Semibold) => (
             "Полужирный",
-            Style::default().add_modifier(Modifier::BOLD).fg(best_terminal_color((208, 214, 224))),
+            Style::default().fg(best_terminal_color((214, 218, 224))),
             Some("◧"),
         ),
         (false, SelectionHighlightTextFormat::Semibold) => (
             "Полужирный",
-            Style::default().add_modifier(Modifier::BOLD).fg(best_terminal_color((208, 214, 224))),
+            Style::default().fg(best_terminal_color((214, 218, 224))),
             Some("◧"),
         ),
-        (true, SelectionHighlightTextFormat::Italic) => ("Курсив", Style::default().add_modifier(Modifier::ITALIC), None),
-        (false, SelectionHighlightTextFormat::Italic) => ("Курсив", Style::default().add_modifier(Modifier::ITALIC), None),
-        (true, SelectionHighlightTextFormat::Underlined) => ("Подчёркнутый", Style::default().add_modifier(Modifier::UNDERLINED), None),
-        (false, SelectionHighlightTextFormat::Underlined) => ("Подчёркнутый", Style::default().add_modifier(Modifier::UNDERLINED), None),
+        (true, SelectionHighlightTextFormat::Italic) => (
+            "Курсив",
+            Style::default()
+                .add_modifier(Modifier::ITALIC)
+                .fg(best_terminal_color((193, 168, 235))),
+            None,
+        ),
+        (false, SelectionHighlightTextFormat::Italic) => (
+            "Курсив",
+            Style::default()
+                .add_modifier(Modifier::ITALIC)
+                .fg(best_terminal_color((193, 168, 235))),
+            None,
+        ),
+        (true, SelectionHighlightTextFormat::Underlined) => (
+            "Подчёркнутый",
+            Style::default()
+                .add_modifier(Modifier::UNDERLINED)
+                .fg(best_terminal_color((255, 210, 120))),
+            None,
+        ),
+        (false, SelectionHighlightTextFormat::Underlined) => (
+            "Подчёркнутый",
+            Style::default()
+                .add_modifier(Modifier::UNDERLINED)
+                .fg(best_terminal_color((255, 210, 120))),
+            None,
+        ),
         (true, SelectionHighlightTextFormat::Mono) => (
             "Моно",
             Style::default().fg(best_terminal_color((120, 193, 255))),
@@ -516,8 +578,20 @@ pub(crate) fn format_preview_label(
         (false, SelectionHighlightTextFormat::Dim) => ("Приглушённый", Style::default().add_modifier(Modifier::DIM), None),
         (true, SelectionHighlightTextFormat::Reversed) => ("Инверсия", Style::default().add_modifier(Modifier::REVERSED), None),
         (false, SelectionHighlightTextFormat::Reversed) => ("Инверсия", Style::default().add_modifier(Modifier::REVERSED), None),
-        (true, SelectionHighlightTextFormat::CrossedOut) => ("Зачёркнутый", Style::default().add_modifier(Modifier::CROSSED_OUT), None),
-        (false, SelectionHighlightTextFormat::CrossedOut) => ("Зачёркнутый", Style::default().add_modifier(Modifier::CROSSED_OUT), None),
+        (true, SelectionHighlightTextFormat::CrossedOut) => (
+            "Зачёркнутый",
+            Style::default()
+                .add_modifier(Modifier::CROSSED_OUT)
+                .fg(best_terminal_color((227, 130, 136))),
+            None,
+        ),
+        (false, SelectionHighlightTextFormat::CrossedOut) => (
+            "Зачёркнутый",
+            Style::default()
+                .add_modifier(Modifier::CROSSED_OUT)
+                .fg(best_terminal_color((227, 130, 136))),
+            None,
+        ),
     }
 }
 

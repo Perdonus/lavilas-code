@@ -1,5 +1,7 @@
 use crate::ui_preferences::StoredFontProfile;
 use crate::ui_preferences::fonts_dir;
+use crate::terminal_font::materialize_terminal_font_installation;
+use crate::terminal_font::remove_materialized_terminal_font;
 use regex_lite::Regex;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
@@ -66,6 +68,7 @@ struct GoogleFontCatalogFile {
 }
 
 static GOOGLE_FONT_CATALOG: OnceLock<Vec<GoogleFontCatalogEntry>> = OnceLock::new();
+static TERMINAL_SAFE_GOOGLE_FONT_CATALOG: OnceLock<Vec<GoogleFontCatalogEntry>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FontCatalogEntry {
@@ -112,8 +115,12 @@ pub(crate) enum FontLibraryError {
     CatalogEntryMissing(String),
     #[error("Google Fonts stylesheet did not contain downloadable files for `{0}`")]
     EmptyStylesheet(String),
+    #[error("Google Fonts family `{0}` not found in the local catalog")]
+    GoogleFontMissing(String),
     #[error("invalid font family name")]
     InvalidFamily,
+    #[error("font family `{0}` is not a terminal-safe monospace family")]
+    UnsupportedTerminalCategory(String),
     #[error("network request failed: {0}")]
     Network(String),
     #[error("I/O failed: {0}")]
@@ -122,7 +129,7 @@ pub(crate) enum FontLibraryError {
     HttpStatus { status: u16, url: String },
 }
 
-const FONT_CATALOG: [FontCatalogEntry; 12] = [
+const FONT_CATALOG: [FontCatalogEntry; 4] = [
     FontCatalogEntry {
         id: "jetbrains-mono",
         family: "JetBrains Mono",
@@ -159,82 +166,10 @@ const FONT_CATALOG: [FontCatalogEntry; 12] = [
         preview: "Geist Mono SELECT * FROM sessions;",
         tags: &["mono", "modern", "ui"],
     },
-    FontCatalogEntry {
-        id: "inter",
-        family: "Inter",
-        category: FontCategory::Sans,
-        description_ru: "Практичный UI-шрифт для основного текста и списков.",
-        description_en: "Practical UI font for primary text and lists.",
-        preview: "Inter keeps settings compact and clear.",
-        tags: &["sans", "ui", "neutral"],
-    },
-    FontCatalogEntry {
-        id: "manrope",
-        family: "Manrope",
-        category: FontCategory::Sans,
-        description_ru: "Широкий современный гротеск с аккуратной геометрией.",
-        description_en: "Wide contemporary sans with clean geometry.",
-        preview: "Manrope softens dense configuration menus.",
-        tags: &["sans", "modern", "soft"],
-    },
-    FontCatalogEntry {
-        id: "source-sans-3",
-        family: "Source Sans 3",
-        category: FontCategory::Sans,
-        description_ru: "Спокойный рабочий текстовый шрифт для вторичного интерфейса.",
-        description_en: "Calm workhorse sans for dense secondary UI.",
-        preview: "Source Sans 3 for hints, subtitles and captions.",
-        tags: &["sans", "editorial", "balanced"],
-    },
-    FontCatalogEntry {
-        id: "space-grotesk",
-        family: "Space Grotesk",
-        category: FontCategory::Display,
-        description_ru: "Более выразительный интерфейсный шрифт для акцентных частей UI.",
-        description_en: "More expressive UI face for accent surfaces.",
-        preview: "Space Grotesk adds punch without going full poster.",
-        tags: &["display", "branding", "accent"],
-    },
-    FontCatalogEntry {
-        id: "noto-sans",
-        family: "Noto Sans",
-        category: FontCategory::Sans,
-        description_ru: "Надёжный универсальный sans с хорошим языковым покрытием.",
-        description_en: "Reliable universal sans with broad language coverage.",
-        preview: "Noto Sans works well across multilingual prompts.",
-        tags: &["sans", "multilingual", "safe"],
-    },
-    FontCatalogEntry {
-        id: "noto-serif",
-        family: "Noto Serif",
-        category: FontCategory::Serif,
-        description_ru: "Классическая антиква для более редакционного вида.",
-        description_en: "Classic serif for a more editorial tone.",
-        preview: "Noto Serif gives long text a quieter pace.",
-        tags: &["serif", "reading", "editorial"],
-    },
-    FontCatalogEntry {
-        id: "merriweather",
-        family: "Merriweather",
-        category: FontCategory::Serif,
-        description_ru: "Мягкая экранная антиква для текста и описаний.",
-        description_en: "Soft screen serif for copy and descriptions.",
-        preview: "Merriweather works for calmer documentation views.",
-        tags: &["serif", "screen", "reading"],
-    },
-    FontCatalogEntry {
-        id: "pt-serif",
-        family: "PT Serif",
-        category: FontCategory::Serif,
-        description_ru: "Устойчивая текстовая антиква с хорошей кириллицей.",
-        description_en: "Stable text serif with strong Cyrillic support.",
-        preview: "PT Serif keeps Russian copy readable.",
-        tags: &["serif", "cyrillic", "reading"],
-    },
 ];
 
 const PREFERRED_SUBSETS: &[&str] = &["cyrillic", "cyrillic-ext", "latin", "latin-ext"];
-const TERMINAL_FONT_NOTE: &str = "Lavilas Codex может скачать и хранить шрифт, но терминал сам решает, умеет ли он переключать гарнитуру автоматически. После активации шрифт может потребоваться выбрать вручную в настройках терминала.";
+const TERMINAL_FONT_NOTE: &str = "Lavilas Codex работает только с моноширинными гарнитурами для терминала. Он дополнительно пытается выложить шрифт в пользовательский каталог шрифтов ОС, но терминал всё равно может потребовать ручной выбор гарнитуры.";
 
 #[derive(Debug, Serialize)]
 struct StoredFontManifest {
@@ -287,13 +222,15 @@ pub(crate) fn terminal_font_note() -> &'static str {
 }
 
 pub(crate) fn google_font_catalog() -> &'static [GoogleFontCatalogEntry] {
-    GOOGLE_FONT_CATALOG.get_or_init(|| {
-        let parsed = serde_json::from_str::<GoogleFontCatalogFile>(include_str!(
-            "../assets/google-fonts-catalog.json"
-        ))
-        .unwrap_or_else(|_| GoogleFontCatalogFile { fonts: Vec::new() });
-        parsed.fonts
-    })
+    TERMINAL_SAFE_GOOGLE_FONT_CATALOG
+        .get_or_init(|| {
+            raw_google_font_catalog()
+                .iter()
+                .filter(|entry| google_font_category(entry.category.as_str()) == FontCategory::Monospace)
+                .cloned()
+                .collect()
+        })
+        .as_slice()
 }
 
 pub(crate) fn google_font_category(category: &str) -> FontCategory {
@@ -331,6 +268,7 @@ pub(crate) fn search_google_fonts(query: &str) -> Vec<GoogleFontCatalogEntry> {
     let normalized = query.trim().to_ascii_lowercase();
     let mut fonts = google_font_catalog()
         .iter()
+        .filter(|entry| google_font_category(entry.category.as_str()) == FontCategory::Monospace)
         .filter(|entry| {
             if normalized.is_empty() {
                 return true;
@@ -432,6 +370,7 @@ pub(crate) fn remove_installed_font(codex_home: &Path, font_id: &str) -> io::Res
     if target.exists() {
         fs::remove_dir_all(target)?;
     }
+    let _ = remove_materialized_terminal_font(font_id);
     Ok(())
 }
 
@@ -452,6 +391,14 @@ pub(crate) async fn build_google_font_plan(
     if family.is_empty() {
         return Err(FontLibraryError::InvalidFamily);
     }
+    let catalog_entry = find_google_font_any(family)
+        .ok_or_else(|| FontLibraryError::GoogleFontMissing(family.to_string()))?;
+    if google_font_category(catalog_entry.category.as_str()) != FontCategory::Monospace {
+        return Err(FontLibraryError::UnsupportedTerminalCategory(
+            catalog_entry.family.clone(),
+        ));
+    }
+    let family = catalog_entry.family.as_str();
 
     let css_url = google_fonts_css_url(family);
     let css = google_fonts_client()?
@@ -564,6 +511,12 @@ async fn materialize_font_plan(
         fs::remove_dir_all(&target_dir)?;
     }
     fs::rename(&temp_dir, &target_dir)?;
+    let installable_files = plan
+        .assets
+        .iter()
+        .map(|asset| asset.filename.clone())
+        .collect::<Vec<_>>();
+    let _ = materialize_terminal_font_installation(&plan.id, &target_dir, &installable_files);
 
     Ok(StoredFontProfile {
         id: plan.id.clone(),
@@ -586,6 +539,24 @@ fn google_fonts_client() -> Result<reqwest::Client, FontLibraryError> {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|err| FontLibraryError::Network(err.to_string()))
+}
+
+fn raw_google_font_catalog() -> &'static [GoogleFontCatalogEntry] {
+    GOOGLE_FONT_CATALOG
+        .get_or_init(|| {
+            let parsed = serde_json::from_str::<GoogleFontCatalogFile>(include_str!(
+                "../assets/google-fonts-catalog.json"
+            ))
+            .unwrap_or_else(|_| GoogleFontCatalogFile { fonts: Vec::new() });
+            parsed.fonts
+        })
+        .as_slice()
+}
+
+fn find_google_font_any(family: &str) -> Option<&'static GoogleFontCatalogEntry> {
+    raw_google_font_catalog()
+        .iter()
+        .find(|entry| entry.family.eq_ignore_ascii_case(family))
 }
 
 fn google_fonts_css_url(family: &str) -> String {
@@ -769,8 +740,16 @@ mod tests {
         assert!(!direct.is_empty());
         assert_eq!(direct[0].family, "JetBrains Mono");
 
-        let tagged = search_font_catalog("editorial");
-        assert!(tagged.iter().any(|entry| entry.family == "Merriweather"));
+        let tagged = search_font_catalog("system");
+        assert!(tagged.iter().any(|entry| entry.family == "Roboto Mono"));
+    }
+
+    #[test]
+    fn google_font_catalog_is_monospace_only() {
+        assert!(!google_font_catalog().is_empty());
+        assert!(google_font_catalog()
+            .iter()
+            .all(|entry| google_font_category(entry.category.as_str()) == FontCategory::Monospace));
     }
 
     #[test]

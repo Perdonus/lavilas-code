@@ -1,9 +1,8 @@
+use crate::bottom_pane::legacy_selection_row_style;
 use crate::bottom_pane::selection_highlight_style;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RowRenderable;
-use ratatui::style::Style;
 use ratatui::style::Styled as _;
-use ratatui::style::Stylize as _;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use unicode_width::UnicodeWidthStr;
@@ -29,10 +28,8 @@ pub(crate) fn selection_option_row_with_dim(
     };
     let style = if is_selected {
         selection_highlight_style()
-    } else if dim {
-        Style::default().dim()
     } else {
-        Style::default()
+        legacy_selection_row_style(dim)
     };
     let prefix_width = UnicodeWidthStr::width(prefix.as_str()) as u16;
     let mut row = RowRenderable::new();

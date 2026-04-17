@@ -417,6 +417,7 @@ use crate::font_library::featured_fonts;
 use crate::font_library::find_google_font;
 use crate::font_library::google_font_category;
 use crate::font_library::google_font_preview;
+use crate::font_library::remove_installed_font;
 use crate::font_library::search_google_fonts;
 use crate::ui_preferences::PopupColorTarget;
 use crate::ui_preferences::PopupFormatTarget;
@@ -10597,17 +10598,17 @@ impl ChatWidget {
                 format!("{state}. Добавляет плотное начертание выбранной строке.")
             }
             (true, SelectionHighlightTextFormat::Semibold) => {
-                format!("{state}. Усиливает вес мягче, чем жирный, без жёсткого контраста.")
+                format!("{state}. Делает мягкий акцент без полного жирного начертания.")
             }
             (true, SelectionHighlightTextFormat::Italic) => {
-                format!("{state}. Дает наклон активному тексту.")
+                format!("{state}. Добавляет наклон там, где терминал это поддерживает, и усиливает акцент цветом.")
             }
             (true, SelectionHighlightTextFormat::Underlined) => {
-                format!("{state}. Подчеркивает активную строку.")
+                format!("{state}. Подчёркивает активную строку и дублирует эффект цветом для совместимости.")
             }
             (true, SelectionHighlightTextFormat::Mono) => {
                 format!(
-                    "{state}. Добавляет акцент в стиле кода и моно-оформление там, где терминал это умеет."
+                    "{state}. Добавляет кодовый акцент; это не отдельная гарнитура на уровне элемента."
                 )
             }
             (true, SelectionHighlightTextFormat::Dim) => {
@@ -10617,22 +10618,22 @@ impl ChatWidget {
                 format!("{state}. Инвертирует пары foreground/background.")
             }
             (true, SelectionHighlightTextFormat::CrossedOut) => {
-                format!("{state}. Добавляет зачёркивание к тексту.")
+                format!("{state}. Добавляет зачёркивание и дублирует эффект цветом там, где терминал режет ANSI-атрибуты.")
             }
             (false, SelectionHighlightTextFormat::Bold) => {
                 format!("{state}. Adds a heavier selected-row weight.")
             }
             (false, SelectionHighlightTextFormat::Semibold) => {
-                format!("{state}. Uses a softer weight increase than bold.")
+                format!("{state}. Adds a softer emphasis than full bold.")
             }
             (false, SelectionHighlightTextFormat::Italic) => {
-                format!("{state}. Tilts the active row text.")
+                format!("{state}. Adds italic where the terminal supports it and reinforces it with color.")
             }
             (false, SelectionHighlightTextFormat::Underlined) => {
-                format!("{state}. Underlines the active row.")
+                format!("{state}. Underlines the active row and reinforces it with color for compatibility.")
             }
             (false, SelectionHighlightTextFormat::Mono) => {
-                format!("{state}. Adds a code-like accent and monospace fallback where the terminal allows it.")
+                format!("{state}. Adds a code-like accent; it is not a separate per-element font.")
             }
             (false, SelectionHighlightTextFormat::Dim) => {
                 format!("{state}. Softens the text tone.")
@@ -10641,7 +10642,7 @@ impl ChatWidget {
                 format!("{state}. Reverses foreground and background.")
             }
             (false, SelectionHighlightTextFormat::CrossedOut) => {
-                format!("{state}. Adds a strike-through decoration.")
+                format!("{state}. Adds strike-through and reinforces it with color where ANSI support is weak.")
             }
         }
     }
@@ -11545,6 +11546,15 @@ impl ChatWidget {
     }
 
     pub(crate) fn delete_installed_font_preference(&mut self, font_id: &str) {
+        if let Err(err) = remove_installed_font(self.config.codex_home.as_path(), font_id) {
+            let message = if self.ui_language().is_ru() {
+                format!("Не удалось удалить файлы шрифта: {err}")
+            } else {
+                format!("Не удалось удалить файлы шрифта: {err}")
+            };
+            self.add_error_message(message);
+            return;
+        }
         let mut fonts = self.current_installed_fonts();
         let original_len = fonts.len();
         fonts.retain(|font| font.id != font_id);
@@ -13257,9 +13267,9 @@ impl ChatWidget {
                 "Добавить шрифт".to_string()
             },
             description: Some(if is_ru {
-                "Поиск и скачивание через Google Fonts.".to_string()
+                "Поиск и скачивание моноширинных гарнитур через Google Fonts.".to_string()
             } else {
-                "Найти и скачать через Google Fonts.".to_string()
+                "Найти и скачать моноширинный шрифт через Google Fonts.".to_string()
             }),
             actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightAddFontPicker))],
             dismiss_on_select: false,
@@ -13322,12 +13332,12 @@ impl ChatWidget {
             }),
             subtitle: Some(if is_ru {
                 format!(
-                    "{}. Гарнитура применяется глобально для терминала, а не по отдельным элементам TUI.",
+                    "{}. Доступны только моноширинные гарнитуры, и применяются они глобально для терминала, а не по отдельным элементам TUI.",
                     terminal_font_support_summary(true)
                 )
             } else {
                 format!(
-                    "{}. Гарнитура применяется глобально для терминала, а не по отдельным элементам TUI.",
+                    "{}. Только моноширинные гарнитуры, и применяются они глобально для терминала, а не по отдельным элементам TUI.",
                     terminal_font_support_summary(false)
                 )
             }),
@@ -13381,29 +13391,22 @@ impl ChatWidget {
             dismiss_on_select: true,
             ..Default::default()
         }];
-        let has_exact_match = results
-            .iter()
-            .any(|entry| entry.family.eq_ignore_ascii_case(query.as_str()));
-        if !query.is_empty() && !has_exact_match && results.is_empty() {
+        if !query.is_empty() && results.is_empty() {
             items.push(SelectionItem {
                 name: if is_ru {
-                    format!("Скачать `{query}`")
+                    "Ничего не найдено".to_string()
                 } else {
-                    format!("Скачать `{query}`")
+                    "Ничего не найдено".to_string()
                 },
                 description: Some(if is_ru {
-                    "Прямой запрос к Google Fonts по введённому названию семейства, даже если его нет в текущей выдаче.".to_string()
+                    "Показываются только моноширинные гарнитуры из локального каталога Google Fonts. Попробуйте другое название."
+                        .to_string()
                 } else {
-                    "Прямой запрос к Google Fonts для введённого семейства, даже если его нет в текущих результатах.".to_string()
+                    "Only monospace families from the local Google Fonts catalog are shown here. Try another name."
+                        .to_string()
                 }),
                 search_value: Some(query.clone()),
-                actions: vec![Box::new({
-                    let family = query.clone();
-                    move |tx| tx.send(AppEvent::InstallGoogleFont {
-                        family: family.clone(),
-                    })
-                })],
-                dismiss_on_select: true,
+                dismiss_on_select: false,
                 ..Default::default()
             });
         }
@@ -13449,24 +13452,24 @@ impl ChatWidget {
             }),
             subtitle: Some(if query.is_empty() {
                 if is_ru {
-                    "Полный каталог Google Fonts по алфавиту. Начните печатать — выдача отфильтруется сама."
+                    "Полный каталог моноширинных Google Fonts по алфавиту. Начните печатать — выдача отфильтруется сама."
                         .to_string()
                 } else {
-                    "Полный каталог Google Fonts по алфавиту. Начните печатать — выдача отфильтруется сама."
+                    "Полный каталог моноширинных Google Fonts по алфавиту. Начните печатать — выдача отфильтруется сама."
                         .to_string()
                 }
             } else if is_ru {
-                format!("Результаты по запросу `{query}`.")
+                format!("Моноширинные результаты по запросу `{query}`.")
             } else {
-                format!("Результаты по запросу `{query}`.")
+                format!("Моноширинные результаты по запросу `{query}`.")
             }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some(if is_ru {
-                "Название, категория или подмножество".to_string()
+                "Название моноширинной гарнитуры".to_string()
             } else {
-                "Семейство, категория или подмножество".to_string()
+                "Название моноширинной гарнитуры".to_string()
             }),
             initial_search_query: (!query.is_empty()).then_some(query.clone()),
             initial_selected_idx: self
