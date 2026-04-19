@@ -252,7 +252,7 @@ impl CommandPopup {
                     name_prefix_spans: Vec::new(),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
-                    description: None,
+                    description: Some(cmd.description().to_string()),
                     category_tag: None,
                     category_tags: Vec::new(),
                     wrap_indent: None,

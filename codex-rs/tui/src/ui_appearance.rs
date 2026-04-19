@@ -5,7 +5,9 @@ use ratatui::text::Span;
 
 use crate::color::blend;
 use crate::color::is_light;
-use crate::terminal_palette::best_color;
+use crate::terminal_palette::default_bg;
+use crate::terminal_palette::default_fg;
+use crate::terminal_palette::rgb_color;
 use crate::ui_preferences::SelectionHighlightPreset;
 use crate::ui_preferences::SelectionHighlightTextFormat;
 use crate::ui_preferences::SelectionHighlightTextFormats;
@@ -338,7 +340,7 @@ pub(crate) fn selection_palette_for_choice(
 }
 
 pub(crate) fn best_terminal_color(rgb: (u8, u8, u8)) -> Color {
-    best_color(rgb)
+    rgb_color(rgb)
 }
 
 fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
@@ -420,16 +422,45 @@ fn emphasis_target(rgb: (u8, u8, u8)) -> (u8, u8, u8) {
     }
 }
 
+fn italic_target(rgb: (u8, u8, u8)) -> (u8, u8, u8) {
+    if is_light(rgb) {
+        (78, 96, 148)
+    } else {
+        (166, 190, 255)
+    }
+}
+
+fn style_foreground_rgb(style: Style) -> Option<(u8, u8, u8)> {
+    style
+        .fg
+        .and_then(color_to_rgb)
+        .or_else(default_fg)
+        .or_else(|| default_bg().map(|background| if is_light(background) { (26, 26, 26) } else { (234, 234, 234) }))
+}
+
 fn emphasize_foreground(mut style: Style, weight: f32) -> Style {
     if style.bg.is_some_and(|background| background != Color::Reset) {
         return style;
     }
 
-    let Some(rgb) = style.fg.and_then(color_to_rgb) else {
+    let Some(rgb) = style_foreground_rgb(style) else {
         return style;
     };
 
-    style.fg = Some(best_terminal_color(blend(rgb, emphasis_target(rgb), weight)));
+    style.fg = Some(rgb_color(blend(rgb, emphasis_target(rgb), weight)));
+    style
+}
+
+fn italicize_foreground(mut style: Style) -> Style {
+    if style.bg.is_some_and(|background| background != Color::Reset) {
+        return style;
+    }
+
+    let Some(rgb) = style_foreground_rgb(style) else {
+        return style;
+    };
+
+    style.fg = Some(rgb_color(blend(rgb, italic_target(rgb), 0.3)));
     style
 }
 
@@ -464,11 +495,11 @@ pub(crate) fn color_swatch_spans(
 
 pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTextFormats) -> Style {
     if formats.contains(SelectionHighlightTextFormat::Bold) {
-        style = emphasize_foreground(style, 0.24);
+        style = emphasize_foreground(style, 0.32);
         style = style.add_modifier(Modifier::BOLD);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
-        style = emphasize_foreground(style, 0.12);
+        style = italicize_foreground(style);
         style = style.add_modifier(Modifier::ITALIC);
     }
     if formats.contains(SelectionHighlightTextFormat::Underlined) {

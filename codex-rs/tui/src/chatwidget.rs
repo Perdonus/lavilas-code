@@ -9191,9 +9191,13 @@ impl ChatWidget {
                 name: if is_ru {
                     "Полный каталог моделей".to_string()
                 } else {
-                    "Полный каталог моделей".to_string()
+                    "Full model catalog".to_string()
                 },
-                description: None,
+                description: Some(if is_ru {
+                    "Все модели провайдера".to_string()
+                } else {
+                    "All provider models".to_string()
+                }),
                 search_value: Some(if is_ru {
                     "полный каталог все модели manual reasoning".to_string()
                 } else {
@@ -11539,7 +11543,11 @@ impl ChatWidget {
             } else {
                 "Кастомизация".to_string()
             },
-            description: None,
+            description: Some(if is_ru {
+                "Цвета и форматирование".to_string()
+            } else {
+                "Colors and formatting".to_string()
+            }),
             search_value: Some(if is_ru {
                 "кастомизация цвета форматирование меню".to_string()
             } else {
@@ -11558,7 +11566,11 @@ impl ChatWidget {
                 } else {
                     "Model".to_string()
                 },
-                description: None,
+                description: Some(if is_ru {
+                    "Модель и размышления".to_string()
+                } else {
+                    "Model and reasoning".to_string()
+                }),
                 search_value: Some(if is_ru {
                     "модель анализ reasoning провайдер effort".to_string()
                 } else {
@@ -11575,7 +11587,11 @@ impl ChatWidget {
                 } else {
                     "Model".to_string()
                 },
-                description: None,
+                description: Some(if is_ru {
+                    "Модель и размышления".to_string()
+                } else {
+                    "Model and reasoning".to_string()
+                }),
                 search_value: Some(if is_ru {
                     "модель анализ reasoning провайдер effort".to_string()
                 } else {
@@ -11604,7 +11620,11 @@ impl ChatWidget {
                 } else {
                     "Profiles".to_string()
                 },
-                description: None,
+                description: Some(if is_ru {
+                    "Провайдеры и ключи".to_string()
+                } else {
+                    "Providers and keys".to_string()
+                }),
                 search_value: Some(if is_ru {
                     "профили аккаунты api ключи провайдеры модели".to_string()
                 } else {
@@ -11626,7 +11646,17 @@ impl ChatWidget {
                 } else {
                     "Включить быстрые пресеты моделей".to_string()
                 },
-                description: None,
+                description: Some(if self.current_model_presets_enabled() {
+                    if is_ru {
+                        "Быстрый выбор моделей".to_string()
+                    } else {
+                        "Quick model presets".to_string()
+                    }
+                } else if is_ru {
+                    "Включить быстрый выбор".to_string()
+                } else {
+                    "Enable quick presets".to_string()
+                }),
                 search_value: Some(if is_ru {
                     "пресеты моделей быстрый выбор".to_string()
                 } else {
@@ -11753,7 +11783,11 @@ impl ChatWidget {
             } else {
                 "Разрешения и подтверждения".to_string()
             },
-            description: None,
+            description: Some(if is_ru {
+                "Права и подтверждения".to_string()
+            } else {
+                "Permissions and approvals".to_string()
+            }),
             search_value: Some(if is_ru {
                 "разрешения подтверждения доступ sandbox approvals".to_string()
             } else {
@@ -11771,7 +11805,11 @@ impl ChatWidget {
                 } else {
                     "Voice".to_string()
                 },
-                description: None,
+                description: Some(if is_ru {
+                    "Голос и микрофон".to_string()
+                } else {
+                    "Voice and mic".to_string()
+                }),
                 search_value: Some(if is_ru {
                     "голос звук микрофон realtime".to_string()
                 } else {
