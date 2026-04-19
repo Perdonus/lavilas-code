@@ -11769,9 +11769,9 @@ impl ChatWidget {
                     "Language".to_string()
                 },
                 description: Some(if is_ru {
-                    lang_label.clone()
+                    lang_label.to_string()
                 } else {
-                    lang_label.clone()
+                    lang_label.to_string()
                 }),
                 search_value: Some(if is_ru {
                     "язык интерфейс english русский locale".to_string()

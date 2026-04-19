@@ -1260,12 +1260,22 @@ impl ChatComposer {
                 } else {
                     None
                 };
-                (inside_popup, dismiss_popup, ignore_scroll, selected_item)
+                let inserted_command = selected_item.and_then(|item| match item {
+                    CommandItem::Builtin(cmd) => Some(popup.inserted_command(cmd)),
+                });
+                (
+                    inside_popup,
+                    dismiss_popup,
+                    ignore_scroll,
+                    selected_item,
+                    inserted_command,
+                )
             }
             _ => return (InputResult::None, false),
         };
 
-        let (inside_popup, dismiss_popup, ignore_scroll, selected_item) = popup_result;
+        let (inside_popup, dismiss_popup, ignore_scroll, selected_item, inserted_command) =
+            popup_result;
         if dismiss_popup {
             self.active_popup = ActivePopup::None;
             return (InputResult::None, true);
@@ -1274,8 +1284,10 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
-        if let Some(CommandItem::Builtin(cmd)) = selected_item {
-            let command_text = format!("{}{} ", command_prefix(), popup.inserted_command(cmd));
+        if let (Some(CommandItem::Builtin(_cmd)), Some(inserted_command)) =
+            (selected_item, inserted_command)
+        {
+            let command_text = format!("{}{} ", command_prefix(), inserted_command);
             self.textarea.set_text_clearing_elements(&command_text);
             self.textarea.set_cursor(self.textarea.text().len());
             self.active_popup = ActivePopup::None;
