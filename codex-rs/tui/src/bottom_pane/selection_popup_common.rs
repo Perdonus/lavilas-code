@@ -350,53 +350,9 @@ fn selection_highlight_palette_from_choice(
         UiColorChoice::Custom(hex) => parse_hex_color(&hex)
             .map(custom_selection_highlight_palette)
             .unwrap_or_else(|| selection_highlight_palette_for_preset(fallback_preset)),
-        UiColorChoice::Gradient { start, end } => {
-            let primary = parse_hex_color(&start)
-                .unwrap_or_else(|| rgb_to_color(selection_preset_color(fallback_preset).rgb));
-            let secondary = parse_hex_color(&end)
-                .unwrap_or_else(|| rgb_to_color(selection_preset_color(fallback_preset).rgb));
-            let primary_base = primary;
-            let secondary_base = secondary;
-
-            let fill_fg = contrast_text_color(primary_base);
-            let fill_secondary_fg = contrast_text_color(secondary_base);
-            let fill_bg_emphasis = if matches!(fill_fg, Color::Black) {
-                darken_color(primary_base, 0.08)
-            } else {
-                lighten_color(primary_base, 0.08)
-            };
-            let fill_secondary_bg_emphasis = if matches!(fill_secondary_fg, Color::Black) {
-                darken_color(secondary_base, 0.08)
-            } else {
-                lighten_color(secondary_base, 0.08)
-            };
-
-            SelectionHighlightPalette {
-                fill_bg: primary_base,
-                fill_bg_emphasis,
-                fill_secondary_bg: secondary_base,
-                fill_secondary_bg_emphasis,
-                fill_fg,
-                fill_secondary_fg: mix_color(fill_secondary_fg, secondary_base, 0.18),
-                fill_secondary_fg_emphasis: mix_color(
-                    fill_secondary_fg,
-                    fill_secondary_bg_emphasis,
-                    0.14,
-                ),
-                text_fg: ensure_visible_text_color(primary_base, false),
-                text_fg_emphasis: ensure_visible_text_color(
-                    lighten_color(primary_base, 0.14),
-                    false,
-                ),
-                text_secondary_fg: ensure_visible_text_color(secondary_base, true),
-                text_secondary_fg_emphasis: ensure_visible_text_color(
-                    lighten_color(secondary_base, 0.14),
-                    true,
-                ),
-                mono_text_fg: mix_color(primary_base, Color::Cyan, 0.22),
-                mono_text_secondary_fg: mix_color(secondary_base, Color::Cyan, 0.18),
-            }
-        }
+        UiColorChoice::Gradient { start, .. } => parse_hex_color(&start)
+            .map(custom_selection_highlight_palette)
+            .unwrap_or_else(|| selection_highlight_palette_for_preset(fallback_preset)),
     }
 }
 
@@ -434,7 +390,7 @@ fn resolve_text_color_choice(
     is_secondary: bool,
     fallback_preset: SelectionHighlightPreset,
 ) -> Option<Color> {
-    let resolved = match &choice {
+    match &choice {
         UiColorChoice::Auto => None,
         _ => Some(best_terminal_color(resolve_color_choice_label_rgb(
             &choice,
@@ -442,8 +398,6 @@ fn resolve_text_color_choice(
             is_secondary,
         ))),
     }
-    .map(|color| ensure_visible_text_color(color, is_secondary));
-    resolved
 }
 
 fn ensure_visible_text_color(color: Color, is_secondary: bool) -> Color {
@@ -475,19 +429,12 @@ fn unselected_row_styles() -> (Style, Style) {
     let preferences = popup_ui_preferences();
     let primary_formats = preferences.list_primary_text_formats;
     let secondary_formats = preferences.list_secondary_text_formats;
-    let primary_bold = primary_formats.contains(SelectionHighlightTextFormat::Bold);
-    let secondary_bold = secondary_formats.contains(SelectionHighlightTextFormat::Bold);
     let mut primary = Style::default();
     if let Some(color) = resolve_text_color_choice(
         preferences.list_primary_color,
         false,
         current_selection_highlight_preset(),
     ) {
-        let color = if primary_bold {
-            ensure_visible_text_color(lighten_color(color, 0.12), false)
-        } else {
-            color
-        };
         primary = primary.fg(color);
     }
     primary = apply_terminal_safe_formats(primary, primary_formats, true, true);
@@ -499,11 +446,6 @@ fn unselected_row_styles() -> (Style, Style) {
         true,
         current_selection_highlight_preset(),
     ) {
-        let color = if secondary_bold {
-            ensure_visible_text_color(lighten_color(color, 0.08), true)
-        } else {
-            color
-        };
         secondary = secondary.fg(color);
     } else {
         secondary = secondary.dim();
@@ -889,28 +831,15 @@ fn selection_highlight_base_style(is_secondary: bool) -> Style {
     let palette = selection_highlight_palette();
     let formats = current_selection_highlight_text_formats();
     let fill = current_selection_highlight_fill();
-    let bold = formats.contains(SelectionHighlightTextFormat::Bold);
 
     let mut style = if fill {
         let bg = if is_secondary {
-            if bold {
-                palette.fill_secondary_bg_emphasis
-            } else {
-                palette.fill_secondary_bg
-            }
+            palette.fill_secondary_bg
         } else {
-            if bold {
-                palette.fill_bg_emphasis
-            } else {
-                palette.fill_bg
-            }
+            palette.fill_bg
         };
         let fg = if is_secondary {
-            if bold {
-                palette.fill_secondary_fg_emphasis
-            } else {
-                palette.fill_secondary_fg
-            }
+            palette.fill_secondary_fg
         } else {
             palette.fill_fg
         };
@@ -928,17 +857,7 @@ fn selection_highlight_base_style(is_secondary: bool) -> Style {
                 palette.text_fg
             }
         });
-        let fg = if bold {
-            ensure_visible_text_color(
-                lighten_color(base, if is_secondary { 0.16 } else { 0.12 }),
-                is_secondary,
-            )
-        } else {
-            base
-        };
-        Style::default()
-            .fg(ensure_visible_text_color(fg, is_secondary))
-            .bg(Color::Reset)
+        Style::default().fg(base).bg(Color::Reset)
     };
 
     apply_terminal_safe_formats(style, formats, !fill, !fill)

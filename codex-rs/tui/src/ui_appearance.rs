@@ -147,12 +147,20 @@ pub(crate) fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
+fn normalized_color_choice(choice: &UiColorChoice) -> UiColorChoice {
+    match choice {
+        UiColorChoice::Gradient { start, .. } => UiColorChoice::Custom(start.clone()),
+        other => other.clone(),
+    }
+}
+
 pub(crate) fn describe_color_choice(
     choice: &UiColorChoice,
     fallback_preset: SelectionHighlightPreset,
     is_ru: bool,
 ) -> String {
-    match choice {
+    let choice = normalized_color_choice(choice);
+    match &choice {
         UiColorChoice::Auto => {
             let named = selection_preset_color(fallback_preset);
             if is_ru {
@@ -177,15 +185,7 @@ pub(crate) fn describe_color_choice(
                 format!("{} {}", named.name_ru, hex.to_ascii_uppercase())
             }
         }
-        UiColorChoice::Gradient { start, end } => {
-            let start_named = named_color_for_hex(start);
-            let end_named = named_color_for_hex(end);
-            if is_ru {
-                format!("Градиент · {} → {}", start_named.name_ru, end_named.name_ru)
-            } else {
-                format!("Градиент · {} → {}", start_named.name_ru, end_named.name_ru)
-            }
-        }
+        UiColorChoice::Gradient { .. } => unreachable!(),
     }
 }
 
@@ -212,7 +212,8 @@ fn resolve_color_choice_pair_rgb(
     choice: &UiColorChoice,
     fallback_preset: SelectionHighlightPreset,
 ) -> ((u8, u8, u8), (u8, u8, u8)) {
-    match choice {
+    let choice = normalized_color_choice(choice);
+    match &choice {
         UiColorChoice::Auto => {
             let rgb = selection_preset_color(fallback_preset).rgb;
             (rgb, rgb)
@@ -225,10 +226,7 @@ fn resolve_color_choice_pair_rgb(
             let rgb = parse_hex_color(hex).unwrap_or(selection_preset_color(fallback_preset).rgb);
             (rgb, rgb)
         }
-        UiColorChoice::Gradient { start, end } => (
-            parse_hex_color(start).unwrap_or(selection_preset_color(fallback_preset).rgb),
-            parse_hex_color(end).unwrap_or(selection_preset_color(fallback_preset).rgb),
-        ),
+        UiColorChoice::Gradient { .. } => unreachable!(),
     }
 }
 
@@ -398,16 +396,6 @@ pub(crate) fn visible_terminal_rgb(rgb: (u8, u8, u8)) -> (u8, u8, u8) {
     target
 }
 
-fn apply_foreground_accent(mut style: Style, tint: (u8, u8, u8), weight: f32) -> Style {
-    let accented = style
-        .fg
-        .and_then(color_to_rgb)
-        .map(|current| best_terminal_color(blend(current, tint, weight)))
-        .unwrap_or_else(|| best_terminal_color(tint));
-    style.fg = Some(accented);
-    style
-}
-
 fn color_badge_style(rgb: (u8, u8, u8)) -> Style {
     let bg = best_terminal_color(rgb);
     let fg = if is_light(rgb) {
@@ -420,7 +408,7 @@ fn color_badge_style(rgb: (u8, u8, u8)) -> Style {
 
 fn color_label_style(rgb: (u8, u8, u8)) -> Style {
     Style::default()
-        .fg(best_terminal_color(visible_terminal_rgb(rgb)))
+        .fg(best_terminal_color(rgb))
         .add_modifier(Modifier::BOLD)
 }
 
@@ -429,36 +417,9 @@ pub(crate) fn styled_color_label_spans(
     fallback_preset: SelectionHighlightPreset,
     is_ru: bool,
 ) -> Vec<Span<'static>> {
-    match choice {
-        UiColorChoice::Gradient { start, end } => {
-            let start_named = named_color_for_hex(start);
-            let end_named = named_color_for_hex(end);
-            vec![
-                Span::styled(
-                    if is_ru {
-                        start_named.name_ru.to_string()
-                    } else {
-                        start_named.name_en.to_string()
-                    },
-                    color_label_style(start_named.rgb),
-                ),
-                Span::raw(" → "),
-                Span::styled(
-                    if is_ru {
-                        end_named.name_ru.to_string()
-                    } else {
-                        end_named.name_en.to_string()
-                    },
-                    color_label_style(end_named.rgb),
-                ),
-            ]
-        }
-        _ => {
-            let label = describe_color_choice(choice, fallback_preset, is_ru);
-            let rgb = resolve_color_choice_rgb(choice, fallback_preset);
-            vec![Span::styled(label, color_label_style(rgb))]
-        }
-    }
+    let label = describe_color_choice(choice, fallback_preset, is_ru);
+    let rgb = resolve_color_choice_rgb(choice, fallback_preset);
+    vec![Span::styled(label, color_label_style(rgb))]
 }
 
 pub(crate) fn styled_choice_label_spans(
@@ -467,31 +428,6 @@ pub(crate) fn styled_choice_label_spans(
     fallback_preset: SelectionHighlightPreset,
     is_secondary: bool,
 ) -> Vec<Span<'static>> {
-    if let UiColorChoice::Gradient { .. } = choice {
-        let primary_rgb = resolve_color_choice_label_rgb(choice, fallback_preset, false);
-        let secondary_rgb = resolve_color_choice_label_rgb(choice, fallback_preset, true);
-        let characters = label.chars().collect::<Vec<_>>();
-        if characters.len() <= 1 {
-            return vec![Span::styled(
-                label.to_string(),
-                color_label_style(if is_secondary { secondary_rgb } else { primary_rgb }),
-            )];
-        }
-
-        let last_index = (characters.len() - 1) as f32;
-        return characters
-            .into_iter()
-            .enumerate()
-            .map(|(idx, ch)| {
-                let weight = idx as f32 / last_index;
-                Span::styled(
-                    ch.to_string(),
-                    color_label_style(blend(primary_rgb, secondary_rgb, weight)),
-                )
-            })
-            .collect();
-    }
-
     let rgb = resolve_color_choice_label_rgb(choice, fallback_preset, is_secondary);
     vec![Span::styled(label.to_string(), color_label_style(rgb))]
 }
@@ -501,39 +437,22 @@ pub(crate) fn color_swatch_spans(
     fallback_preset: SelectionHighlightPreset,
     is_secondary: bool,
 ) -> Vec<Span<'static>> {
-    match choice {
-        UiColorChoice::Gradient { start, end } => {
-            let start_rgb = parse_hex_color(start).unwrap_or(selection_preset_color(fallback_preset).rgb);
-            let end_rgb = parse_hex_color(end).unwrap_or(selection_preset_color(fallback_preset).rgb);
-            vec![
-                Span::styled("  ", color_badge_style(start_rgb)),
-                Span::raw(" "),
-                Span::styled("  ", color_badge_style(end_rgb)),
-            ]
-        }
-        _ => {
-            let rgb = resolve_color_choice_label_rgb(choice, fallback_preset, is_secondary);
-            vec![Span::styled("  ", color_badge_style(rgb))]
-        }
-    }
+    let rgb = resolve_color_choice_label_rgb(choice, fallback_preset, is_secondary);
+    vec![Span::styled("  ", color_badge_style(rgb))]
 }
 
 pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTextFormats) -> Style {
     if formats.contains(SelectionHighlightTextFormat::Bold) {
         style = style.add_modifier(Modifier::BOLD);
-        style = apply_foreground_accent(style, (244, 246, 250), 0.58);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
         style = style.add_modifier(Modifier::ITALIC);
-        style = apply_foreground_accent(style, (193, 168, 235), 0.62);
     }
     if formats.contains(SelectionHighlightTextFormat::Underlined) {
         style = style.add_modifier(Modifier::UNDERLINED);
-        style = apply_foreground_accent(style, (255, 210, 120), 0.58);
     }
     if formats.contains(SelectionHighlightTextFormat::CrossedOut) {
         style = style.add_modifier(Modifier::CROSSED_OUT);
-        style = apply_foreground_accent(style, (227, 130, 136), 0.6);
     }
     style
 }
@@ -545,16 +464,12 @@ pub(crate) fn format_preview_label(
     match (is_ru, format) {
         (true, SelectionHighlightTextFormat::Bold) => (
             "Жирный",
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(best_terminal_color((244, 246, 250))),
+            Style::default().add_modifier(Modifier::BOLD),
             None,
         ),
         (false, SelectionHighlightTextFormat::Bold) => (
             "Жирный",
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(best_terminal_color((244, 246, 250))),
+            Style::default().add_modifier(Modifier::BOLD),
             None,
         ),
         (true, SelectionHighlightTextFormat::Semibold) => (
@@ -573,30 +488,22 @@ pub(crate) fn format_preview_label(
         ),
         (true, SelectionHighlightTextFormat::Italic) => (
             "Курсив",
-            Style::default()
-                .add_modifier(Modifier::ITALIC)
-                .fg(best_terminal_color((193, 168, 235))),
+            Style::default().add_modifier(Modifier::ITALIC),
             None,
         ),
         (false, SelectionHighlightTextFormat::Italic) => (
             "Курсив",
-            Style::default()
-                .add_modifier(Modifier::ITALIC)
-                .fg(best_terminal_color((193, 168, 235))),
+            Style::default().add_modifier(Modifier::ITALIC),
             None,
         ),
         (true, SelectionHighlightTextFormat::Underlined) => (
             "Подчёркнутый",
-            Style::default()
-                .add_modifier(Modifier::UNDERLINED)
-                .fg(best_terminal_color((255, 210, 120))),
+            Style::default().add_modifier(Modifier::UNDERLINED),
             None,
         ),
         (false, SelectionHighlightTextFormat::Underlined) => (
             "Подчёркнутый",
-            Style::default()
-                .add_modifier(Modifier::UNDERLINED)
-                .fg(best_terminal_color((255, 210, 120))),
+            Style::default().add_modifier(Modifier::UNDERLINED),
             None,
         ),
         (true, SelectionHighlightTextFormat::Mono) => (
@@ -615,23 +522,20 @@ pub(crate) fn format_preview_label(
         (false, SelectionHighlightTextFormat::Reversed) => ("Инверсия", Style::default().add_modifier(Modifier::REVERSED), None),
         (true, SelectionHighlightTextFormat::CrossedOut) => (
             "Зачёркнутый",
-            Style::default()
-                .add_modifier(Modifier::CROSSED_OUT)
-                .fg(best_terminal_color((227, 130, 136))),
+            Style::default().add_modifier(Modifier::CROSSED_OUT),
             None,
         ),
         (false, SelectionHighlightTextFormat::CrossedOut) => (
             "Зачёркнутый",
-            Style::default()
-                .add_modifier(Modifier::CROSSED_OUT)
-                .fg(best_terminal_color((227, 130, 136))),
+            Style::default().add_modifier(Modifier::CROSSED_OUT),
             None,
         ),
     }
 }
 
 pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset: SelectionHighlightPreset, is_ru: bool) -> String {
-    match choice {
+    let choice = normalized_color_choice(choice);
+    match &choice {
         UiColorChoice::Auto => {
             let named = selection_preset_color(fallback_preset);
             if is_ru {
@@ -640,36 +544,23 @@ pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset:
                 format!("Auto · {}", named.name_en)
             }
         }
-        UiColorChoice::Gradient { start, end } => {
-            if is_ru {
-                format!(
-                    "Градиент · {} → {}",
-                    start.to_ascii_uppercase(),
-                    end.to_ascii_uppercase(),
-                )
-            } else {
-                format!(
-                    "Gradient · {} → {}",
-                    start.to_ascii_uppercase(),
-                    end.to_ascii_uppercase(),
-                )
-            }
-        }
         _ => {
-            let named = match choice {
+            let named = match &choice {
                 UiColorChoice::Custom(hex) => named_color_for_hex(hex),
                 UiColorChoice::Preset(preset) => selection_preset_color(*preset),
-                UiColorChoice::Auto | UiColorChoice::Gradient { .. } => selection_preset_color(fallback_preset),
+                UiColorChoice::Auto | UiColorChoice::Gradient { .. } => {
+                    selection_preset_color(fallback_preset)
+                }
             };
             if is_ru {
-                match choice {
+                match &choice {
                     UiColorChoice::Custom(hex) => {
                         format!("{} · {}", named.name_ru, hex.to_ascii_uppercase())
                     }
                     _ => format!("{} · {}", named.name_ru, named.hex.to_ascii_uppercase()),
                 }
             } else {
-                match choice {
+                match &choice {
                     UiColorChoice::Custom(hex) => {
                         format!("{} · {}", named.name_en, hex.to_ascii_uppercase())
                     }

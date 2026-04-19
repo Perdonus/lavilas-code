@@ -269,18 +269,18 @@ impl UiColorChoice {
         for separator in ["->", "→", ",", ";", "|"] {
             if let Some((start_raw, end_raw)) = normalized.split_once(separator) {
                 let start = normalize_hex_color(start_raw)?;
-                let end = normalize_hex_color(end_raw)?;
-                return Some(Self::Gradient { start, end });
+                let _ = normalize_hex_color(end_raw)?;
+                return Some(Self::Custom(start));
             }
         }
         if let Some(rest) = normalized.strip_prefix("gradient:") {
             let mut segments = rest.split(':');
             let start = normalize_hex_color(segments.next()?)?;
-            let end = normalize_hex_color(segments.next()?)?;
+            let _ = normalize_hex_color(segments.next()?)?;
             if segments.next().is_some() {
                 return None;
             }
-            return Some(Self::Gradient { start, end });
+            return Some(Self::Custom(start));
         }
         if let Some(hex) = normalize_hex_color(normalized.as_str()) {
             return Some(Self::Custom(hex));
@@ -301,9 +301,7 @@ impl UiColorChoice {
             Self::Auto => "auto".to_string(),
             Self::Preset(preset) => preset.code().to_string(),
             Self::Custom(hex) => hex.clone(),
-            Self::Gradient { start, end } => {
-                format!("gradient:{}:{}", start.to_ascii_lowercase(), end.to_ascii_lowercase())
-            }
+            Self::Gradient { start, .. } => start.to_ascii_lowercase(),
         };
         serde_json::Value::String(code)
     }

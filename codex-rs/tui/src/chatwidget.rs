@@ -10866,33 +10866,29 @@ impl ChatWidget {
         spans
     }
 
+    fn normalized_popup_color_choice(choice: &UiColorChoice) -> UiColorChoice {
+        match choice {
+            UiColorChoice::Gradient { start, .. } => {
+                UiColorChoice::Custom(normalize_hex_color(start).unwrap_or_else(|| start.clone()))
+            }
+            other => other.clone(),
+        }
+    }
+
     fn popup_color_choices_equivalent(left: &UiColorChoice, right: &UiColorChoice) -> bool {
+        let left = Self::normalized_popup_color_choice(left);
+        let right = Self::normalized_popup_color_choice(right);
+
         if left == right {
             return true;
         }
 
-        match (left, right) {
+        match (&left, &right) {
             (UiColorChoice::Preset(left_preset), UiColorChoice::Custom(right_hex))
             | (UiColorChoice::Custom(right_hex), UiColorChoice::Preset(left_preset)) => {
                 normalize_hex_color(right_hex)
                     .is_some_and(|hex| hex.eq_ignore_ascii_case(selection_preset_color(*left_preset).hex))
             }
-            (
-                UiColorChoice::Gradient {
-                    start: left_start,
-                    end: left_end,
-                },
-                UiColorChoice::Gradient {
-                    start: right_start,
-                    end: right_end,
-                },
-            ) => normalize_hex_color(left_start)
-                .zip(normalize_hex_color(left_end))
-                .zip(normalize_hex_color(right_start).zip(normalize_hex_color(right_end)))
-                .is_some_and(|((left_start, left_end), (right_start, right_end))| {
-                    left_start.eq_ignore_ascii_case(right_start.as_str())
-                        && left_end.eq_ignore_ascii_case(right_end.as_str())
-                }),
             (UiColorChoice::Custom(left_hex), UiColorChoice::Custom(right_hex)) => {
                 normalize_hex_color(left_hex)
                     .zip(normalize_hex_color(right_hex))
@@ -10905,12 +10901,7 @@ impl ChatWidget {
     }
 
     fn parse_custom_color_input(raw: &str) -> Option<UiColorChoice> {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        UiColorChoice::from_code(trimmed)
+        normalize_hex_color(raw.trim()).map(UiColorChoice::Custom)
     }
 
     fn popup_current_color_choice(&self, target: PopupColorTarget) -> UiColorChoice {
@@ -11327,20 +11318,11 @@ impl ChatWidget {
     ) {
         let Some(choice) = Self::parse_custom_color_input(raw) else {
             self.add_error_message(if self.ui_language().is_ru() {
-                "Введите HEX-цвет (`#f7dce5`) или градиент из двух цветов (`#ffffff -> #1f2a44`)."
-                    .to_string()
+                "Введите HEX-цвет (`#f7dce5`).".to_string()
             } else {
-                "Enter a HEX color (`#f7dce5`) or a 2-stop gradient (`#ffffff -> #1f2a44`)."
-                    .to_string()
+                "Enter a HEX color (`#f7dce5`).".to_string()
             });
-            if ["->", "→", ",", ";", "|"]
-                .iter()
-                .any(|separator| raw.contains(separator))
-            {
-                self.open_selection_highlight_custom_gradient_prompt(target);
-            } else {
-                self.open_selection_highlight_custom_color_prompt(target);
-            }
+            self.open_selection_highlight_custom_color_prompt(target);
             return;
         };
 
@@ -11639,15 +11621,11 @@ impl ChatWidget {
             } else {
                 "Кастомизация".to_string()
             },
-            description: Some(if is_ru {
-                "Цвета и стили".to_string()
-            } else {
-                "Colors and styles".to_string()
-            }),
+            description: None,
             search_value: Some(if is_ru {
-                "кастомизация цвета градиент форматирование меню".to_string()
+                "кастомизация цвета форматирование меню".to_string()
             } else {
-                "customization colors gradients formatting menu".to_string()
+                "customization colors formatting menu".to_string()
             }),
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenSelectionHighlightPicker)
@@ -11662,11 +11640,7 @@ impl ChatWidget {
                 } else {
                     "Model".to_string()
                 },
-                description: Some(if is_ru {
-                    "Выбор модели".to_string()
-                } else {
-                    "Model".to_string()
-                }),
+                description: None,
                 search_value: Some(if is_ru {
                     "модель анализ reasoning провайдер effort".to_string()
                 } else {
@@ -11683,11 +11657,7 @@ impl ChatWidget {
                 } else {
                     "Model".to_string()
                 },
-                description: Some(if is_ru {
-                    "Выбор модели".to_string()
-                } else {
-                    "Model".to_string()
-                }),
+                description: None,
                 search_value: Some(if is_ru {
                     "модель анализ reasoning провайдер effort".to_string()
                 } else {
@@ -11716,11 +11686,7 @@ impl ChatWidget {
                 } else {
                     "Profiles".to_string()
                 },
-                description: Some(if is_ru {
-                    "Аккаунты".to_string()
-                } else {
-                    "Accounts".to_string()
-                }),
+                description: None,
                 search_value: Some(if is_ru {
                     "профили аккаунты api ключи провайдеры модели".to_string()
                 } else {
@@ -11742,17 +11708,7 @@ impl ChatWidget {
                 } else {
                     "Включить быстрые пресеты моделей".to_string()
                 },
-                description: Some(if self.current_model_presets_enabled() {
-                    if is_ru {
-                        "Быстрый выбор".to_string()
-                    } else {
-                        "Quick presets".to_string()
-                    }
-                } else if is_ru {
-                    "Выключены".to_string()
-                } else {
-                    "Off".to_string()
-                }),
+                description: None,
                 search_value: Some(if is_ru {
                     "пресеты моделей быстрый выбор".to_string()
                 } else {
@@ -11879,11 +11835,7 @@ impl ChatWidget {
             } else {
                 "Разрешения и подтверждения".to_string()
             },
-            description: Some(if is_ru {
-                "Доступ".to_string()
-            } else {
-                "Access".to_string()
-            }),
+            description: None,
             search_value: Some(if is_ru {
                 "разрешения подтверждения доступ sandbox approvals".to_string()
             } else {
@@ -11901,11 +11853,7 @@ impl ChatWidget {
                 } else {
                     "Voice".to_string()
                 },
-                description: Some(if is_ru {
-                    "Звук".to_string()
-                } else {
-                    "Audio".to_string()
-                }),
+                description: None,
                 search_value: Some(if is_ru {
                     "голос звук микрофон realtime".to_string()
                 } else {
@@ -12091,11 +12039,7 @@ impl ChatWidget {
 
         items.push(SelectionItem {
             name: if is_ru { "Цвет".to_string() } else { "Color".to_string() },
-            description: Some(if is_ru {
-                "Палитра".to_string()
-            } else {
-                "Palette".to_string()
-            }),
+            description: None,
             search_value: Some(if is_ru {
                 "цвет палитра выделение основной текст описание hex".to_string()
             } else {
@@ -12114,11 +12058,7 @@ impl ChatWidget {
             } else {
                 "Formatting".to_string()
             },
-            description: Some(if is_ru {
-                "Стили".to_string()
-            } else {
-                "Styles".to_string()
-            }),
+            description: None,
             search_value: Some(if is_ru {
                 "форматирование жирный курсив подчёркивание зачёркивание".to_string()
             } else {
@@ -12178,11 +12118,11 @@ impl ChatWidget {
             name: String::new(),
             name_prefix_spans: self.popup_color_choice_label_spans(
                 PopupColorTarget::Selection,
-                &self.current_selection_highlight_color(),
+                &Self::normalized_popup_color_choice(&self.current_selection_highlight_color()),
                 Self::popup_color_target_label_for_locale(PopupColorTarget::Selection, is_ru),
             ),
             description: Some(color_preview_description(
-                &self.current_selection_highlight_color(),
+                &Self::normalized_popup_color_choice(&self.current_selection_highlight_color()),
                 self.current_selection_highlight_preset(),
                 is_ru,
             )),
@@ -12250,7 +12190,7 @@ impl ChatWidget {
                 ),
             ),
         ] {
-            let choice = self.popup_current_color_choice(target);
+            let choice = Self::normalized_popup_color_choice(&self.popup_current_color_choice(target));
             items.push(SelectionItem {
                 name: String::new(),
                 name_prefix_spans: self.popup_color_choice_label_spans(
@@ -12318,7 +12258,8 @@ impl ChatWidget {
         target: PopupColorTarget,
     ) {
         let is_ru = self.ui_language().is_ru();
-        let current_choice = self.popup_current_color_choice(target);
+        let current_choice =
+            Self::normalized_popup_color_choice(&self.popup_current_color_choice(target));
         let fallback_preset = self.current_selection_highlight_preset();
         let target_is_selection = matches!(target, PopupColorTarget::Selection);
         let mut items = vec![SelectionItem {
@@ -12485,7 +12426,7 @@ impl ChatWidget {
             UiColorChoice::Custom(hex) => UiColorChoice::Custom(hex.clone()),
             _ => UiColorChoice::Custom("#f7dce5".to_string()),
         };
-        let custom_label = if is_ru { "Свой HEX" } else { "Custom HEX" };
+        let custom_label = if is_ru { "Свой цвет" } else { "Custom color" };
         items.push(SelectionItem {
             name: String::new(),
             name_prefix_spans: self.popup_color_choice_label_spans(
@@ -12519,60 +12460,6 @@ impl ChatWidget {
             category_tags: Self::popup_target_state_tags(
                 matches!(&current_choice, UiColorChoice::Custom(_)),
             ),
-            ..Default::default()
-        });
-
-        let gradient_is_current = matches!(&current_choice, UiColorChoice::Gradient { .. });
-        let gradient_choice = if let UiColorChoice::Gradient { start, end } = &current_choice {
-            UiColorChoice::Gradient {
-                start: start.clone(),
-                end: end.clone(),
-            }
-        } else {
-            UiColorChoice::Gradient {
-                start: "#ffffff".to_string(),
-                end: "#1f2a44".to_string(),
-            }
-        };
-        let gradient_label = if is_ru {
-            "Свой градиент"
-        } else {
-            "Custom gradient"
-        };
-        items.push(SelectionItem {
-            name: String::new(),
-            name_prefix_spans: self.popup_color_choice_label_spans(
-                target,
-                &gradient_choice,
-                gradient_label,
-            ),
-            description: Some(match &current_choice {
-                UiColorChoice::Gradient { start, end } => color_preview_description(
-                    &UiColorChoice::Gradient {
-                        start: start.clone(),
-                        end: end.clone(),
-                    },
-                    fallback_preset,
-                    is_ru,
-                ),
-                _ => {
-                    if is_ru {
-                        "2 цвета".to_string()
-                    } else {
-                        "2 colors".to_string()
-                    }
-                }
-            }),
-            search_value: Some(if is_ru {
-                "свой градиент два цвета hex".to_string()
-            } else {
-                "custom gradient two colors hex".to_string()
-            }),
-            actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenSelectionHighlightCustomGradientPrompt { target })
-            })],
-            dismiss_on_select: true,
-            category_tags: Self::popup_target_state_tags(gradient_is_current),
             ..Default::default()
         });
 
@@ -12612,16 +12499,20 @@ impl ChatWidget {
         let tx = self.app_event_tx.clone();
         let target_label = Self::popup_color_target_label_for_locale(target, is_ru).to_string();
         let view = CustomPromptView::new(
-            if is_ru { "Свой HEX".to_string() } else { "Свой HEX".to_string() },
+            if is_ru {
+                "Свой цвет".to_string()
+            } else {
+                "Custom color".to_string()
+            },
             if is_ru {
                 "Введите HEX и нажмите Enter".to_string()
             } else {
-                "Введите HEX-цвет и нажмите Enter".to_string()
+                "Enter HEX and press Enter".to_string()
             },
             Some(if is_ru {
                 format!("{target_label} · пример #f7dce5")
             } else {
-                format!("{target_label} · пример #f7dce5")
+                format!("{target_label} · example #f7dce5")
             }),
             Box::new(move |prompt: String| {
                 tx.send(AppEvent::ApplySelectionHighlightCustomColorInput {
@@ -12637,33 +12528,7 @@ impl ChatWidget {
         &mut self,
         target: PopupColorTarget,
     ) {
-        let is_ru = self.ui_language().is_ru();
-        let tx = self.app_event_tx.clone();
-        let target_label = Self::popup_color_target_label_for_locale(target, is_ru).to_string();
-        let view = CustomPromptView::new(
-            if is_ru {
-                "Свой градиент".to_string()
-            } else {
-                "Свой градиент".to_string()
-            },
-            if is_ru {
-                "Введите 2 HEX-цвета и нажмите Enter".to_string()
-            } else {
-                "Введите 2 HEX-цвета и нажмите Enter".to_string()
-            },
-            Some(if is_ru {
-                format!("{target_label} · пример #ffffff -> #1f2a44")
-            } else {
-                format!("{target_label} · пример #ffffff -> #1f2a44")
-            }),
-            Box::new(move |prompt: String| {
-                tx.send(AppEvent::ApplySelectionHighlightCustomColorInput {
-                    target,
-                    raw: prompt,
-                });
-            }),
-        );
-        self.bottom_pane.show_view(Box::new(view));
+        self.open_selection_highlight_custom_color_prompt(target);
     }
 
     pub(crate) fn open_selection_highlight_format_picker_popup(&mut self) {
@@ -12764,9 +12629,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: if prefix.is_some() { label.to_string() } else { String::new() },
                 name_prefix_spans,
-                description: Some(Self::selection_highlight_format_description_for_locale(
-                    format, enabled, is_ru,
-                )),
+                description: None,
                 search_value: Some(if is_ru {
                     format!("{label} форматирование")
                 } else {
@@ -12906,11 +12769,7 @@ impl ChatWidget {
             } else {
                 "Префикс команд".to_string()
             }),
-            subtitle: Some(if is_ru {
-                "Выберите символ, с которого начинаются команды и всплывающий список".to_string()
-            } else {
-                "Выберите символ, который открывает команды и всплывающее меню".to_string()
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,

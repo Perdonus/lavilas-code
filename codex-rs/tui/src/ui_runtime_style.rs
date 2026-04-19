@@ -115,7 +115,7 @@ pub(crate) fn runtime_text_style(role: RuntimeTextRole) -> Style {
         default_style
     } else {
         let rgb = resolve_color_choice_rgb(&choice, fallback_preset);
-        default_style.fg(best_terminal_color(visible_terminal_rgb(rgb)))
+        default_style.fg(best_terminal_color(rgb))
     };
     apply_text_formats(style, formats)
 }
@@ -199,24 +199,11 @@ pub(crate) fn patch_line_for_role(
     let preferences = runtime_preferences();
     let (choice, formats, default_style) = role_choice(&preferences, role);
     let fallback_preset = preferences.selection_highlight_preset;
-    if matches!(choice, UiColorChoice::Gradient { .. }) {
-        return patch_gradient_line_for_role(
-            line,
-            &choice,
-            fallback_preset,
-            apply_text_formats(default_style, formats),
-            only_plain,
-        );
-    }
-
     let style = if matches!(choice, UiColorChoice::Auto) {
         apply_text_formats(default_style, formats)
     } else {
         let rgb = resolve_color_choice_rgb(&choice, fallback_preset);
-        apply_text_formats(
-            default_style.fg(best_terminal_color(visible_terminal_rgb(rgb))),
-            formats,
-        )
+        apply_text_formats(default_style.fg(best_terminal_color(rgb)), formats)
     };
     let spans = line
         .spans

@@ -247,13 +247,12 @@ impl CommandPopup {
             .map(|(item, indices)| {
                 let CommandItem::Builtin(cmd) = item;
                 let name = format!("{}{}", command_prefix(), self.display_name(cmd));
-                let description = cmd.description().to_string();
                 GenericDisplayRow {
                     name,
                     name_prefix_spans: Vec::new(),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
-                    description: Some(description),
+                    description: None,
                     category_tag: None,
                     category_tags: Vec::new(),
                     wrap_indent: None,
