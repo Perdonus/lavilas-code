@@ -201,6 +201,42 @@ fn recursive_registration_downgrades_to_non_recursive_after_drop() {
 }
 
 #[test]
+fn live_watcher_is_initialized_lazily_and_dropped_when_unused() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let root = temp_dir.path().join("watched-dir");
+    std::fs::create_dir(&root).expect("create root");
+
+    let watcher = Arc::new(FileWatcher::new().expect("watcher"));
+    {
+        let inner = watcher.inner.as_ref().expect("watcher inner");
+        let inner = inner.lock().expect("inner lock");
+        assert_eq!(inner.watcher.is_some(), false);
+    }
+
+    let (subscriber, _rx) = watcher.add_subscriber();
+    let registration = subscriber.register_path(root.clone(), /*recursive*/ true);
+
+    {
+        let inner = watcher.inner.as_ref().expect("watcher inner");
+        let inner = inner.lock().expect("inner lock");
+        assert_eq!(inner.watcher.is_some(), true);
+        assert_eq!(
+            inner.watched_paths.get(&root),
+            Some(&RecursiveMode::Recursive)
+        );
+    }
+
+    drop(registration);
+
+    {
+        let inner = watcher.inner.as_ref().expect("watcher inner");
+        let inner = inner.lock().expect("inner lock");
+        assert_eq!(inner.watcher.is_some(), false);
+        assert_eq!(inner.watched_paths.get(&root), None);
+    }
+}
+
+#[test]
 fn unregister_holds_state_lock_until_unwatch_finishes() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let root = temp_dir.path().join("watched-dir");

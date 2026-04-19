@@ -177,7 +177,8 @@ impl PathWatchCounts {
 }
 
 struct FileWatcherInner {
-    watcher: RecommendedWatcher,
+    watcher: Option<RecommendedWatcher>,
+    raw_tx: mpsc::UnboundedSender<notify::Result<Event>>,
     watched_paths: HashMap<PathBuf, RecursiveMode>,
 }
 
@@ -271,12 +272,9 @@ impl FileWatcher {
     /// on the current Tokio runtime.
     pub fn new() -> notify::Result<Self> {
         let (raw_tx, raw_rx) = mpsc::unbounded_channel();
-        let raw_tx_clone = raw_tx;
-        let watcher = notify::recommended_watcher(move |res| {
-            let _ = raw_tx_clone.send(res);
-        })?;
         let inner = FileWatcherInner {
-            watcher,
+            watcher: None,
+            raw_tx,
             watched_paths: HashMap::new(),
         };
         let state = Arc::new(RwLock::new(WatchState::default()));
@@ -468,24 +466,56 @@ impl FileWatcher {
         }
 
         if existing_mode.is_some() {
-            if let Err(err) = guard.watcher.unwatch(path) {
+            if let Some(watcher) = guard.watcher.as_mut()
+                && let Err(err) = watcher.unwatch(path)
+            {
                 warn!("failed to unwatch {}: {err}", path.display());
             }
             guard.watched_paths.remove(path);
         }
 
         let Some(next_mode) = next_mode else {
+            if guard.watched_paths.is_empty() {
+                guard.watcher = None;
+            }
             return;
         };
         if !path.exists() {
             return;
         }
 
-        if let Err(err) = guard.watcher.watch(path, next_mode) {
+        if !Self::ensure_live_watcher(guard) {
+            return;
+        }
+
+        let Some(watcher) = guard.watcher.as_mut() else {
+            return;
+        };
+        if let Err(err) = watcher.watch(path, next_mode) {
             warn!("failed to watch {}: {err}", path.display());
             return;
         }
         guard.watched_paths.insert(path.to_path_buf(), next_mode);
+    }
+
+    fn ensure_live_watcher(inner: &mut FileWatcherInner) -> bool {
+        if inner.watcher.is_some() {
+            return true;
+        }
+
+        let raw_tx = inner.raw_tx.clone();
+        match notify::recommended_watcher(move |res| {
+            let _ = raw_tx.send(res);
+        }) {
+            Ok(watcher) => {
+                inner.watcher = Some(watcher);
+                true
+            }
+            Err(err) => {
+                warn!("failed to initialize file watcher on demand: {err}");
+                false
+            }
+        }
     }
 
     async fn notify_subscribers(state: &RwLock<WatchState>, event_paths: &[PathBuf]) {

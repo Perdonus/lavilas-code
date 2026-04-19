@@ -44,9 +44,13 @@ use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::sync::Weak;
 use std::time::Duration;
 use tracing::warn;
 
@@ -66,6 +70,17 @@ mod threads;
 // metadata, rather than the exact sum of all persisted SQLite column bytes.
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
 const LOG_PARTITION_ROW_LIMIT: i64 = 1_000;
+const STATE_DB_MAX_CONNECTIONS: u32 = 2;
+const LOGS_DB_MAX_CONNECTIONS: u32 = 1;
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct StateRuntimeCacheKey {
+    codex_home: PathBuf,
+    default_provider: String,
+}
+
+static STATE_RUNTIME_CACHE: OnceLock<Mutex<HashMap<StateRuntimeCacheKey, Weak<StateRuntime>>>> =
+    OnceLock::new();
 
 #[derive(Clone)]
 pub struct StateRuntime {
@@ -82,6 +97,30 @@ impl StateRuntime {
     /// keeping logs in a dedicated file to reduce lock contention with the
     /// rest of the state store.
     pub async fn init(codex_home: PathBuf, default_provider: String) -> anyhow::Result<Arc<Self>> {
+        let cache_key = StateRuntimeCacheKey {
+            codex_home: codex_home.clone(),
+            default_provider: default_provider.clone(),
+        };
+        if let Some(runtime) = cached_runtime(&cache_key) {
+            return Ok(runtime);
+        }
+
+        let runtime = Self::init_uncached(codex_home, default_provider).await?;
+        let mut cache = state_runtime_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.retain(|_, runtime| runtime.strong_count() > 0);
+        if let Some(existing) = cache.get(&cache_key).and_then(Weak::upgrade) {
+            return Ok(existing);
+        }
+        cache.insert(cache_key, Arc::downgrade(&runtime));
+        Ok(runtime)
+    }
+
+    async fn init_uncached(
+        codex_home: PathBuf,
+        default_provider: String,
+    ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
         let current_state_name = state_db_filename();
         let current_logs_name = logs_db_filename();
@@ -146,10 +185,22 @@ fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
         .log_statements(LevelFilter::Off)
 }
 
+fn state_runtime_cache() -> &'static Mutex<HashMap<StateRuntimeCacheKey, Weak<StateRuntime>>> {
+    STATE_RUNTIME_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_runtime(cache_key: &StateRuntimeCacheKey) -> Option<Arc<StateRuntime>> {
+    let mut cache = state_runtime_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.retain(|_, runtime| runtime.strong_count() > 0);
+    cache.get(cache_key).and_then(Weak::upgrade)
+}
+
 async fn open_state_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::Result<SqlitePool> {
     let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(STATE_DB_MAX_CONNECTIONS)
         .connect_with(options)
         .await?;
     migrator.run(&pool).await?;
@@ -175,7 +226,7 @@ async fn open_state_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::
 async fn open_logs_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::Result<SqlitePool> {
     let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(LOGS_DB_MAX_CONNECTIONS)
         .connect_with(options)
         .await?;
     migrator.run(&pool).await?;
@@ -267,4 +318,35 @@ fn should_remove_db_file(file_name: &str, current_name: &str, base_name: &str) -
         return false;
     };
     !version_suffix.is_empty() && version_suffix.chars().all(|ch| ch.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reuses_cached_runtime_for_same_home_and_provider() {
+        let codex_home = test_support::unique_temp_dir();
+        let first = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("first runtime");
+        let second = StateRuntime::init(codex_home, "test-provider".to_string())
+            .await
+            .expect("second runtime");
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn keeps_distinct_cache_entries_per_provider() {
+        let codex_home = test_support::unique_temp_dir();
+        let first = StateRuntime::init(codex_home.clone(), "provider-a".to_string())
+            .await
+            .expect("provider-a runtime");
+        let second = StateRuntime::init(codex_home, "provider-b".to_string())
+            .await
+            .expect("provider-b runtime");
+
+        assert!(!Arc::ptr_eq(&first, &second));
+    }
 }
