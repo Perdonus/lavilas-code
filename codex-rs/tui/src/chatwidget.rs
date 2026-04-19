@@ -12044,7 +12044,7 @@ impl ChatWidget {
                 "← Назад в настройки".to_string()
             } else {
                 "← Back".to_string()
-            }),
+            },
             description: None,
             search_value: Some(if is_ru {
                 "назад настройки".to_string()
@@ -12162,7 +12162,7 @@ impl ChatWidget {
                 "← Назад".to_string()
             } else {
                 "← Back".to_string()
-            }),
+            },
             description: None,
             search_value: Some(if is_ru {
                 "назад выделение цвет".to_string()
@@ -12326,7 +12326,7 @@ impl ChatWidget {
                 "← Назад".to_string()
             } else {
                 "← Back".to_string()
-            }),
+            },
             description: None,
             actions: vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenSelectionHighlightColorPicker)
@@ -12673,7 +12673,7 @@ impl ChatWidget {
                 "← Назад".to_string()
             } else {
                 "← Back".to_string()
-            }),
+            },
             description: None,
             actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))],
             dismiss_on_select: true,
@@ -12845,7 +12845,7 @@ impl ChatWidget {
                 "← Назад в настройки".to_string()
             } else {
                 "← Back".to_string()
-            }),
+            },
             description: None,
             search_value: Some(if is_ru {
                 "назад настройки".to_string()
