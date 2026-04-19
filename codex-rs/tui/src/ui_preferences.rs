@@ -6,6 +6,8 @@ use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 pub(crate) const MISTRAL_DEFAULT_PROFILE_MODEL: &str = "devstral-latest";
 pub(crate) const MISTRAL_CANONICAL_PROFILE_MODEL: &str = "devstral-latest";
@@ -19,6 +21,15 @@ pub(crate) const MISTRAL_REASONING_PROFILE_MODEL: &str = "magistral-medium-lates
 const NO_REASONING_LEVELS: &[&str] = &[];
 const MISTRAL_REASONING_LEVELS: &[&str] = &["none", "high"];
 const OPENAI_REASONING_LEVELS: &[&str] = &["low", "medium", "high", "xhigh"];
+static UI_PREFERENCES_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn bump_ui_preferences_revision() {
+    UI_PREFERENCES_REVISION.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn ui_preferences_revision() -> u64 {
+    UI_PREFERENCES_REVISION.load(Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiLanguage {
@@ -124,15 +135,8 @@ impl SelectionHighlightTextFormat {
         self as u16
     }
 
-    pub(crate) const fn all() -> [Self; 6] {
-        [
-            Self::Bold,
-            Self::Semibold,
-            Self::Italic,
-            Self::Underlined,
-            Self::Mono,
-            Self::CrossedOut,
-        ]
+    pub(crate) const fn all() -> [Self; 4] {
+        [Self::Bold, Self::Italic, Self::Underlined, Self::CrossedOut]
     }
 }
 
@@ -143,12 +147,8 @@ pub(crate) struct SelectionHighlightTextFormats {
 
 impl SelectionHighlightTextFormats {
     const ALL_BITS: u16 = SelectionHighlightTextFormat::Bold.bit()
-        | SelectionHighlightTextFormat::Semibold.bit()
         | SelectionHighlightTextFormat::Italic.bit()
         | SelectionHighlightTextFormat::Underlined.bit()
-        | SelectionHighlightTextFormat::Mono.bit()
-        | SelectionHighlightTextFormat::Dim.bit()
-        | SelectionHighlightTextFormat::Reversed.bit()
         | SelectionHighlightTextFormat::CrossedOut.bit();
 
     pub(crate) const fn empty() -> Self {
@@ -1063,7 +1063,9 @@ fn save_settings_json(codex_home: &Path, value: &serde_json::Value) -> io::Resul
     std::fs::create_dir_all(&dir)?;
     let path = settings_path(codex_home);
     let payload = serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string()) + "\n";
-    std::fs::write(path, payload)
+    std::fs::write(path, payload)?;
+    bump_ui_preferences_revision();
+    Ok(())
 }
 
 fn profile_catalog_seeds(provider: &str) -> Vec<ProfileCatalogSeed> {
@@ -1528,17 +1530,17 @@ mod tests {
     }
 
     #[test]
-    fn selection_highlight_formats_keep_last_weight_toggle() {
+    fn selection_highlight_formats_ignore_semibold_toggle() {
         let formats = SelectionHighlightTextFormats::empty()
             .with_toggled(SelectionHighlightTextFormat::Bold)
             .with_toggled(SelectionHighlightTextFormat::Semibold);
 
-        assert!(!formats.contains(SelectionHighlightTextFormat::Bold));
-        assert!(formats.contains(SelectionHighlightTextFormat::Semibold));
+        assert!(formats.contains(SelectionHighlightTextFormat::Bold));
+        assert!(!formats.contains(SelectionHighlightTextFormat::Semibold));
     }
 
     #[test]
-    fn selection_highlight_formats_switch_back_to_bold() {
+    fn selection_highlight_formats_drop_semibold_when_toggled_first() {
         let formats = SelectionHighlightTextFormats::empty()
             .with_toggled(SelectionHighlightTextFormat::Semibold)
             .with_toggled(SelectionHighlightTextFormat::Bold);

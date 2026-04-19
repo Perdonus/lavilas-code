@@ -9188,29 +9188,13 @@ impl ChatWidget {
             })];
 
             let is_current = !items.iter().any(|item| item.is_current);
-            let description = Some(if is_ru && provider_supports_reasoning {
-                format!(
-                    "Открыть весь каталог и вручную подобрать модель и режим размышлений. Сейчас активна: {current_label}"
-                )
-            } else if is_ru {
-                format!(
-                    "Открыть весь каталог и вручную выбрать модель. Сейчас активна: {current_label}"
-                )
-            } else if provider_supports_reasoning {
-                format!(
-                    "Открыть полный каталог моделей и выбрать режим размышлений. Сейчас: {current_label}"
-                )
-            } else {
-                format!("Открыть полный каталог моделей и выбрать модель. Сейчас: {current_label}")
-            });
-
             items.push(SelectionItem {
                 name: if is_ru {
                     "Полный каталог моделей".to_string()
                 } else {
                     "Полный каталог моделей".to_string()
                 },
-                description,
+                description: None,
                 search_value: Some(if is_ru {
                     "полный каталог все модели manual reasoning".to_string()
                 } else {
@@ -9403,30 +9387,14 @@ impl ChatWidget {
     }
 
     fn provider_quick_preset_description(&self, kind: &str, preset: &ModelPreset) -> String {
-        let is_ru = self.ui_language().is_ru();
-        let provider_name = self.config.model_provider.name.as_str();
         let model_label = Self::model_picker_label(preset);
-        let reasoning_label = self.reasoning_effort_label(preset.default_reasoning_effort);
-
-        match (is_ru, kind) {
-            (true, "fast") => format!(
-                "Быстрый профиль {provider_name}: {model_label}. Следом откроется выбор размышлений, рекомендован режим: {reasoning_label}."
-            ),
-            (true, "latest") => format!(
-                "Основной актуальный профиль {provider_name}: {model_label}. После выбора можно уточнить бюджет размышлений."
-            ),
-            (true, "tools") => format!(
-                "Профиль {provider_name} для ходов с MCP, терминалом и инструментами: {model_label}. Затем выберите бюджет размышлений."
-            ),
-            (false, "fast") => format!(
-                "Lower-latency {provider_name} profile: {model_label}. Next you'll pick a reasoning budget; recommended: {reasoning_label}."
-            ),
-            (false, "latest") => format!(
-                "Текущий профиль {provider_name} по умолчанию: {model_label}. При необходимости дальше можно уточнить режим размышлений."
-            ),
-            (false, "tools") => format!(
-                "Профиль {provider_name} для MCP, терминала и ходов с большим числом инструментов: {model_label}. Дальше выберите бюджет размышлений."
-            ),
+        match (self.ui_language().is_ru(), kind) {
+            (true, "fast") => format!("Быстрый · {model_label}"),
+            (true, "latest") => format!("Основной · {model_label}"),
+            (true, "tools") => format!("Инструменты · {model_label}"),
+            (false, "fast") => format!("Fast · {model_label}"),
+            (false, "latest") => format!("Latest · {model_label}"),
+            (false, "tools") => format!("Tools · {model_label}"),
             _ => model_label,
         }
     }
@@ -9530,36 +9498,10 @@ impl ChatWidget {
             });
         }
 
-        let subtitle = if self.config.model_provider.is_openai() {
-            if is_ru {
-                "Полный каталог моделей. Для ручного выбора можно использовать профиль провайдера или изменить модель в конфиге."
-                    .to_string()
-            } else {
-                "Полный каталог моделей. Для ручного выбора можно использовать профиль провайдера или изменить модель в конфиге."
-                    .to_string()
-            }
-        } else if !self.current_provider_supports_reasoning_controls() {
-            if is_ru {
-                format!(
-                    "Провайдер: {} ({}). Выберите модель: этот провайдер не поддерживает отдельный выбор бюджета размышлений.",
-                    self.config.model_provider.name, self.config.model_provider_id
-                )
-            } else {
-                format!(
-                    "Провайдер: {} ({}). Выберите модель. Этот провайдер не поддерживает отдельный выбор бюджета размышлений.",
-                    self.config.model_provider.name, self.config.model_provider_id
-                )
-            }
-        } else if is_ru {
-            format!(
-                "Провайдер: {} ({}). Сначала выберите модель, затем подберите режим размышлений под задачу.",
-                self.config.model_provider.name, self.config.model_provider_id
-            )
+        let subtitle = if is_ru {
+            format!("{} · {}", self.config.model_provider.name, self.config.model_provider_id)
         } else {
-            format!(
-                "Провайдер: {} ({}). Выберите модель и режим размышлений для этого провайдера.",
-                self.config.model_provider.name, self.config.model_provider_id
-            )
+            format!("{} · {}", self.config.model_provider.name, self.config.model_provider_id)
         };
         let header = self.model_menu_header(
             if is_ru {
@@ -10595,56 +10537,45 @@ impl ChatWidget {
     ) -> String {
         let state = Self::selection_highlight_fill_label_for_locale(enabled, is_ru);
         match (is_ru, format) {
-            (true, SelectionHighlightTextFormat::Bold) => {
-                format!("{state}. Добавляет плотное начертание выбранной строке.")
-            }
-            (true, SelectionHighlightTextFormat::Semibold) => {
-                format!("{state}. Делает мягкий акцент без полного жирного начертания.")
-            }
-            (true, SelectionHighlightTextFormat::Italic) => {
-                format!("{state}. Добавляет наклон там, где терминал это поддерживает, и усиливает акцент цветом.")
-            }
-            (true, SelectionHighlightTextFormat::Underlined) => {
-                format!("{state}. Подчёркивает активную строку и дублирует эффект цветом для совместимости.")
-            }
-            (true, SelectionHighlightTextFormat::Mono) => {
-                format!(
-                    "{state}. Добавляет кодовый акцент; это не отдельная гарнитура на уровне элемента."
-                )
-            }
-            (true, SelectionHighlightTextFormat::Dim) => {
-                format!("{state}. Делает текст мягче и спокойнее.")
-            }
-            (true, SelectionHighlightTextFormat::Reversed) => {
-                format!("{state}. Инвертирует пары foreground/background.")
-            }
-            (true, SelectionHighlightTextFormat::CrossedOut) => {
-                format!("{state}. Добавляет зачёркивание и дублирует эффект цветом там, где терминал режет ANSI-атрибуты.")
-            }
-            (false, SelectionHighlightTextFormat::Bold) => {
-                format!("{state}. Adds a heavier selected-row weight.")
-            }
-            (false, SelectionHighlightTextFormat::Semibold) => {
-                format!("{state}. Adds a softer emphasis than full bold.")
-            }
-            (false, SelectionHighlightTextFormat::Italic) => {
-                format!("{state}. Adds italic where the terminal supports it and reinforces it with color.")
-            }
-            (false, SelectionHighlightTextFormat::Underlined) => {
-                format!("{state}. Underlines the active row and reinforces it with color for compatibility.")
-            }
-            (false, SelectionHighlightTextFormat::Mono) => {
-                format!("{state}. Adds a code-like accent; it is not a separate per-element font.")
-            }
-            (false, SelectionHighlightTextFormat::Dim) => {
-                format!("{state}. Softens the text tone.")
-            }
-            (false, SelectionHighlightTextFormat::Reversed) => {
-                format!("{state}. Reverses foreground and background.")
-            }
-            (false, SelectionHighlightTextFormat::CrossedOut) => {
-                format!("{state}. Adds strike-through and reinforces it with color where ANSI support is weak.")
-            }
+            (true, SelectionHighlightTextFormat::Bold) => format!("{state} · акцент"),
+            (true, SelectionHighlightTextFormat::Italic) => format!("{state} · наклон"),
+            (true, SelectionHighlightTextFormat::Underlined) => format!("{state} · линия"),
+            (true, SelectionHighlightTextFormat::CrossedOut) => format!("{state} · зачерк"),
+            (false, SelectionHighlightTextFormat::Bold) => format!("{state} · accent"),
+            (false, SelectionHighlightTextFormat::Italic) => format!("{state} · italic"),
+            (false, SelectionHighlightTextFormat::Underlined) => format!("{state} · underline"),
+            (false, SelectionHighlightTextFormat::CrossedOut) => format!("{state} · strike"),
+            (_, SelectionHighlightTextFormat::Semibold)
+            | (_, SelectionHighlightTextFormat::Mono)
+            | (_, SelectionHighlightTextFormat::Dim)
+            | (_, SelectionHighlightTextFormat::Reversed) => state.to_string(),
+        }
+    }
+
+    fn selection_highlight_format_summary_for_locale(
+        formats: SelectionHighlightTextFormats,
+        is_ru: bool,
+    ) -> String {
+        if formats.is_empty() {
+            return if is_ru {
+                "Без форматов".to_string()
+            } else {
+                "No styles".to_string()
+            };
+        }
+
+        let labels = SelectionHighlightTextFormat::all()
+            .into_iter()
+            .filter(|format| formats.contains(*format))
+            .map(|format| Self::selection_highlight_format_label_for_locale(format, is_ru))
+            .collect::<Vec<_>>();
+
+        if labels.len() <= 2 {
+            labels.join(", ")
+        } else if is_ru {
+            format!("{} формата", labels.len())
+        } else {
+            format!("{} styles", labels.len())
         }
     }
 
@@ -11239,20 +11170,6 @@ impl ChatWidget {
         set_selection_highlight_fill(preferences.selection_highlight_fill);
         set_selection_highlight_text_formats(preferences.selection_highlight_text_formats);
         slash_commands::set_hidden_command_keys(preferences.hidden_commands);
-        if let Some(active_font_id) = preferences.active_font_id
-            && let Some(font) = preferences
-                .installed_fonts
-                .into_iter()
-                .find(|font| font.id == active_font_id)
-        {
-            if installed_font_requires_repair(self.config.codex_home.as_path(), &font) {
-                self.app_event_tx.send(AppEvent::InstallGoogleFont {
-                    family: font.family.clone(),
-                });
-                return;
-            }
-            let _ = set_terminal_font(font.family.as_str());
-        }
     }
 
     pub(crate) fn apply_profiles_language(&mut self, lang: &str) {
@@ -11702,7 +11619,6 @@ impl ChatWidget {
         let hidden_count = self.current_hidden_command_count();
         let lang_label = self.ui_language_label(self.ui_language());
         let is_ru = self.ui_language().is_ru();
-        let highlight_summary = self.current_selection_highlight_summary();
         let replace_active = self.bottom_pane.active_view_id() == Some(CUSTOM_SETTINGS_VIEW_ID);
         let initial_selected_idx = self
             .bottom_pane
@@ -11724,30 +11640,14 @@ impl ChatWidget {
                 "Кастомизация".to_string()
             },
             description: Some(if is_ru {
-                format!(
-                    "Выделение: {highlight_summary}. Списки: {}. Ответы: {}. Раздумья: {}. Команды: {}. Вывод: {}. Шрифт: {}.",
-                    self.current_list_text_summary(),
-                    self.current_reply_text_summary(),
-                    self.current_reasoning_text_summary(),
-                    self.current_command_text_summary(),
-                    self.current_command_output_text_summary(),
-                    self.current_font_summary()
-                )
+                "Цвета и стили".to_string()
             } else {
-                format!(
-                    "Selection: {highlight_summary}. Lists: {}. Replies: {}. Reasoning: {}. Commands: {}. Output: {}. Font: {}.",
-                    self.current_list_text_summary(),
-                    self.current_reply_text_summary(),
-                    self.current_reasoning_text_summary(),
-                    self.current_command_text_summary(),
-                    self.current_command_output_text_summary(),
-                    self.current_font_summary()
-                )
+                "Colors and styles".to_string()
             }),
             search_value: Some(if is_ru {
-                "кастомизация цвета градиент форматирование шрифты меню".to_string()
+                "кастомизация цвета градиент форматирование меню".to_string()
             } else {
-                "customization colors gradients formatting fonts menu".to_string()
+                "customization colors gradients formatting menu".to_string()
             }),
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenSelectionHighlightPicker)
@@ -11758,11 +11658,15 @@ impl ChatWidget {
         if has_picker_models {
             items.push(SelectionItem {
                 name: if is_ru {
-                    "Модель и размышления".to_string()
+                    "Модель".to_string()
                 } else {
-                    "Модель и размышления".to_string()
+                    "Model".to_string()
                 },
-                description: Some(self.current_model_settings_summary()),
+                description: Some(if is_ru {
+                    "Выбор модели".to_string()
+                } else {
+                    "Model".to_string()
+                }),
                 search_value: Some(if is_ru {
                     "модель анализ reasoning провайдер effort".to_string()
                 } else {
@@ -11775,14 +11679,14 @@ impl ChatWidget {
         } else {
             items.push(SelectionItem {
                 name: if is_ru {
-                    "Модель и размышления".to_string()
+                    "Модель".to_string()
                 } else {
-                    "Модель и размышления".to_string()
+                    "Model".to_string()
                 },
                 description: Some(if is_ru {
-                    "Полный каталог моделей откроется после инициализации сессии.".to_string()
+                    "Выбор модели".to_string()
                 } else {
-                    "Полный каталог моделей становится доступен после запуска сессии.".to_string()
+                    "Model".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "модель анализ reasoning провайдер effort".to_string()
@@ -11791,10 +11695,9 @@ impl ChatWidget {
                 }),
                 is_disabled: true,
                 disabled_reason: Some(if is_ru {
-                    "Сессия ещё не готова или каталог моделей не успел обновиться.".to_string()
+                    "Сессия ещё запускается.".to_string()
                 } else {
-                    "Сессия ещё не готова или каталог моделей не успел обновиться."
-                        .to_string()
+                    "Session is still starting.".to_string()
                 }),
                 ..Default::default()
             });
@@ -11811,16 +11714,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "Профили аккаунтов".to_string()
                 } else {
-                    "Профили аккаунтов".to_string()
+                    "Profiles".to_string()
                 },
                 description: Some(if is_ru {
-                    format!(
-                        "Шаблоны провайдеров, API-ключи и каталоги моделей. Быстрый вход: {prefix}profiles"
-                    )
+                    "Аккаунты".to_string()
                 } else {
-                    format!(
-                        "Шаблоны провайдеров, API-ключи и каталоги моделей. Быстрый вход: {prefix}profiles"
-                    )
+                    "Accounts".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "профили аккаунты api ключи провайдеры модели".to_string()
@@ -11845,18 +11744,14 @@ impl ChatWidget {
                 },
                 description: Some(if self.current_model_presets_enabled() {
                     if is_ru {
-                        format!(
-                            "Включены. Быстрые пресеты для текущего провайдера можно править отдельно."
-                        )
+                        "Быстрый выбор".to_string()
                     } else {
-                        "Включено. Быстрыми пресетами для активного провайдера можно управлять отдельно."
-                            .to_string()
+                        "Quick presets".to_string()
                     }
                 } else if is_ru {
-                    "Выключены. /model сразу открывает полный каталог без быстрых пресетов."
-                        .to_string()
+                    "Выключены".to_string()
                 } else {
-                    "Выключено. /model сразу открывает полный каталог.".to_string()
+                    "Off".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "пресеты моделей быстрый выбор".to_string()
@@ -11871,12 +11766,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "Язык интерфейса".to_string()
                 } else {
-                    "Язык интерфейса".to_string()
+                    "Language".to_string()
                 },
                 description: Some(if is_ru {
-                    format!("Сейчас: {lang_label}. Влияет на /model, /profiles, /settings и служебные подсказки.")
+                    lang_label.clone()
                 } else {
-                    format!("Сейчас: {lang_label}. Влияет на /model, /profiles и системные инструкции.")
+                    lang_label.clone()
                 }),
                 search_value: Some(if is_ru {
                     "язык интерфейс english русский locale".to_string()
@@ -11891,12 +11786,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "Префикс команд".to_string()
                 } else {
-                    "Префикс команд".to_string()
+                    "Command prefix".to_string()
                 },
                 description: Some(if is_ru {
-                    format!("Сейчас: {prefix}. Пример: {prefix}model")
+                    prefix.to_string()
                 } else {
-                    format!("Сейчас: {prefix}. Пример: {prefix}model")
+                    prefix.to_string()
                 }),
                 search_value: Some(if is_ru {
                     "префикс команд slash prefix".to_string()
@@ -11911,16 +11806,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "Команды во всплывающем списке".to_string()
                 } else {
-                    "Команды во всплывающем окне".to_string()
+                    "Popup commands".to_string()
                 },
                 description: Some(if is_ru {
-                    format!(
-                        "Скрыто: {hidden_count}. Можно быстро убрать лишние команды и вернуть их обратно без потери ручного вызова."
-                    )
+                    format!("{hidden_count} скрыто")
                 } else {
-                    format!(
-                        "Скрыто: {hidden_count}. Можно быстро убрать лишние команды и вернуть их обратно без потери ручного вызова."
-                    )
+                    format!("{hidden_count} hidden")
                 }),
                 search_value: Some(if is_ru {
                     "команды popup скрыть показать алиасы".to_string()
@@ -11964,12 +11855,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "Стиль ответов".to_string()
                 } else {
-                    "Стиль ответов".to_string()
+                    "Tone".to_string()
                 },
                 description: Some(if is_ru {
-                    format!("Сейчас: {current_personality}. Управляет тоном ответов в этой сессии.")
+                    current_personality.to_string()
                 } else {
-                    format!("Сейчас: {current_personality}. Управляет тоном ответов в этой сессии.")
+                    current_personality.to_string()
                 }),
                 search_value: Some(if is_ru {
                     "стиль ответы тон personality".to_string()
@@ -11989,9 +11880,9 @@ impl ChatWidget {
                 "Разрешения и подтверждения".to_string()
             },
             description: Some(if is_ru {
-                "Что можно делать без запроса, а что требует подтверждения.".to_string()
+                "Доступ".to_string()
             } else {
-                "Выберите, что можно запускать сразу, а что всё ещё требует подтверждения.".to_string()
+                "Access".to_string()
             }),
             search_value: Some(if is_ru {
                 "разрешения подтверждения доступ sandbox approvals".to_string()
@@ -12008,12 +11899,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "Голос и звук".to_string()
                 } else {
-                    "Голос и звук".to_string()
+                    "Voice".to_string()
                 },
                 description: Some(if is_ru {
-                    "Микрофон и вывод для голосового режима".to_string()
+                    "Звук".to_string()
                 } else {
-                    "Микрофон и устройство вывода для realtime".to_string()
+                    "Audio".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "голос звук микрофон realtime".to_string()
@@ -12031,17 +11922,9 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Настройки".to_string()
             } else {
-                "Настройки".to_string()
+                "Settings".to_string()
             }),
-            subtitle: Some(if is_ru {
-                format!(
-                    "Единый центр для модели, аккаунтов и поведения команд. Префикс: {prefix}, скрыто команд: {hidden_count}."
-                )
-            } else {
-                format!(
-                    "Единый центр для выбора модели, профилей и поведения команд. Текущий префикс: {prefix}, скрытых команд: {hidden_count}."
-                )
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
@@ -12074,7 +11957,11 @@ impl ChatWidget {
         let mk = |code: &'static str, title: &'static str, description: String, current: &str| {
             SelectionItem {
                 name: title.to_string(),
-                description: Some(description),
+                description: if description.is_empty() {
+                    None
+                } else {
+                    Some(description)
+                },
                 search_value: Some(format!("{code} {title}")),
                 is_current: current == code,
                 actions: vec![Box::new(move |tx| {
@@ -12094,11 +11981,7 @@ impl ChatWidget {
             } else {
                 "← Назад в настройки".to_string()
             },
-            description: Some(if is_ru {
-                "Вернуться к общим настройкам модели, профилей и команд.".to_string()
-            } else {
-                "Вернуться к главному разделу настроек.".to_string()
-            }),
+            description: None,
             search_value: Some(if is_ru {
                 "назад настройки".to_string()
             } else {
@@ -12112,21 +11995,13 @@ impl ChatWidget {
             mk(
                 "ru",
                 "Русский",
-                if is_ru {
-                    "Меню, всплывающие окна и системные сообщения будут на русском.".to_string()
-                } else {
-                    "Меню, всплывающие окна и системные сообщения на русском языке.".to_string()
-                },
+                String::new(),
                 &current,
             ),
             mk(
                 "en",
                 "Английский",
-                if is_ru {
-                    "Меню, всплывающие окна и системные сообщения будут на английском.".to_string()
-                } else {
-                    "Меню, всплывающие окна и системные сообщения на английском языке.".to_string()
-                },
+                String::new(),
                 &current,
             ),
         ]);
@@ -12138,12 +12013,7 @@ impl ChatWidget {
             } else {
                 "Язык интерфейса".to_string()
             }),
-            subtitle: Some(if is_ru {
-                "Выберите язык для /model, /profiles, /settings и служебных подсказок".to_string()
-            } else {
-                "Выберите язык для /model, /profiles, /settings и системных подсказок"
-                    .to_string()
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,
@@ -12173,13 +12043,9 @@ impl ChatWidget {
             name: if is_ru {
                 "← Назад в настройки".to_string()
             } else {
-                "← Назад в настройки".to_string()
-            },
-            description: Some(if is_ru {
-                "Вернуться к общим настройкам.".to_string()
-            } else {
-                "Вернуться к главному разделу настроек.".to_string()
+                "← Back".to_string()
             }),
+            description: None,
             search_value: Some(if is_ru {
                 "назад настройки".to_string()
             } else {
@@ -12194,18 +12060,18 @@ impl ChatWidget {
             name: if is_ru {
                 "Заливка".to_string()
             } else {
-                "Заливка".to_string()
+                "Fill".to_string()
             },
             description: Some(if is_ru {
                 if current_fill {
-                    "Включена. Для выделенного текста используется фоновая заливка.".to_string()
+                    "Фон".to_string()
                 } else {
-                    "Выключена. Красится только сам текст без фоновой плашки.".to_string()
+                    "Текст".to_string()
                 }
             } else if current_fill {
-                "Включено. Выбранные строки используют заливку фона.".to_string()
+                "Fill".to_string()
             } else {
-                "Выключено. Меняется только цвет текста.".to_string()
+                "Text".to_string()
             }),
             search_value: Some(if is_ru {
                 "заливка фон текст highlight fill".to_string()
@@ -12224,35 +12090,11 @@ impl ChatWidget {
         });
 
         items.push(SelectionItem {
-            name: if is_ru { "Цвет".to_string() } else { "Цвет".to_string() },
+            name: if is_ru { "Цвет".to_string() } else { "Color".to_string() },
             description: Some(if is_ru {
-                format!(
-                    "Выделение: {}. Списки: {}. Ответы: {}. Раздумья: {}. Команды: {}. Вывод: {}.",
-                    describe_color_choice(
-                        &self.current_selection_highlight_color(),
-                        self.current_selection_highlight_preset(),
-                        is_ru
-                    ),
-                    self.current_list_text_summary(),
-                    self.current_reply_text_summary(),
-                    self.current_reasoning_text_summary(),
-                    self.current_command_text_summary(),
-                    self.current_command_output_text_summary()
-                )
+                "Палитра".to_string()
             } else {
-                format!(
-                    "Selection: {}. Lists: {}. Replies: {}. Reasoning: {}. Commands: {}. Output: {}.",
-                    describe_color_choice(
-                        &self.current_selection_highlight_color(),
-                        self.current_selection_highlight_preset(),
-                        is_ru
-                    ),
-                    self.current_list_text_summary(),
-                    self.current_reply_text_summary(),
-                    self.current_reasoning_text_summary(),
-                    self.current_command_text_summary(),
-                    self.current_command_output_text_summary()
-                )
+                "Palette".to_string()
             }),
             search_value: Some(if is_ru {
                 "цвет палитра выделение основной текст описание hex".to_string()
@@ -12270,65 +12112,20 @@ impl ChatWidget {
             name: if is_ru {
                 "Форматирование".to_string()
             } else {
-                "Форматирование".to_string()
+                "Formatting".to_string()
             },
             description: Some(if is_ru {
-                format!(
-                    "Выделение: {}. Списки: {}. Ответы: {}. Раздумья: {}. Команды: {}. Вывод: {}.",
-                    self.current_selection_highlight_summary(),
-                    self.current_list_text_summary(),
-                    self.current_reply_text_summary(),
-                    self.current_reasoning_text_summary(),
-                    self.current_command_text_summary(),
-                    self.current_command_output_text_summary()
-                )
+                "Стили".to_string()
             } else {
-                format!(
-                    "Selection: {}. Lists: {}. Replies: {}. Reasoning: {}. Commands: {}. Output: {}.",
-                    self.current_selection_highlight_summary(),
-                    self.current_list_text_summary(),
-                    self.current_reply_text_summary(),
-                    self.current_reasoning_text_summary(),
-                    self.current_command_text_summary(),
-                    self.current_command_output_text_summary()
-                )
+                "Styles".to_string()
             }),
             search_value: Some(if is_ru {
-                "форматирование жирный курсив подчёркивание моно".to_string()
+                "форматирование жирный курсив подчёркивание зачёркивание".to_string()
             } else {
-                "formatting bold italic underline mono".to_string()
+                "formatting bold italic underline strike".to_string()
             }),
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenSelectionHighlightFormatPicker)
-            })],
-            dismiss_on_select: false,
-            ..Default::default()
-        });
-
-        items.push(SelectionItem {
-            name: if is_ru {
-                "Шрифты".to_string()
-            } else {
-                "Шрифты".to_string()
-            },
-            description: Some(if is_ru {
-                format!(
-                    "Сейчас: {}. Предпочтение сохраняется, а применение зависит от терминала.",
-                    self.current_font_summary()
-                )
-            } else {
-                format!(
-                    "Сейчас: {}. Настройка сохраняется, но итоговое применение зависит от терминала.",
-                    self.current_font_summary()
-                )
-            }),
-            search_value: Some(if is_ru {
-                "шрифты font google fonts установить".to_string()
-            } else {
-                "fonts google fonts install".to_string()
-            }),
-            actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::OpenSelectionHighlightFontsPicker)
             })],
             dismiss_on_select: false,
             ..Default::default()
@@ -12339,15 +12136,9 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Кастомизация".to_string()
             } else {
-                "Кастомизация".to_string()
+                "Customization".to_string()
             }),
-            subtitle: Some(if is_ru {
-                "Цвета, градиенты, форматирование и шрифты для списков, ответов, раздумий и команд. Изменения применяются сразу."
-                    .to_string()
-            } else {
-                "Цвета, градиенты, форматирование и шрифты для списков, ответов, раздумий и команд. Изменения применяются сразу."
-                    .to_string()
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,
@@ -12368,15 +12159,11 @@ impl ChatWidget {
         let is_ru = self.ui_language().is_ru();
         let mut items = vec![SelectionItem {
             name: if is_ru {
-                "← Назад к параметрам выделения".to_string()
+                "← Назад".to_string()
             } else {
-                "← Назад к кастомизации".to_string()
-            },
-            description: Some(if is_ru {
-                "Вернуться к заливке, форматированию и шрифтам.".to_string()
-            } else {
-                "Вернуться к заливке, форматированию и шрифтам.".to_string()
+                "← Back".to_string()
             }),
+            description: None,
             search_value: Some(if is_ru {
                 "назад выделение цвет".to_string()
             } else {
@@ -12394,25 +12181,11 @@ impl ChatWidget {
                 &self.current_selection_highlight_color(),
                 Self::popup_color_target_label_for_locale(PopupColorTarget::Selection, is_ru),
             ),
-            description: Some(if is_ru {
-                format!(
-                    "Текущий цвет: {}",
-                    color_preview_description(
-                        &self.current_selection_highlight_color(),
-                        self.current_selection_highlight_preset(),
-                        is_ru,
-                    )
-                )
-            } else {
-                format!(
-                    "Текущий цвет: {}",
-                    color_preview_description(
-                        &self.current_selection_highlight_color(),
-                        self.current_selection_highlight_preset(),
-                        is_ru,
-                    )
-                )
-            }),
+            description: Some(color_preview_description(
+                &self.current_selection_highlight_color(),
+                self.current_selection_highlight_preset(),
+                is_ru,
+            )),
             search_value: Some(if is_ru {
                 "цвет выделение активный пункт".to_string()
             } else {
@@ -12427,94 +12200,54 @@ impl ChatWidget {
             ..Default::default()
         });
 
-        let mut rest_color_prefix = self.popup_color_choice_swatch_spans(
-            PopupColorTarget::ListPrimary,
-            &self.current_list_primary_color(),
-        );
-        rest_color_prefix.extend(self.popup_color_choice_swatch_spans(
-            PopupColorTarget::ListSecondary,
-            &self.current_list_secondary_color(),
-        ));
-        items.push(SelectionItem {
-            name: if is_ru {
-                "Весь остальной".to_string()
-            } else {
-                "Весь остальной".to_string()
-            },
-            name_prefix_spans: rest_color_prefix,
-            description: Some(if is_ru {
-                format!(
-                    "Основной: {}. Описание: {}.",
-                    color_preview_description(
-                        &self.current_list_primary_color(),
-                        self.current_selection_highlight_preset(),
-                        is_ru,
-                    ),
-                    color_preview_description(
-                        &self.current_list_secondary_color(),
-                        self.current_selection_highlight_preset(),
-                        is_ru,
-                    )
-                )
-            } else {
-                format!(
-                    "Основной: {}. Описание: {}.",
-                    color_preview_description(
-                        &self.current_list_primary_color(),
-                        self.current_selection_highlight_preset(),
-                        is_ru,
-                    ),
-                    color_preview_description(
-                        &self.current_list_secondary_color(),
-                        self.current_selection_highlight_preset(),
-                        is_ru,
-                    )
-                )
-            }),
-            search_value: Some(if is_ru {
-                "цвет основной текст описание".to_string()
-            } else {
-                "color primary text secondary description".to_string()
-            }),
-            actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::OpenSelectionHighlightColorTargetPicker)
-            })],
-            dismiss_on_select: false,
-            ..Default::default()
-        });
-
         for (target, description) in [
             (
+                PopupColorTarget::ListPrimary,
+                color_preview_description(
+                    &self.current_list_primary_color(),
+                    self.current_selection_highlight_preset(),
+                    is_ru,
+                ),
+            ),
+            (
+                PopupColorTarget::ListSecondary,
+                color_preview_description(
+                    &self.current_list_secondary_color(),
+                    self.current_selection_highlight_preset(),
+                    is_ru,
+                ),
+            ),
+            (
                 PopupColorTarget::Reply,
-                if is_ru {
-                    format!("Текущий цвет: {}", self.current_reply_text_summary())
-                } else {
-                    format!("Current style: {}", self.current_reply_text_summary())
-                },
+                color_preview_description(
+                    &self.current_reply_text_color(),
+                    self.current_selection_highlight_preset(),
+                    is_ru,
+                ),
             ),
             (
                 PopupColorTarget::Reasoning,
-                if is_ru {
-                    format!("Текущий цвет: {}", self.current_reasoning_text_summary())
-                } else {
-                    format!("Current style: {}", self.current_reasoning_text_summary())
-                },
+                color_preview_description(
+                    &self.current_reasoning_text_color(),
+                    self.current_selection_highlight_preset(),
+                    is_ru,
+                ),
             ),
             (
                 PopupColorTarget::Command,
-                if is_ru {
-                    format!("Текущий цвет: {}", self.current_command_text_summary())
-                } else {
-                    format!("Current style: {}", self.current_command_text_summary())
-                },
+                color_preview_description(
+                    &self.current_command_text_color(),
+                    self.current_selection_highlight_preset(),
+                    is_ru,
+                ),
             ),
             (
                 PopupColorTarget::CommandOutput,
-                if is_ru {
-                    format!("Текущий цвет: {}", self.current_command_output_text_summary())
-                } else {
-                    format!("Current style: {}", self.current_command_output_text_summary())
-                },
+                color_preview_description(
+                    &self.current_command_output_text_color(),
+                    self.current_selection_highlight_preset(),
+                    is_ru,
+                ),
             ),
         ] {
             let choice = self.popup_current_color_choice(target);
@@ -12555,15 +12288,9 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Цвет".to_string()
             } else {
-                "Цвет".to_string()
+                "Color".to_string()
             }),
-            subtitle: Some(if is_ru {
-                "Выберите зону интерфейса. Для списков основной текст и описание настраиваются отдельно, а ответы, раздумья и команды можно красить независимо."
-                    .to_string()
-            } else {
-                "Выберите зону интерфейса. List primary/secondary text are split, and replies, reasoning, commands and command output can be tuned independently."
-                    .to_string()
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,
@@ -12583,106 +12310,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_selection_highlight_color_target_picker_popup(&mut self) {
-        let is_ru = self.ui_language().is_ru();
-        let mut items = vec![SelectionItem {
-            name: if is_ru {
-                "← Назад к цветам".to_string()
-            } else {
-                "← Назад к цветам".to_string()
-            },
-            description: Some(if is_ru {
-                "Вернуться к выбору раздела цветов.".to_string()
-            } else {
-                "Вернуться к разделу цветов.".to_string()
-            }),
-            search_value: Some(if is_ru {
-                "назад цвет".to_string()
-            } else {
-                "back color".to_string()
-            }),
-            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightColorPicker))],
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
-        for target in [PopupColorTarget::ListPrimary, PopupColorTarget::ListSecondary] {
-            let choice = self.popup_current_color_choice(target);
-            items.push(SelectionItem {
-                name: String::new(),
-                name_prefix_spans: self.popup_color_choice_label_spans(
-                    target,
-                    &choice,
-                    Self::popup_color_target_label_for_locale(target, is_ru),
-                ),
-                description: Some(if is_ru {
-                    format!(
-                        "Текущий цвет: {}",
-                        color_preview_description(
-                            &choice,
-                            self.current_selection_highlight_preset(),
-                            is_ru,
-                        )
-                    )
-                } else {
-                    format!(
-                        "Текущий цвет: {}",
-                        color_preview_description(
-                            &choice,
-                            self.current_selection_highlight_preset(),
-                            is_ru,
-                        )
-                    )
-                }),
-                search_value: Some(if is_ru {
-                    format!(
-                        "{} цвет текст",
-                        Self::popup_color_target_label_for_locale(target, is_ru)
-                    )
-                } else {
-                    format!(
-                        "{} color text",
-                        Self::popup_color_target_label_for_locale(target, is_ru)
-                    )
-                }),
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::OpenSelectionHighlightColorChoicePicker { target })
-                })],
-                dismiss_on_select: false,
-                ..Default::default()
-            });
-        }
-
-        let params = SelectionViewParams {
-            view_id: Some(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID),
-            title: Some(if is_ru {
-                "Весь остальной".to_string()
-            } else {
-                "Весь остальной".to_string()
-            }),
-            subtitle: Some(if is_ru {
-                "Основной текст и описания настраиваются отдельно.".to_string()
-            } else {
-                "Основной и вторичный текст списка можно настраивать отдельно.".to_string()
-            }),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            initial_selected_idx: self
-                .bottom_pane
-                .selected_index_for_active_view(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID)
-                .or(Some(1)),
-            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightColorPicker))),
-            ..Default::default()
-        };
-
-        let replace_active =
-            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID);
-        if replace_active {
-            let _ = self.bottom_pane.replace_selection_view_if_active(
-                SELECTION_HIGHLIGHT_COLOR_TARGET_VIEW_ID,
-                params,
-            );
-        } else {
-            self.bottom_pane.show_selection_view(params);
-        }
+        self.open_selection_highlight_color_picker_popup();
     }
 
     pub(crate) fn open_selection_highlight_color_choice_picker_popup(
@@ -12693,41 +12321,15 @@ impl ChatWidget {
         let current_choice = self.popup_current_color_choice(target);
         let fallback_preset = self.current_selection_highlight_preset();
         let target_is_selection = matches!(target, PopupColorTarget::Selection);
-        let target_is_list_text = matches!(
-            target,
-            PopupColorTarget::ListPrimary | PopupColorTarget::ListSecondary
-        );
         let mut items = vec![SelectionItem {
             name: if is_ru {
                 "← Назад".to_string()
             } else {
-                "← Назад".to_string()
-            },
-            description: Some(if matches!(target, PopupColorTarget::Selection) {
-                if is_ru {
-                    "Вернуться к разделу выбора цветов.".to_string()
-                } else {
-                    "Вернуться к разделу цветов.".to_string()
-                }
-            } else if target_is_list_text {
-                if is_ru {
-                    "Вернуться к настройке цветов остального текста.".to_string()
-                } else {
-                    "Вернуться к настройкам цвета текста в списках.".to_string()
-                }
-            } else if is_ru {
-                "Вернуться к общему списку цветовых зон.".to_string()
-            } else {
-                "Return to the top-level color areas.".to_string()
+                "← Back".to_string()
             }),
+            description: None,
             actions: vec![Box::new(move |tx| {
-                tx.send(if matches!(target, PopupColorTarget::Selection) {
-                    AppEvent::OpenSelectionHighlightColorPicker
-                } else if target_is_list_text {
-                    AppEvent::OpenSelectionHighlightColorTargetPicker
-                } else {
-                    AppEvent::OpenSelectionHighlightColorPicker
-                })
+                tx.send(AppEvent::OpenSelectionHighlightColorPicker)
             })],
             dismiss_on_select: true,
             ..Default::default()
@@ -12744,9 +12346,9 @@ impl ChatWidget {
                     auto_label,
                 ),
                 description: Some(if is_ru {
-                    "Использовать текущую палитру интерфейса для этого текста.".to_string()
+                    "Системный".to_string()
                 } else {
-                    "Использовать текущую палитру интерфейса для этого текста.".to_string()
+                    "System".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "авто системный цвет".to_string()
@@ -12786,8 +12388,7 @@ impl ChatWidget {
                     name: String::new(),
                     name_prefix_spans: self.popup_color_choice_label_spans(target, &choice, label),
                     description: Some(format!(
-                        "{} · {}",
-                        Self::selection_highlight_description_for_locale(preset, is_ru),
+                        "{}",
                         color_preview_description(&choice, fallback_preset, is_ru)
                     )),
                     search_value: Some(if is_ru {
@@ -12900,9 +12501,9 @@ impl ChatWidget {
                 ),
                 _ => {
                     if is_ru {
-                        "Введите свой HEX, например #f7dce5.".to_string()
+                        "Введите HEX".to_string()
                     } else {
-                        "Введите свой HEX, например #f7dce5.".to_string()
+                        "Enter HEX".to_string()
                     }
                 }
             }),
@@ -12956,9 +12557,9 @@ impl ChatWidget {
                 ),
                 _ => {
                     if is_ru {
-                        "Два оттенка максимум: например #ffffff -> #1f2a44.".to_string()
+                        "2 цвета".to_string()
                     } else {
-                        "До 2 точек градиента: например #ffffff -> #1f2a44.".to_string()
+                        "2 colors".to_string()
                     }
                 }
             }),
@@ -12978,23 +12579,7 @@ impl ChatWidget {
         let params = SelectionViewParams {
             view_id: Some(SELECTION_HIGHLIGHT_COLOR_CHOICE_VIEW_ID),
             title: Some(Self::popup_color_target_label_for_locale(target, is_ru).to_string()),
-            subtitle: Some(if is_ru {
-                if target_is_selection {
-                    "Готовые палитры, тёмные оттенки, свой HEX и градиент из двух цветов."
-                        .to_string()
-                } else {
-                    "Авто-режим, расширенная палитра, свой HEX и градиент из двух цветов."
-                        .to_string()
-                }
-            } else {
-                if target_is_selection {
-                    "Готовые палитры, тёмные оттенки, свой HEX и градиент из двух цветов."
-                        .to_string()
-                } else {
-                    "Авто-режим, расширенная палитра, свой HEX и градиент из двух цветов."
-                        .to_string()
-                }
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx: self
@@ -13002,13 +12587,7 @@ impl ChatWidget {
                 .selected_index_for_active_view(SELECTION_HIGHLIGHT_COLOR_CHOICE_VIEW_ID)
                 .or(Some(1)),
             on_cancel: Some(Box::new(move |tx| {
-                tx.send(if matches!(target, PopupColorTarget::Selection) {
-                    AppEvent::OpenSelectionHighlightColorPicker
-                } else if target_is_list_text {
-                    AppEvent::OpenSelectionHighlightColorTargetPicker
-                } else {
-                    AppEvent::OpenSelectionHighlightColorPicker
-                })
+                tx.send(AppEvent::OpenSelectionHighlightColorPicker)
             })),
             ..Default::default()
         };
@@ -13091,15 +12670,11 @@ impl ChatWidget {
         let is_ru = self.ui_language().is_ru();
         let mut items = vec![SelectionItem {
             name: if is_ru {
-                "← Назад к параметрам выделения".to_string()
+                "← Назад".to_string()
             } else {
-                "← Назад к кастомизации".to_string()
-            },
-            description: Some(if is_ru {
-                "Вернуться к заливке, цветам и шрифтам.".to_string()
-            } else {
-                "Вернуться к заливке, цветам и шрифтам.".to_string()
+                "← Back".to_string()
             }),
+            description: None,
             actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))],
             dismiss_on_select: true,
             ..Default::default()
@@ -13114,23 +12689,7 @@ impl ChatWidget {
             PopupFormatTarget::CommandOutput,
         ] {
             let formats = self.popup_current_text_formats(target);
-            let summary = if formats.is_empty() {
-                if is_ru {
-                    "без дополнительных форматов".to_string()
-                } else {
-                    "без дополнительного форматирования".to_string()
-                }
-            } else {
-                SelectionHighlightTextFormat::all()
-                    .into_iter()
-                    .filter(|format| formats.contains(*format))
-                    .map(|format| {
-                        Self::selection_highlight_format_label_for_locale(format, is_ru)
-                            .to_string()
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
+            let summary = Self::selection_highlight_format_summary_for_locale(formats, is_ru);
             items.push(SelectionItem {
                 name: Self::popup_format_target_label_for_locale(target, is_ru).to_string(),
                 description: Some(summary),
@@ -13157,15 +12716,9 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Форматирование".to_string()
             } else {
-                "Форматирование".to_string()
+                "Formatting".to_string()
             }),
-            subtitle: Some(if is_ru {
-                "Отдельные форматы для выделения, основного текста списков, описаний, ответов, раздумий и команд."
-                    .to_string()
-            } else {
-                "Separate formatting for selection, primary list text, secondary list text, replies, reasoning and commands."
-                    .to_string()
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx: self
@@ -13193,12 +12746,8 @@ impl ChatWidget {
         let is_ru = self.ui_language().is_ru();
         let current_formats = self.popup_current_text_formats(target);
         let mut items = vec![SelectionItem {
-            name: if is_ru { "← Назад".to_string() } else { "← Назад".to_string() },
-            description: Some(if is_ru {
-                "Вернуться к разделу форматирования.".to_string()
-            } else {
-                "Вернуться к разделу форматирования.".to_string()
-            }),
+            name: if is_ru { "← Назад".to_string() } else { "← Back".to_string() },
+            description: None,
             actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFormatPicker))],
             dismiss_on_select: true,
             ..Default::default()
@@ -13239,11 +12788,7 @@ impl ChatWidget {
         let params = SelectionViewParams {
             view_id: Some(SELECTION_HIGHLIGHT_FORMAT_TARGET_VIEW_ID),
             title: Some(Self::popup_format_target_label_for_locale(target, is_ru).to_string()),
-            subtitle: Some(if is_ru {
-                "Можно включать несколько форматов сразу.".to_string()
-            } else {
-                "Можно включить сразу несколько вариантов форматирования.".to_string()
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx: self
@@ -13266,427 +12811,24 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_selection_highlight_fonts_picker_popup(&mut self) {
-        let is_ru = self.ui_language().is_ru();
-        let mut items = vec![SelectionItem {
-            name: if is_ru {
-                "← Назад к параметрам выделения".to_string()
-            } else {
-                "← Назад к кастомизации".to_string()
-            },
-            description: Some(if is_ru {
-                "Вернуться к заливке, цветам и форматированию.".to_string()
-            } else {
-                "Вернуться к заливке, цветам и форматированию.".to_string()
-            }),
-            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))],
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
-        items.push(SelectionItem {
-            name: if is_ru {
-                "Добавить шрифт".to_string()
-            } else {
-                "Добавить шрифт".to_string()
-            },
-            description: Some(if is_ru {
-                "Поиск и скачивание моноширинных гарнитур через Google Fonts.".to_string()
-            } else {
-                "Найти и скачать моноширинный шрифт через Google Fonts.".to_string()
-            }),
-            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightAddFontPicker))],
-            dismiss_on_select: false,
-            ..Default::default()
-        });
-        let mut font_records = crate::font_library::list_installed_fonts(
-            self.config.codex_home.as_path(),
-            self.current_installed_fonts().as_slice(),
-            self.current_active_font_id().as_deref(),
-        );
-        font_records.sort_by(|a, b| {
-            a.profile
-                .family
-                .to_ascii_lowercase()
-                .cmp(&b.profile.family.to_ascii_lowercase())
-        });
-        for record in font_records {
-            let font = record.profile;
-            let active = record.active;
-            let available = record.available;
-            let repair_tag = if is_ru { "Починить" } else { "Repair" };
-            let category = Self::font_category_for_family(font.family.as_str(), is_ru)
-                .unwrap_or_else(|| {
-                    if is_ru {
-                        "Шрифт".to_string()
-                    } else {
-                        "Шрифт".to_string()
-                    }
-                });
-            let preview = Self::font_preview_for_family(font.family.as_str());
-            items.push(SelectionItem {
-                name: font.family.clone(),
-                description: Some(if is_ru {
-                    format!(
-                        "{} · файлов: {} · {}{}",
-                        category,
-                        font.files.len(),
-                        preview,
-                        if available {
-                            String::new()
-                        } else {
-                            " · требуется перекачка".to_string()
-                        }
-                    )
-                } else {
-                    format!(
-                        "{} · files: {} · {}{}",
-                        category,
-                        font.files.len(),
-                        preview,
-                        if available {
-                            String::new()
-                        } else {
-                            " · repair required".to_string()
-                        }
-                    )
-                }),
-                search_value: Some(if is_ru {
-                    format!("{} {} {}", font.family, category, preview)
-                } else {
-                    format!("{} {} {}", font.family, category, preview)
-                }),
-                actions: vec![Box::new({
-                    let font_id = font.id.clone();
-                    move |tx| {
-                        tx.send(AppEvent::OpenSelectionHighlightFontActions {
-                            font_id: font_id.clone(),
-                        })
-                    }
-                })],
-                dismiss_on_select: false,
-                category_tags: if available {
-                    Self::popup_target_state_tags(active)
-                } else {
-                    let mut tags = Self::popup_target_state_tags(active);
-                    tags.push(repair_tag.to_string());
-                    tags
-                },
-                ..Default::default()
-            });
-        }
-        let params = SelectionViewParams {
-            view_id: Some(SELECTION_HIGHLIGHT_FONTS_VIEW_ID),
-            title: Some(if is_ru {
-                "Шрифты".to_string()
-            } else {
-                "Шрифты".to_string()
-            }),
-            subtitle: Some(if is_ru {
-                format!(
-                    "{}. Доступны только моноширинные гарнитуры, и применяются они глобально для терминала, а не по отдельным элементам TUI.",
-                    terminal_font_support_summary(true)
-                )
-            } else {
-                format!(
-                    "{}. Только моноширинные гарнитуры, и применяются они глобально для терминала, а не по отдельным элементам TUI.",
-                    terminal_font_support_summary(false)
-                )
-            }),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            is_searchable: true,
-            search_placeholder: Some(if is_ru {
-                "Найти установленный шрифт".to_string()
-            } else {
-                "Найти установленный шрифт".to_string()
-            }),
-            initial_selected_idx: self
-                .bottom_pane
-                .selected_index_for_active_view(SELECTION_HIGHLIGHT_FONTS_VIEW_ID)
-                .or(Some(1)),
-            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightPicker))),
-            ..Default::default()
-        };
-        let replace_active =
-            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_FONTS_VIEW_ID);
-        if replace_active {
-            let _ = self
-                .bottom_pane
-                .replace_selection_view_if_active(SELECTION_HIGHLIGHT_FONTS_VIEW_ID, params);
-        } else {
-            self.bottom_pane.show_selection_view(params);
-        }
+        self.open_selection_highlight_picker_popup();
     }
 
     pub(crate) fn open_selection_highlight_add_font_picker_popup(
         &mut self,
         query: Option<&str>,
     ) {
-        let is_ru = self.ui_language().is_ru();
-        let query = query.unwrap_or("").trim().to_string();
-        let results = search_google_fonts(query.as_str());
-        let installed_families = self
-            .current_installed_fonts()
-            .into_iter()
-            .map(|font| font.family.to_ascii_lowercase())
-            .collect::<HashSet<_>>();
-        let mut items = vec![SelectionItem {
-            name: if is_ru { "← Назад к шрифтам".to_string() } else { "← Назад к шрифтам".to_string() },
-            description: Some(if is_ru {
-                "Вернуться к установленным шрифтам.".to_string()
-            } else {
-                "Вернуться к установленным шрифтам.".to_string()
-            }),
-            search_value: (!query.is_empty()).then_some(query.clone()),
-            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))],
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
-        if !query.is_empty() && results.is_empty() {
-            items.push(SelectionItem {
-                name: if is_ru {
-                    "Ничего не найдено".to_string()
-                } else {
-                    "Ничего не найдено".to_string()
-                },
-                description: Some(if is_ru {
-                    "Показываются только моноширинные гарнитуры из локального каталога Google Fonts. Попробуйте другое название."
-                        .to_string()
-                } else {
-                    "Only monospace families from the local Google Fonts catalog are shown here. Try another name."
-                        .to_string()
-                }),
-                search_value: Some(query.clone()),
-                dismiss_on_select: false,
-                ..Default::default()
-            });
-        }
-        for entry in results {
-            let already_installed =
-                installed_families.contains(&entry.family.to_ascii_lowercase());
-            let category = google_font_category(entry.category.as_str());
-            let preview = google_font_preview(entry.family.as_str(), entry.category.as_str());
-            let category_label = if is_ru {
-                category.display_name_ru()
-            } else {
-                category.display_name_en()
-            };
-            items.push(SelectionItem {
-                name: entry.family.clone(),
-                description: Some(if is_ru {
-                    format!("{category_label} · {preview}")
-                } else {
-                    format!("{category_label} · {preview}")
-                }),
-                search_value: Some(if is_ru {
-                    format!("{} {} {}", entry.family, category_label, preview)
-                } else {
-                    format!("{} {} {}", entry.family, category_label, preview)
-                }),
-                actions: vec![Box::new({
-                    let family = entry.family.clone();
-                    move |tx| tx.send(AppEvent::InstallGoogleFont {
-                        family: family.clone(),
-                    })
-                })],
-                dismiss_on_select: true,
-                category_tags: Self::popup_target_state_tags(already_installed),
-                ..Default::default()
-            });
-        }
-        let params = SelectionViewParams {
-            view_id: Some(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID),
-            title: Some(if is_ru {
-                "Добавить шрифт".to_string()
-            } else {
-                "Добавить шрифт".to_string()
-            }),
-            subtitle: Some(if query.is_empty() {
-                if is_ru {
-                    "Полный каталог моноширинных Google Fonts по алфавиту. Начните печатать — выдача отфильтруется сама."
-                        .to_string()
-                } else {
-                    "Полный каталог моноширинных Google Fonts по алфавиту. Начните печатать — выдача отфильтруется сама."
-                        .to_string()
-                }
-            } else if is_ru {
-                format!("Моноширинные результаты по запросу `{query}`.")
-            } else {
-                format!("Моноширинные результаты по запросу `{query}`.")
-            }),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            is_searchable: true,
-            search_placeholder: Some(if is_ru {
-                "Название моноширинной гарнитуры".to_string()
-            } else {
-                "Название моноширинной гарнитуры".to_string()
-            }),
-            initial_search_query: (!query.is_empty()).then_some(query.clone()),
-            initial_selected_idx: self
-                .bottom_pane
-                .selected_index_for_active_view(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID)
-                .or(Some(1)),
-            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))),
-            on_search_query_changed: Some(Box::new(|query, tx| {
-                let trimmed = query.trim().to_string();
-                tx.send(AppEvent::OpenSelectionHighlightFontSearchResults { query: trimmed });
-            })),
-            ..Default::default()
-        };
-        let replace_active =
-            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID);
-        if replace_active {
-            let _ = self
-                .bottom_pane
-                .replace_selection_view_if_active(SELECTION_HIGHLIGHT_ADD_FONT_VIEW_ID, params);
-        } else {
-            self.bottom_pane.show_selection_view(params);
-        }
+        let _ = query;
+        self.open_selection_highlight_picker_popup();
     }
 
     pub(crate) fn open_selection_highlight_custom_font_prompt(&mut self) {
-        let is_ru = self.ui_language().is_ru();
-        let tx = self.app_event_tx.clone();
-        let view = CustomPromptView::new(
-            if is_ru {
-                "Поиск шрифта".to_string()
-            } else {
-                "Найти шрифт".to_string()
-            },
-            if is_ru {
-                "Введите название семейства и нажмите Enter".to_string()
-            } else {
-                "Введите семейство шрифта и нажмите Enter".to_string()
-            },
-            Some(if is_ru {
-                "Пример: JetBrains Mono".to_string()
-            } else {
-                "Пример: JetBrains Mono".to_string()
-            }),
-            Box::new(move |prompt: String| {
-                let trimmed = prompt.trim().to_string();
-                if trimmed.is_empty() {
-                    return;
-                }
-                tx.send(AppEvent::OpenSelectionHighlightFontSearchResults { query: trimmed });
-            }),
-        );
-        self.bottom_pane.show_view(Box::new(view));
+        self.open_selection_highlight_picker_popup();
     }
 
     pub(crate) fn open_selection_highlight_font_actions_popup(&mut self, font_id: &str) {
-        let is_ru = self.ui_language().is_ru();
-        let Some(font) = self
-            .current_installed_fonts()
-            .into_iter()
-            .find(|font| font.id == font_id)
-        else {
-            return;
-        };
-        let active = self.font_is_active(font.id.as_str());
-        let preview = Self::font_preview_for_family(font.family.as_str());
-        let category = Self::font_category_for_family(font.family.as_str(), is_ru)
-            .unwrap_or_else(|| {
-                if is_ru {
-                    "Шрифт".to_string()
-                } else {
-                    "Шрифт".to_string()
-                }
-            });
-        let items = vec![
-            SelectionItem {
-                name: if is_ru {
-                    "← Назад к шрифтам".to_string()
-                } else {
-                    "← Назад к шрифтам".to_string()
-                },
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: if is_ru {
-                    "Активировать".to_string()
-                } else {
-                    "Активировать".to_string()
-                },
-                description: Some(if is_ru {
-                    "Сохраняет шрифт как основной для совместимых терминалов.".to_string()
-                } else {
-                    "Помечает шрифт как основной для совместимых терминалов.".to_string()
-                }),
-                actions: vec![Box::new({
-                    let font_id = font.id.clone();
-                    move |tx| {
-                        tx.send(AppEvent::ActivateInstalledFont {
-                            font_id: font_id.clone(),
-                        });
-                        tx.send(AppEvent::OpenSelectionHighlightFontsPicker);
-                    }
-                })],
-                dismiss_on_select: true,
-                category_tags: Self::popup_target_state_tags(active),
-                ..Default::default()
-            },
-            SelectionItem {
-                name: if is_ru {
-                    "Удалить".to_string()
-                } else {
-                    "Удалить".to_string()
-                },
-                description: Some(if is_ru {
-                    "Удаляет скачанные файлы и запись из профиля.".to_string()
-                } else {
-                    "Удаляет скачанные файлы и убирает шрифт из настроек.".to_string()
-                }),
-                actions: vec![Box::new({
-                    let font_id = font.id.clone();
-                    move |tx| {
-                        tx.send(AppEvent::DeleteInstalledFont {
-                            font_id: font_id.clone(),
-                        });
-                        tx.send(AppEvent::OpenSelectionHighlightFontsPicker);
-                    }
-                })],
-                dismiss_on_select: true,
-                category_tags: Self::popup_target_state_tags(false),
-                ..Default::default()
-            },
-        ];
-        let params = SelectionViewParams {
-            view_id: Some(SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID),
-            title: Some(font.family.clone()),
-            subtitle: Some(if is_ru {
-                format!(
-                    "{} · {} · хранится в Profiles/Fonts. {}",
-                    category,
-                    preview,
-                    terminal_font_support_note(true),
-                )
-            } else {
-                format!(
-                    "{} · {} · хранится в Profiles/Fonts. {}",
-                    category,
-                    preview,
-                    terminal_font_support_note(false),
-                )
-            }),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            initial_selected_idx: Some(1),
-            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenSelectionHighlightFontsPicker))),
-            ..Default::default()
-        };
-        let replace_active =
-            self.bottom_pane.active_view_id() == Some(SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID);
-        if replace_active {
-            let _ = self.bottom_pane.replace_selection_view_if_active(
-                SELECTION_HIGHLIGHT_FONT_ACTIONS_VIEW_ID,
-                params,
-            );
-        } else {
-            self.bottom_pane.show_selection_view(params);
-        }
+        let _ = font_id;
+        self.open_selection_highlight_picker_popup();
     }
 
     pub(crate) fn open_command_prefix_picker_popup(&mut self) {
@@ -13702,13 +12844,9 @@ impl ChatWidget {
             name: if is_ru {
                 "← Назад в настройки".to_string()
             } else {
-                "← Назад в настройки".to_string()
-            },
-            description: Some(if is_ru {
-                "Вернуться к общим настройкам.".to_string()
-            } else {
-                "Вернуться к главному разделу настроек.".to_string()
+                "← Back".to_string()
             }),
+            description: None,
             search_value: Some(if is_ru {
                 "назад настройки".to_string()
             } else {
@@ -14428,7 +13566,6 @@ impl ChatWidget {
 
     pub(crate) fn open_command_visibility_picker_popup(&mut self) {
         let hidden = self.current_hidden_commands();
-        let prefix = self.current_command_prefix();
         let is_ru = self.ui_language().is_ru();
         let replace_active = self.bottom_pane.active_view_id() == Some(COMMAND_VISIBILITY_VIEW_ID);
         let initial_selected_idx = self
@@ -14442,11 +13579,7 @@ impl ChatWidget {
             } else {
                 "← Назад в настройки".to_string()
             },
-            description: Some(if is_ru {
-                "Вернуться к общим настройкам.".to_string()
-            } else {
-                "Вернуться к главному разделу настроек.".to_string()
-            }),
+            description: None,
             search_value: Some(if is_ru {
                 "назад настройки".to_string()
             } else {
@@ -14464,47 +13597,30 @@ impl ChatWidget {
                 .map(|(_, cmd)| {
                     let key = cmd.command_en().to_string();
                     let aliases = cmd.popup_aliases();
-                    let alias_suffix = if aliases.is_empty() {
-                        String::new()
-                    } else if is_ru {
-                        format!(
-                            " Алиасы: {}",
-                            aliases
-                                .iter()
-                                .map(|alias| format!("{prefix}{alias}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
+                    let display_name = if is_ru {
+                        cmd.command_ru().to_string()
                     } else {
-                        format!(
-                            " Алиасы: {}",
-                            aliases
-                                .iter()
-                                .map(|alias| format!("{prefix}{alias}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
+                        cmd.command_en().to_string()
                     };
                     let is_hidden = hidden.contains(&key);
-                    let visibility_text = if is_hidden {
+                    let description = if is_hidden {
                         if is_ru {
-                            format!("Скрыта только из меню. Ручной вызов: {prefix}{key}")
+                            "Скрыта".to_string()
                         } else {
-                            format!("Скрыта только из меню. Ручной вызов: {prefix}{key}")
+                            "Hidden".to_string()
                         }
                     } else if is_ru {
-                        format!("Видна в меню и вызывается вручную как {prefix}{key}")
+                        "Показана".to_string()
                     } else {
-                        format!("Видна в меню и вызывается вручную как {prefix}{key}")
+                        "Shown".to_string()
                     };
-                    let description = format!("{visibility_text}.{alias_suffix}");
                     let search_value = if aliases.is_empty() {
                         format!("{key} {}", cmd.description())
                     } else {
                         format!("{key} {} {}", aliases.join(" "), cmd.description())
                     };
                     SelectionItem {
-                        name: key.clone(),
+                        name: display_name,
                         description: Some(description),
                         search_value: Some(search_value),
                         is_current: !is_hidden,
@@ -14542,20 +13658,16 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Команды в списке".to_string()
             } else {
-                "Команды во всплывающем окне".to_string()
+                "Popup commands".to_string()
             }),
-            subtitle: Some(if is_ru {
-                format!("Фильтруйте по названию, алиасу или описанию. Текущий префикс: {prefix}")
-            } else {
-                format!("Фильтр по имени команды, алиасу или описанию. Текущий префикс: {prefix}")
-            }),
+            subtitle: None,
             footer_hint: Some(footer_hint),
             items,
             is_searchable: true,
             search_placeholder: Some(if is_ru {
-                "Найти команду или алиас".to_string()
+                "Найти команду".to_string()
             } else {
-                "Найти команду или алиас".to_string()
+                "Find a command".to_string()
             }),
             initial_selected_idx,
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),

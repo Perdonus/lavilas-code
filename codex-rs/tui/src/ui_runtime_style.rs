@@ -1,8 +1,6 @@
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::SystemTime;
 
 use codex_core::config::find_codex_home;
 use ratatui::style::Modifier;
@@ -14,11 +12,13 @@ use crate::ui_appearance::apply_text_formats;
 use crate::ui_appearance::best_terminal_color;
 use crate::ui_appearance::resolve_color_choice_label_rgb;
 use crate::ui_appearance::resolve_color_choice_rgb;
+use crate::ui_appearance::visible_terminal_rgb;
 use crate::ui_preferences::SelectionHighlightTextFormats;
 use crate::ui_preferences::UiColorChoice;
 use crate::ui_preferences::UiPreferences;
 use crate::ui_preferences::load_ui_preferences;
 use crate::ui_preferences::settings_path as ui_settings_path;
+use crate::ui_preferences::ui_preferences_revision;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeTextRole {
@@ -31,7 +31,7 @@ pub(crate) enum RuntimeTextRole {
 #[derive(Clone)]
 struct CachedRuntimeUiPreferences {
     settings_path: Option<PathBuf>,
-    settings_modified: Option<SystemTime>,
+    revision: u64,
     preferences: UiPreferences,
 }
 
@@ -39,7 +39,7 @@ impl Default for CachedRuntimeUiPreferences {
     fn default() -> Self {
         Self {
             settings_path: None,
-            settings_modified: None,
+            revision: 0,
             preferences: UiPreferences::default(),
         }
     }
@@ -63,14 +63,11 @@ fn runtime_preferences() -> UiPreferences {
     let settings_path = codex_home
         .as_ref()
         .map(|codex_home| ui_settings_path(codex_home.as_path()));
-    let settings_modified = settings_path
-        .as_ref()
-        .and_then(|path| fs::metadata(path).ok())
-        .and_then(|metadata| metadata.modified().ok());
+    let revision = ui_preferences_revision();
 
-    if cache.settings_path != settings_path || cache.settings_modified != settings_modified {
+    if cache.settings_path != settings_path || cache.revision != revision {
         cache.settings_path = settings_path;
-        cache.settings_modified = settings_modified;
+        cache.revision = revision;
         cache.preferences = codex_home
             .as_ref()
             .map(|codex_home| load_ui_preferences(codex_home.as_path()))
@@ -118,7 +115,7 @@ pub(crate) fn runtime_text_style(role: RuntimeTextRole) -> Style {
         default_style
     } else {
         let rgb = resolve_color_choice_rgb(&choice, fallback_preset);
-        default_style.fg(best_terminal_color(rgb))
+        default_style.fg(best_terminal_color(visible_terminal_rgb(rgb)))
     };
     apply_text_formats(style, formats)
 }
@@ -178,7 +175,7 @@ fn patch_gradient_line_for_role(
                     let mut style = patched_style;
                     if !ch.is_whitespace() {
                         let rgb = mix_rgb(start_rgb, end_rgb, gradient_weight(char_index, total_chars));
-                        style = style.fg(best_terminal_color(rgb));
+                        style = style.fg(best_terminal_color(visible_terminal_rgb(rgb)));
                     }
                     char_index += usize::from(!ch.is_control());
                     Span::styled(ch.to_string(), style)
@@ -216,7 +213,10 @@ pub(crate) fn patch_line_for_role(
         apply_text_formats(default_style, formats)
     } else {
         let rgb = resolve_color_choice_rgb(&choice, fallback_preset);
-        apply_text_formats(default_style.fg(best_terminal_color(rgb)), formats)
+        apply_text_formats(
+            default_style.fg(best_terminal_color(visible_terminal_rgb(rgb))),
+            formats,
+        )
     };
     let spans = line
         .spans

@@ -4,6 +4,7 @@ use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
+use codex_core::config::find_codex_home;
 
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
@@ -16,6 +17,7 @@ use crate::bottom_pane::prompt_args::command_prefix;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
+use crate::ui_preferences::load_ui_preferences;
 
 // Hide alias commands in the default popup list so each unique action appears once.
 // `quit` is an alias of `exit`, so we skip `quit` here.
@@ -31,6 +33,7 @@ pub(crate) enum CommandItem {
 pub(crate) struct CommandPopup {
     command_filter: String,
     builtins: Vec<(&'static str, SlashCommand)>,
+    ui_language_is_ru: bool,
     state: ScrollState,
 }
 
@@ -61,6 +64,10 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
 
 impl CommandPopup {
     pub(crate) fn new(flags: CommandPopupFlags) -> Self {
+        Self::new_with_language(flags, current_ui_language_is_ru())
+    }
+
+    pub(crate) fn new_with_language(flags: CommandPopupFlags, ui_language_is_ru: bool) -> Self {
         // Keep built-in availability in sync with the composer.
         let builtins: Vec<(&'static str, SlashCommand)> =
             slash_commands::builtins_for_input(flags.into())
@@ -71,8 +78,16 @@ impl CommandPopup {
         Self {
             command_filter: String::new(),
             builtins,
+            ui_language_is_ru,
             state: ScrollState::new(),
         }
+    }
+
+    fn filter_prefers_english(&self) -> bool {
+        self.command_filter
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
     }
 
     /// Update the filter string based on the current composer text. The text
@@ -117,7 +132,14 @@ impl CommandPopup {
 
     /// Build the display label used in popup rows:
     /// canonical English key first, then discoverable aliases in parentheses.
-    fn display_name(cmd: SlashCommand) -> String {
+    fn display_name(&self, cmd: SlashCommand) -> String {
+        if self.ui_language_is_ru {
+            if self.filter_prefers_english() {
+                return format!("{} ({})", cmd.command_en(), cmd.command_ru());
+            }
+            return cmd.command_ru().to_string();
+        }
+
         let aliases = cmd.popup_aliases();
         if aliases.is_empty() {
             cmd.command().to_string()
@@ -126,14 +148,12 @@ impl CommandPopup {
         }
     }
 
-    /// Char offset of an alias inside [`Self::display_name`].
-    fn alias_offset_chars(cmd: SlashCommand, alias_index: usize) -> usize {
-        let mut offset = cmd.command().chars().count() + 2; // " ("
-        for alias in cmd.popup_aliases().iter().take(alias_index) {
-            offset += alias.chars().count();
-            offset += 2; // ", "
+    pub(crate) fn inserted_command(&self, cmd: SlashCommand) -> String {
+        if self.ui_language_is_ru && !self.filter_prefers_english() {
+            cmd.command_ru().to_string()
+        } else {
+            cmd.command_en().to_string()
         }
-        offset
     }
 
     fn indices_for(offset: usize, filter_chars: usize) -> Option<Vec<usize>> {
@@ -162,8 +182,6 @@ impl CommandPopup {
         }
 
         let filter_lower = filter.to_lowercase();
-        let filter_chars = filter.chars().count();
-
         let mut exact_canonical: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         let mut prefix_canonical: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         let mut exact_alias: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
@@ -171,43 +189,41 @@ impl CommandPopup {
 
         for (_, cmd) in self.builtins.iter() {
             let item = CommandItem::Builtin(*cmd);
-            let canonical = cmd.command();
+            let canonical = cmd.command_en();
             let canonical_lower = canonical.to_lowercase();
 
             if canonical_lower == filter_lower {
-                exact_canonical.push((item, Self::indices_for(0, filter_chars)));
+                exact_canonical.push((item, None));
                 continue;
             }
 
             if canonical_lower.starts_with(&filter_lower) {
-                prefix_canonical.push((item, Self::indices_for(0, filter_chars)));
+                prefix_canonical.push((item, None));
                 continue;
             }
 
-            let mut matched_exact_alias: Option<Vec<usize>> = None;
-            let mut matched_prefix_alias: Option<Vec<usize>> = None;
+            let mut matched_exact_alias = false;
+            let mut matched_prefix_alias = false;
 
-            for (alias_index, alias) in cmd.popup_aliases().iter().enumerate() {
+            for alias in cmd.popup_aliases() {
                 let alias_lower = alias.to_lowercase();
-                let alias_offset = Self::alias_offset_chars(*cmd, alias_index);
-
                 if alias_lower == filter_lower {
-                    matched_exact_alias = Self::indices_for(alias_offset, filter_chars);
+                    matched_exact_alias = true;
                     break;
                 }
 
-                if matched_prefix_alias.is_none() && alias_lower.starts_with(&filter_lower) {
-                    matched_prefix_alias = Self::indices_for(alias_offset, filter_chars);
+                if !matched_prefix_alias && alias_lower.starts_with(&filter_lower) {
+                    matched_prefix_alias = true;
                 }
             }
 
-            if let Some(indices) = matched_exact_alias {
-                exact_alias.push((item, Some(indices)));
+            if matched_exact_alias {
+                exact_alias.push((item, None));
                 continue;
             }
 
-            if let Some(indices) = matched_prefix_alias {
-                prefix_alias.push((item, Some(indices)));
+            if matched_prefix_alias {
+                prefix_alias.push((item, None));
             }
         }
 
@@ -230,7 +246,7 @@ impl CommandPopup {
             .into_iter()
             .map(|(item, indices)| {
                 let CommandItem::Builtin(cmd) = item;
-                let name = format!("{}{}", command_prefix(), Self::display_name(cmd));
+                let name = format!("{}{}", command_prefix(), self.display_name(cmd));
                 let description = cmd.description().to_string();
                 GenericDisplayRow {
                     name,
@@ -356,6 +372,13 @@ impl CommandPopup {
     }
 }
 
+fn current_ui_language_is_ru() -> bool {
+    find_codex_home()
+        .ok()
+        .map(|codex_home| load_ui_preferences(codex_home.as_path()).language.is_ru())
+        .unwrap_or(true)
+}
+
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
@@ -379,7 +402,7 @@ mod tests {
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
-        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
         // Simulate the composer line starting with '/in' so the popup filters
         // matching commands by prefix.
         popup.on_composer_text_change("/in".to_string());
@@ -398,7 +421,7 @@ mod tests {
 
     #[test]
     fn selecting_init_by_exact_match() {
-        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
         popup.on_composer_text_change("/init".to_string());
 
         // When an exact match exists, the selected command should be that
@@ -412,7 +435,7 @@ mod tests {
 
     #[test]
     fn model_is_first_suggestion_for_mo() {
-        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
         popup.on_composer_text_change("/mo".to_string());
         let matches = popup.filtered_items();
         match matches.first() {
@@ -423,7 +446,7 @@ mod tests {
 
     #[test]
     fn russian_alias_filters_to_model_command() {
-        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), true);
         popup.on_composer_text_change("/мод".to_string());
 
         let matches = popup.filtered_items();
@@ -435,7 +458,7 @@ mod tests {
 
     #[test]
     fn russian_alias_highlighting_targets_alias_segment() {
-        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), true);
         popup.on_composer_text_change("/мод".to_string());
 
         let model_match = popup
@@ -445,13 +468,13 @@ mod tests {
             .expect("expected /model to match by Russian alias");
 
         let rows = popup.rows_from_matches(vec![model_match]);
-        assert_eq!(rows[0].name, "model (модель)");
-        assert_eq!(rows[0].match_indices, Some(vec![7, 8, 9]));
+        assert_eq!(rows[0].name, "/модель");
+        assert_eq!(rows[0].match_indices, None);
     }
 
     #[test]
     fn filtered_commands_keep_presentation_order_for_prefix() {
-        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
         popup.on_composer_text_change("/m".to_string());
 
         let cmds: Vec<&str> = popup
@@ -466,7 +489,7 @@ mod tests {
 
     #[test]
     fn prefix_filter_limits_matches_for_ac() {
-        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
         popup.on_composer_text_change("/ac".to_string());
 
         let cmds: Vec<&str> = popup
@@ -484,7 +507,7 @@ mod tests {
 
     #[test]
     fn quit_hidden_in_empty_filter_but_shown_for_prefix() {
-        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
         popup.on_composer_text_change("/".to_string());
         let items = popup.filtered_items();
         assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
@@ -496,7 +519,7 @@ mod tests {
 
     #[test]
     fn collab_command_hidden_when_collaboration_modes_disabled() {
-        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
         popup.on_composer_text_change("/".to_string());
 
         let cmds: Vec<&str> = popup
@@ -518,7 +541,7 @@ mod tests {
 
     #[test]
     fn collab_command_visible_when_collaboration_modes_enabled() {
-        let mut popup = CommandPopup::new(CommandPopupFlags {
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags {
             collaboration_modes_enabled: true,
             connectors_enabled: false,
             plugins_command_enabled: false,
@@ -526,7 +549,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: false,
             windows_degraded_sandbox_active: false,
-        });
+        }, false);
         popup.on_composer_text_change("/collab".to_string());
 
         match popup.selected_item() {
@@ -537,7 +560,7 @@ mod tests {
 
     #[test]
     fn plan_command_visible_when_collaboration_modes_enabled() {
-        let mut popup = CommandPopup::new(CommandPopupFlags {
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags {
             collaboration_modes_enabled: true,
             connectors_enabled: false,
             plugins_command_enabled: false,
@@ -545,7 +568,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: false,
             windows_degraded_sandbox_active: false,
-        });
+        }, false);
         popup.on_composer_text_change("/plan".to_string());
 
         match popup.selected_item() {
@@ -556,7 +579,7 @@ mod tests {
 
     #[test]
     fn personality_command_hidden_when_disabled() {
-        let mut popup = CommandPopup::new(CommandPopupFlags {
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags {
             collaboration_modes_enabled: true,
             connectors_enabled: false,
             plugins_command_enabled: false,
@@ -564,7 +587,7 @@ mod tests {
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             windows_degraded_sandbox_active: false,
-        });
+        }, false);
         popup.on_composer_text_change("/pers".to_string());
 
         let cmds: Vec<&str> = popup
@@ -582,7 +605,7 @@ mod tests {
 
     #[test]
     fn personality_command_visible_when_enabled() {
-        let mut popup = CommandPopup::new(CommandPopupFlags {
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags {
             collaboration_modes_enabled: true,
             connectors_enabled: false,
             plugins_command_enabled: false,
@@ -590,7 +613,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: false,
             windows_degraded_sandbox_active: false,
-        });
+        }, false);
         popup.on_composer_text_change("/personality".to_string());
 
         match popup.selected_item() {
@@ -601,7 +624,7 @@ mod tests {
 
     #[test]
     fn settings_command_visible_when_audio_device_selection_is_disabled() {
-        let mut popup = CommandPopup::new(CommandPopupFlags {
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags {
             collaboration_modes_enabled: false,
             connectors_enabled: false,
             plugins_command_enabled: false,
@@ -609,7 +632,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
             windows_degraded_sandbox_active: false,
-        });
+        }, false);
         popup.on_composer_text_change("/aud".to_string());
 
         let cmds: Vec<&str> = popup
@@ -628,7 +651,7 @@ mod tests {
 
     #[test]
     fn debug_commands_are_hidden_from_popup() {
-        let popup = CommandPopup::new(CommandPopupFlags::default());
+        let popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
         let cmds: Vec<&str> = popup
             .filtered_items()
             .into_iter()

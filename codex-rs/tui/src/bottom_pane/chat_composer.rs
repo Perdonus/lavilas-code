@@ -1275,7 +1275,7 @@ impl ChatComposer {
         }
 
         if let Some(CommandItem::Builtin(cmd)) = selected_item {
-            let command_text = format!("{}{} ", command_prefix(), cmd.command());
+            let command_text = format!("{}{} ", command_prefix(), popup.inserted_command(cmd));
             self.textarea.set_text_clearing_elements(&command_text);
             self.textarea.set_cursor(self.textarea.text().len());
             self.active_popup = ActivePopup::None;
@@ -1343,6 +1343,7 @@ impl ChatComposer {
                 popup.on_composer_text_change(first_line.to_string());
                 if let Some(sel) = popup.selected_item() {
                     let CommandItem::Builtin(cmd) = sel;
+                    let inserted_command = popup.inserted_command(cmd);
                     if cmd == SlashCommand::Skills {
                         self.textarea.set_text_clearing_elements("");
                         return (InputResult::Command(cmd), true);
@@ -1351,13 +1352,13 @@ impl ChatComposer {
                     let starts_with_cmd = first_line.trim_start().starts_with(&format!(
                         "{}{}",
                         command_prefix(),
-                        cmd.command()
+                        inserted_command
                     ));
                     if !starts_with_cmd {
                         self.textarea.set_text_clearing_elements(&format!(
                             "{}{} ",
                             command_prefix(),
-                            cmd.command()
+                            inserted_command
                         ));
                     }
                     if !self.textarea.text().is_empty() {

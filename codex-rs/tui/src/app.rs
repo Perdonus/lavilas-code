@@ -45,8 +45,6 @@ use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
-use crate::font_library::download_google_font_family;
-use crate::font_library::remove_installed_font;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
@@ -6348,7 +6346,7 @@ impl App {
             }
             AppEvent::OpenSelectionHighlightColorTargetPicker => {
                 self.chat_widget
-                    .open_selection_highlight_color_target_picker_popup();
+                    .open_selection_highlight_color_picker_popup();
             }
             AppEvent::OpenSelectionHighlightColorChoicePicker { target } => {
                 self.chat_widget
@@ -6391,71 +6389,36 @@ impl App {
                 self.chat_widget.toggle_popup_text_format(target, format);
             }
             AppEvent::OpenSelectionHighlightFontsPicker => {
-                self.chat_widget.open_selection_highlight_fonts_picker_popup();
+                self.chat_widget.open_selection_highlight_picker_popup();
             }
             AppEvent::OpenSelectionHighlightAddFontPicker => {
-                self.chat_widget
-                    .open_selection_highlight_add_font_picker_popup(None);
+                self.chat_widget.open_selection_highlight_picker_popup();
             }
-            AppEvent::OpenSelectionHighlightFontSearchResults { query } => {
-                self.chat_widget
-                    .open_selection_highlight_add_font_picker_popup(Some(query.as_str()));
+            AppEvent::OpenSelectionHighlightFontSearchResults { query: _ } => {
+                self.chat_widget.open_selection_highlight_picker_popup();
             }
             AppEvent::OpenSelectionHighlightCustomFontPrompt => {
-                self.chat_widget
-                    .open_selection_highlight_custom_font_prompt();
+                self.chat_widget.open_selection_highlight_picker_popup();
             }
-            AppEvent::InstallGoogleFont { family } => {
-                let codex_home = self.config.codex_home.clone();
-                let tx = self.app_event_tx.clone();
-                tokio::spawn(async move {
-                    let result = download_google_font_family(codex_home.as_path(), family.as_str())
-                        .await
-                        .map_err(|err| err.to_string());
-                    tx.send(AppEvent::FinishGoogleFontInstall { family, result });
+            AppEvent::InstallGoogleFont { family: _ } => {
+                self.chat_widget.add_error_message(if self.ui_language_is_ru() {
+                    "Шрифты убраны из кастомизации.".to_string()
+                } else {
+                    "Fonts were removed from customization.".to_string()
                 });
+                self.chat_widget.open_selection_highlight_picker_popup();
             }
-            AppEvent::FinishGoogleFontInstall { family: _, result } => match result {
-                Ok(profile) => {
-                    self.chat_widget.finish_google_font_install(profile);
-                    self.chat_widget.open_selection_highlight_fonts_picker_popup();
-                }
-                Err(err) => {
-                    self.chat_widget.add_error_message(if self.ui_language_is_ru() {
-                        format!("Не удалось установить шрифт: {err}")
-                    } else {
-                            format!("Не удалось установить шрифт: {err}")
-                    });
-                }
-            },
-            AppEvent::OpenSelectionHighlightFontActions { font_id } => {
-                self.chat_widget
-                    .open_selection_highlight_font_actions_popup(font_id.as_str());
+            AppEvent::FinishGoogleFontInstall { family: _, result: _ } => {
+                self.chat_widget.open_selection_highlight_picker_popup();
             }
-            AppEvent::ActivateInstalledFont { font_id } => {
-                self.chat_widget.activate_installed_font(font_id.as_str());
+            AppEvent::OpenSelectionHighlightFontActions { font_id: _ } => {
+                self.chat_widget.open_selection_highlight_picker_popup();
             }
-            AppEvent::DeleteInstalledFont { font_id } => {
-                if let Some(font) = self
-                    .chat_widget
-                    .current_installed_fonts()
-                    .into_iter()
-                    .find(|font| font.id == font_id)
-                {
-                    if let Err(err) = remove_installed_font(
-                        self.config.codex_home.as_path(),
-                        font.id.as_str(),
-                    )
-                    {
-                        self.chat_widget.add_error_message(if self.ui_language_is_ru() {
-                            format!("Не удалось удалить файлы шрифта: {err}")
-                        } else {
-                            format!("Не удалось удалить файлы шрифта: {err}")
-                        });
-                    } else {
-                        self.chat_widget.delete_installed_font_preference(font_id.as_str());
-                    }
-                }
+            AppEvent::ActivateInstalledFont { font_id: _ } => {
+                self.chat_widget.open_selection_highlight_picker_popup();
+            }
+            AppEvent::DeleteInstalledFont { font_id: _ } => {
+                self.chat_widget.open_selection_highlight_picker_popup();
             }
             AppEvent::OpenCommandPrefixPicker => {
                 self.chat_widget.open_command_prefix_picker_popup();

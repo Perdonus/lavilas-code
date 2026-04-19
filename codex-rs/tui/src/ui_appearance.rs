@@ -360,6 +360,44 @@ fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
     }
 }
 
+fn rgb_luminance((r, g, b): (u8, u8, u8)) -> f32 {
+    let channel = |value: u8| {
+        let srgb = value as f32 / 255.0;
+        if srgb <= 0.04045 {
+            srgb / 12.92
+        } else {
+            ((srgb + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+pub(crate) fn visible_terminal_rgb(rgb: (u8, u8, u8)) -> (u8, u8, u8) {
+    let Some(background) = crate::terminal_palette::default_bg() else {
+        return rgb;
+    };
+
+    let contrast_delta = (rgb_luminance(rgb) - rgb_luminance(background)).abs();
+    if contrast_delta >= 0.28 {
+        return rgb;
+    }
+
+    let target = if rgb_luminance(background) >= 0.52 {
+        (18, 18, 18)
+    } else {
+        (245, 245, 245)
+    };
+
+    for weight in [0.16, 0.3, 0.46, 0.62, 0.8, 1.0] {
+        let candidate = blend(rgb, target, weight);
+        if (rgb_luminance(candidate) - rgb_luminance(background)).abs() >= 0.28 {
+            return candidate;
+        }
+    }
+
+    target
+}
+
 fn apply_foreground_accent(mut style: Style, tint: (u8, u8, u8), weight: f32) -> Style {
     let accented = style
         .fg
@@ -368,6 +406,22 @@ fn apply_foreground_accent(mut style: Style, tint: (u8, u8, u8), weight: f32) ->
         .unwrap_or_else(|| best_terminal_color(tint));
     style.fg = Some(accented);
     style
+}
+
+fn color_badge_style(rgb: (u8, u8, u8)) -> Style {
+    let bg = best_terminal_color(rgb);
+    let fg = if is_light(rgb) {
+        Color::Black
+    } else {
+        Color::White
+    };
+    Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD)
+}
+
+fn color_label_style(rgb: (u8, u8, u8)) -> Style {
+    Style::default()
+        .fg(best_terminal_color(visible_terminal_rgb(rgb)))
+        .add_modifier(Modifier::BOLD)
 }
 
 pub(crate) fn styled_color_label_spans(
@@ -386,7 +440,7 @@ pub(crate) fn styled_color_label_spans(
                     } else {
                         start_named.name_en.to_string()
                     },
-                    Style::default().fg(best_terminal_color(start_named.rgb)),
+                    color_label_style(start_named.rgb),
                 ),
                 Span::raw(" → "),
                 Span::styled(
@@ -395,14 +449,14 @@ pub(crate) fn styled_color_label_spans(
                     } else {
                         end_named.name_en.to_string()
                     },
-                    Style::default().fg(best_terminal_color(end_named.rgb)),
+                    color_label_style(end_named.rgb),
                 ),
             ]
         }
         _ => {
             let label = describe_color_choice(choice, fallback_preset, is_ru);
             let rgb = resolve_color_choice_rgb(choice, fallback_preset);
-            vec![Span::styled(label, Style::default().fg(best_terminal_color(rgb)))]
+            vec![Span::styled(label, color_label_style(rgb))]
         }
     }
 }
@@ -420,11 +474,7 @@ pub(crate) fn styled_choice_label_spans(
         if characters.len() <= 1 {
             return vec![Span::styled(
                 label.to_string(),
-                Style::default().fg(best_terminal_color(if is_secondary {
-                    secondary_rgb
-                } else {
-                    primary_rgb
-                })),
+                color_label_style(if is_secondary { secondary_rgb } else { primary_rgb }),
             )];
         }
 
@@ -433,25 +483,17 @@ pub(crate) fn styled_choice_label_spans(
         let right = characters[midpoint..].iter().collect::<String>();
         let mut spans = Vec::new();
         if !left.is_empty() {
-            spans.push(Span::styled(
-                left,
-                Style::default().fg(best_terminal_color(primary_rgb)),
-            ));
+            spans.push(Span::styled(left, color_label_style(primary_rgb)));
         }
         if !right.is_empty() {
-            spans.push(Span::styled(
-                right,
-                Style::default().fg(best_terminal_color(secondary_rgb)),
-            ));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(right, color_label_style(secondary_rgb)));
         }
         return spans;
     }
 
     let rgb = resolve_color_choice_label_rgb(choice, fallback_preset, is_secondary);
-    vec![Span::styled(
-        label.to_string(),
-        Style::default().fg(best_terminal_color(rgb)),
-    )]
+    vec![Span::styled(label.to_string(), color_label_style(rgb))]
 }
 
 pub(crate) fn color_swatch_spans(
@@ -464,13 +506,14 @@ pub(crate) fn color_swatch_spans(
             let start_rgb = parse_hex_color(start).unwrap_or(selection_preset_color(fallback_preset).rgb);
             let end_rgb = parse_hex_color(end).unwrap_or(selection_preset_color(fallback_preset).rgb);
             vec![
-                Span::styled("■", Style::default().fg(best_terminal_color(start_rgb))),
-                Span::styled("■", Style::default().fg(best_terminal_color(end_rgb))),
+                Span::styled("  ", color_badge_style(start_rgb)),
+                Span::raw(" "),
+                Span::styled("  ", color_badge_style(end_rgb)),
             ]
         }
         _ => {
             let rgb = resolve_color_choice_label_rgb(choice, fallback_preset, is_secondary);
-            vec![Span::styled("■", Style::default().fg(best_terminal_color(rgb)))]
+            vec![Span::styled("  ", color_badge_style(rgb))]
         }
     }
 }
@@ -478,32 +521,19 @@ pub(crate) fn color_swatch_spans(
 pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTextFormats) -> Style {
     if formats.contains(SelectionHighlightTextFormat::Bold) {
         style = style.add_modifier(Modifier::BOLD);
-        style = apply_foreground_accent(style, (244, 246, 250), 0.34);
-    } else if formats.contains(SelectionHighlightTextFormat::Semibold) {
-        style = style.add_modifier(Modifier::BOLD);
-        style = apply_foreground_accent(style, (220, 226, 236), 0.24);
+        style = apply_foreground_accent(style, (244, 246, 250), 0.58);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
         style = style.add_modifier(Modifier::ITALIC);
-        style = apply_foreground_accent(style, (193, 168, 235), 0.24);
+        style = apply_foreground_accent(style, (193, 168, 235), 0.62);
     }
     if formats.contains(SelectionHighlightTextFormat::Underlined) {
         style = style.add_modifier(Modifier::UNDERLINED);
-        style = apply_foreground_accent(style, (255, 210, 120), 0.18);
-    }
-    if formats.contains(SelectionHighlightTextFormat::Dim) {
-        style = style.add_modifier(Modifier::DIM);
-        style = apply_foreground_accent(style, (168, 176, 189), 0.12);
-    }
-    if formats.contains(SelectionHighlightTextFormat::Reversed) {
-        style = style.add_modifier(Modifier::REVERSED);
+        style = apply_foreground_accent(style, (255, 210, 120), 0.58);
     }
     if formats.contains(SelectionHighlightTextFormat::CrossedOut) {
         style = style.add_modifier(Modifier::CROSSED_OUT);
-        style = apply_foreground_accent(style, (227, 130, 136), 0.18);
-    }
-    if formats.contains(SelectionHighlightTextFormat::Mono) {
-        style = apply_foreground_accent(style, (120, 193, 255), 0.3);
+        style = apply_foreground_accent(style, (227, 130, 136), 0.6);
     }
     style
 }
@@ -605,9 +635,9 @@ pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset:
         UiColorChoice::Auto => {
             let named = selection_preset_color(fallback_preset);
             if is_ru {
-                format!("Авто · {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
+                format!("Авто · {}", named.name_ru)
             } else {
-                format!("Авто · {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
+                format!("Auto · {}", named.name_en)
             }
         }
         UiColorChoice::Gradient { start, end } => {
@@ -615,19 +645,15 @@ pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset:
             let end_named = named_color_for_hex(end);
             if is_ru {
                 format!(
-                    "Градиент: {} {} → {} {}",
+                    "Градиент · {} → {}",
                     start_named.name_ru,
-                    start.to_ascii_uppercase(),
                     end_named.name_ru,
-                    end.to_ascii_uppercase()
                 )
             } else {
                 format!(
-                    "Градиент: {} {} → {} {}",
-                    start_named.name_ru,
-                    start.to_ascii_uppercase(),
-                    end_named.name_ru,
-                    end.to_ascii_uppercase()
+                    "Gradient · {} → {}",
+                    start_named.name_en,
+                    end_named.name_en,
                 )
             }
         }
@@ -638,9 +664,19 @@ pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset:
                 UiColorChoice::Auto | UiColorChoice::Gradient { .. } => selection_preset_color(fallback_preset),
             };
             if is_ru {
-                format!("Оттенок: {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
+                match choice {
+                    UiColorChoice::Custom(hex) => {
+                        format!("{} · {}", named.name_ru, hex.to_ascii_uppercase())
+                    }
+                    _ => format!("{} · {}", named.name_ru, named.hex.to_ascii_uppercase()),
+                }
             } else {
-                format!("Оттенок: {} · {}", named.name_ru, named.hex.to_ascii_uppercase())
+                match choice {
+                    UiColorChoice::Custom(hex) => {
+                        format!("{} · {}", named.name_en, hex.to_ascii_uppercase())
+                    }
+                    _ => format!("{} · {}", named.name_en, named.hex.to_ascii_uppercase()),
+                }
             }
         }
     }
