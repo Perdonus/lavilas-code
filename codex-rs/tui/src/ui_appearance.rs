@@ -478,18 +478,18 @@ pub(crate) fn styled_choice_label_spans(
             )];
         }
 
-        let midpoint = (characters.len() / 2).max(1);
-        let left = characters[..midpoint].iter().collect::<String>();
-        let right = characters[midpoint..].iter().collect::<String>();
-        let mut spans = Vec::new();
-        if !left.is_empty() {
-            spans.push(Span::styled(left, color_label_style(primary_rgb)));
-        }
-        if !right.is_empty() {
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(right, color_label_style(secondary_rgb)));
-        }
-        return spans;
+        let last_index = (characters.len() - 1) as f32;
+        return characters
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ch)| {
+                let weight = idx as f32 / last_index;
+                Span::styled(
+                    ch.to_string(),
+                    color_label_style(blend(primary_rgb, secondary_rgb, weight)),
+                )
+            })
+            .collect();
     }
 
     let rgb = resolve_color_choice_label_rgb(choice, fallback_preset, is_secondary);
@@ -641,19 +641,17 @@ pub(crate) fn color_preview_description(choice: &UiColorChoice, fallback_preset:
             }
         }
         UiColorChoice::Gradient { start, end } => {
-            let start_named = named_color_for_hex(start);
-            let end_named = named_color_for_hex(end);
             if is_ru {
                 format!(
                     "Градиент · {} → {}",
-                    start_named.name_ru,
-                    end_named.name_ru,
+                    start.to_ascii_uppercase(),
+                    end.to_ascii_uppercase(),
                 )
             } else {
                 format!(
                     "Gradient · {} → {}",
-                    start_named.name_en,
-                    end_named.name_en,
+                    start.to_ascii_uppercase(),
+                    end.to_ascii_uppercase(),
                 )
             }
         }

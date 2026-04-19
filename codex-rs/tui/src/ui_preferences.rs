@@ -160,13 +160,9 @@ impl SelectionHighlightTextFormats {
     }
 
     pub(crate) const fn from_bits(bits: u16) -> Self {
-        let mut bits = bits & Self::ALL_BITS;
-        if bits & SelectionHighlightTextFormat::Bold.bit() != 0
-            && bits & SelectionHighlightTextFormat::Semibold.bit() != 0
-        {
-            bits &= !SelectionHighlightTextFormat::Semibold.bit();
+        Self {
+            bits: bits & Self::ALL_BITS,
         }
-        Self { bits }
     }
 
     pub(crate) const fn contains(self, format: SelectionHighlightTextFormat) -> bool {
@@ -179,22 +175,13 @@ impl SelectionHighlightTextFormats {
                 if self.contains(SelectionHighlightTextFormat::Bold) {
                     Self::from_bits(self.bits & !SelectionHighlightTextFormat::Bold.bit())
                 } else {
-                    Self::from_bits(
-                        (self.bits | SelectionHighlightTextFormat::Bold.bit())
-                            & !SelectionHighlightTextFormat::Semibold.bit(),
-                    )
+                    Self::from_bits(self.bits | SelectionHighlightTextFormat::Bold.bit())
                 }
             }
-            SelectionHighlightTextFormat::Semibold => {
-                if self.contains(SelectionHighlightTextFormat::Semibold) {
-                    Self::from_bits(self.bits & !SelectionHighlightTextFormat::Semibold.bit())
-                } else {
-                    Self::from_bits(
-                        (self.bits | SelectionHighlightTextFormat::Semibold.bit())
-                            & !SelectionHighlightTextFormat::Bold.bit(),
-                    )
-                }
-            }
+            SelectionHighlightTextFormat::Semibold
+            | SelectionHighlightTextFormat::Mono
+            | SelectionHighlightTextFormat::Dim
+            | SelectionHighlightTextFormat::Reversed => self,
             _ => Self::from_bits(self.bits ^ format.bit()),
         }
     }

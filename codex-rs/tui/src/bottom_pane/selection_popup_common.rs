@@ -1240,10 +1240,7 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize, total_width: usize)
         .into_iter()
         .map(|span| apply_base_style_to_prefix_span(span, primary_style))
         .collect();
-    if has_list_mono_prefix {
-        full_spans.insert(0, Span::styled("</> ", primary_style));
-    }
-    if (has_list_mono_prefix || !row.name_prefix_spans.is_empty())
+    if !row.name_prefix_spans.is_empty()
         && !name_spans.is_empty()
         && !spans_end_with_whitespace(&full_spans)
     {
