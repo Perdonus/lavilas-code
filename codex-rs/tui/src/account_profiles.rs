@@ -192,7 +192,7 @@ const ACCOUNT_PROVIDER_SPECS: [AccountProviderSpec; 16] = [
     },
     AccountProviderSpec {
         id: "custom",
-        name_en: "Свой провайдер",
+        name_en: "Custom provider",
         name_ru: "Свой провайдер",
         base_url: "",
         wire_api: "chat_completions",
@@ -415,10 +415,10 @@ fn find_bundled_sidecar_model_metadata(
 }
 
 const LEGACY_SYNTHETIC_REASONING_DESCRIPTIONS: [&str; 4] = [
-    "Отключает отдельный бюджет размышлений ради более прямого ответа",
-    "Быстрее отвечает и тратит меньше бюджета размышлений",
-    "Сбалансированный режим для повседневной разработки",
-    "Глубже разбирает сложные и неоднозначные задачи",
+    "No separate reasoning budget for a more direct reply",
+    "Faster replies with a smaller reasoning budget",
+    "Balanced mode for everyday development",
+    "Deeper analysis for complex and ambiguous tasks",
 ];
 
 fn inferred_openai_reasoning_levels(provider: &str) -> Option<Vec<ReasoningEffortPreset>> {
@@ -429,19 +429,19 @@ fn inferred_openai_reasoning_levels(provider: &str) -> Option<Vec<ReasoningEffor
     Some(vec![
         ReasoningEffortPreset {
             effort: ReasoningEffort::Low,
-            description: "Быстрее отвечает и тратит меньше бюджета размышлений".to_string(),
+            description: "Faster replies with a smaller reasoning budget".to_string(),
         },
         ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
-            description: "Сбалансированный режим для повседневной разработки".to_string(),
+            description: "Balanced mode for everyday development".to_string(),
         },
         ReasoningEffortPreset {
             effort: ReasoningEffort::High,
-            description: "Глубже разбирает сложные и неоднозначные задачи".to_string(),
+            description: "Deeper analysis for complex and ambiguous tasks".to_string(),
         },
         ReasoningEffortPreset {
             effort: ReasoningEffort::XHigh,
-            description: "Максимальный бюджет размышлений для тяжёлых случаев".to_string(),
+            description: "Maximum reasoning budget for the hardest cases".to_string(),
         },
     ])
 }
@@ -902,16 +902,16 @@ pub(crate) fn build_create_profile_request(
             "API-ключ не нужен. Оставьте поле пустым и будет использоваться стандартный вход Codex/OpenAI.".to_string()
         }
         Some(spec) if spec.builtin_model_provider_id.is_some() => {
-            "API-ключ не нужен. Оставьте поле пустым и будет использоваться стандартный вход Codex/OpenAI.".to_string()
+            "No API key is needed. Leave the field empty to use the standard Codex/OpenAI sign-in.".to_string()
         }
         Some(spec) if spec.api_key_optional && is_ru => {
             "Введите API-ключ. Для локальных провайдеров вроде Ollama поле можно оставить пустым.".to_string()
         }
         Some(spec) if spec.api_key_optional => {
-            "Введите API-ключ. Для локальных провайдеров вроде Ollama поле можно оставить пустым.".to_string()
+            "Enter the API key. For local providers like Ollama you can leave it empty.".to_string()
         }
         _ if is_ru => format!("Введите API-ключ для {display_name}."),
-        _ => format!("Введите API-ключ для {display_name}."),
+        _ => format!("Enter the API key for {display_name}."),
     };
     let base_url_prompt = match account_provider_spec(provider) {
         Some(spec) if spec.requires_base_url && is_ru => Some(
@@ -932,14 +932,16 @@ pub(crate) fn build_create_profile_request(
             header: if is_ru {
                 "Профиль".to_string()
             } else {
-                "Профиль".to_string()
+                "Profile".to_string()
             },
             question: if is_ru {
                 format!(
                     "Название профиля. Можно оставить пустым, тогда будет использовано `{fallback_name}`."
                 )
             } else {
-                format!("Название профиля. Можно оставить пустым, тогда будет использовано `{fallback_name}`.")
+                format!(
+                    "Profile name. Leave it empty to use `{fallback_name}`."
+                )
             },
             is_other: false,
             is_secret: false,
@@ -950,7 +952,7 @@ pub(crate) fn build_create_profile_request(
             header: if is_ru {
                 "API-ключ".to_string()
             } else {
-                "API-ключ".to_string()
+                "API key".to_string()
             },
             question: key_prompt,
             is_other: false,
@@ -962,7 +964,11 @@ pub(crate) fn build_create_profile_request(
     if let Some(base_url_prompt) = base_url_prompt {
         questions.push(RequestUserInputQuestion {
             id: BASE_URL_QUESTION_ID.to_string(),
-            header: "Базовый URL".to_string(),
+            header: if is_ru {
+                "Базовый URL".to_string()
+            } else {
+                "Base URL".to_string()
+            },
             question: base_url_prompt,
             is_other: false,
             is_secret: false,

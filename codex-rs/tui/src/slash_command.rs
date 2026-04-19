@@ -115,52 +115,106 @@ pub enum SlashCommand {
 impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
+        self.description_for_locale(true)
+    }
+
+    pub fn description_for_locale(self, is_ru: bool) -> &'static str {
+        if is_ru {
+            return match self {
+                SlashCommand::Feedback => "отправить отчёт",
+                SlashCommand::New => "новый чат",
+                SlashCommand::Init => "создать AGENTS.md",
+                SlashCommand::Compact => "сжать диалог",
+                SlashCommand::Review => "проверить изменения",
+                SlashCommand::Rename => "переименовать чат",
+                SlashCommand::Resume => "продолжить чат",
+                SlashCommand::Clear => "очистить экран",
+                SlashCommand::Fork => "сделать форк",
+                // SlashCommand::Undo => "ask Codex to undo a turn",
+                SlashCommand::Quit | SlashCommand::Exit => "выйти",
+                SlashCommand::Diff => "показать diff",
+                SlashCommand::Copy => "скопировать ответ",
+                SlashCommand::Mention => "упомянуть файл",
+                SlashCommand::Skills => "открыть навыки",
+                SlashCommand::Status => "показать статус",
+                SlashCommand::DebugConfig => "отладка конфига",
+                SlashCommand::Title => "заголовок окна",
+                SlashCommand::Statusline => "строка статуса",
+                SlashCommand::Theme => "тема подсветки",
+                SlashCommand::Ps => "фоновые терминалы",
+                SlashCommand::Stop => "остановить фоновые",
+                SlashCommand::MemoryDrop => "НЕ ИСПОЛЬЗОВАТЬ",
+                SlashCommand::MemoryUpdate => "НЕ ИСПОЛЬЗОВАТЬ",
+                SlashCommand::Model => "модель",
+                SlashCommand::Profiles => "аккаунты",
+                SlashCommand::Setlang => "язык",
+                SlashCommand::Fast => "быстро",
+                SlashCommand::Personality => "стиль",
+                SlashCommand::Realtime => "голос",
+                SlashCommand::Settings => "настройки",
+                SlashCommand::Plan => "режим плана",
+                SlashCommand::Collab => "режим работы",
+                SlashCommand::Agent | SlashCommand::MultiAgents => "агенты",
+                SlashCommand::Approvals => "подтверждения",
+                SlashCommand::Permissions => "доступ",
+                SlashCommand::ElevateSandbox => "песочница",
+                SlashCommand::SandboxReadRoot => "чтение каталога",
+                SlashCommand::Experimental => "эксперименты",
+                SlashCommand::Mcp => "инструменты",
+                SlashCommand::Apps => "приложения",
+                SlashCommand::Plugins => "плагины",
+                SlashCommand::Logout => "выйти",
+                SlashCommand::Rollout => "путь к rollout",
+                SlashCommand::TestApproval => "тест",
+            };
+        }
+
         match self {
-            SlashCommand::Feedback => "отправить отчёт",
-            SlashCommand::New => "новый чат",
-            SlashCommand::Init => "создать AGENTS.md",
-            SlashCommand::Compact => "сжать диалог",
-            SlashCommand::Review => "проверить изменения",
-            SlashCommand::Rename => "переименовать чат",
-            SlashCommand::Resume => "продолжить чат",
-            SlashCommand::Clear => "очистить экран",
-            SlashCommand::Fork => "сделать форк",
+            SlashCommand::Feedback => "send feedback",
+            SlashCommand::New => "new chat",
+            SlashCommand::Init => "create AGENTS.md",
+            SlashCommand::Compact => "compact chat",
+            SlashCommand::Review => "review changes",
+            SlashCommand::Rename => "rename chat",
+            SlashCommand::Resume => "resume chat",
+            SlashCommand::Clear => "clear screen",
+            SlashCommand::Fork => "fork conversation",
             // SlashCommand::Undo => "ask Codex to undo a turn",
-            SlashCommand::Quit | SlashCommand::Exit => "выйти",
-            SlashCommand::Diff => "показать diff",
-            SlashCommand::Copy => "скопировать ответ",
-            SlashCommand::Mention => "упомянуть файл",
-            SlashCommand::Skills => "открыть навыки",
-            SlashCommand::Status => "показать статус",
-            SlashCommand::DebugConfig => "отладка конфига",
-            SlashCommand::Title => "заголовок окна",
-            SlashCommand::Statusline => "строка статуса",
-            SlashCommand::Theme => "тема подсветки",
-            SlashCommand::Ps => "фоновые терминалы",
-            SlashCommand::Stop => "остановить фоновые",
-            SlashCommand::MemoryDrop => "НЕ ИСПОЛЬЗОВАТЬ",
-            SlashCommand::MemoryUpdate => "НЕ ИСПОЛЬЗОВАТЬ",
-            SlashCommand::Model => "модель",
-            SlashCommand::Profiles => "аккаунты",
-            SlashCommand::Setlang => "язык",
-            SlashCommand::Fast => "быстро",
-            SlashCommand::Personality => "стиль",
-            SlashCommand::Realtime => "голос",
-            SlashCommand::Settings => "настройки",
-            SlashCommand::Plan => "режим плана",
-            SlashCommand::Collab => "режим работы",
-            SlashCommand::Agent | SlashCommand::MultiAgents => "агенты",
-            SlashCommand::Approvals => "подтверждения",
-            SlashCommand::Permissions => "доступ",
-            SlashCommand::ElevateSandbox => "песочница",
-            SlashCommand::SandboxReadRoot => "чтение каталога",
-            SlashCommand::Experimental => "эксперименты",
-            SlashCommand::Mcp => "инструменты",
-            SlashCommand::Apps => "приложения",
-            SlashCommand::Plugins => "плагины",
-            SlashCommand::Logout => "выйти",
-            SlashCommand::Rollout => "путь к rollout",
-            SlashCommand::TestApproval => "тест",
+            SlashCommand::Quit | SlashCommand::Exit => "quit",
+            SlashCommand::Diff => "show diff",
+            SlashCommand::Copy => "copy reply",
+            SlashCommand::Mention => "mention file",
+            SlashCommand::Skills => "open skills",
+            SlashCommand::Status => "show status",
+            SlashCommand::DebugConfig => "debug config",
+            SlashCommand::Title => "window title",
+            SlashCommand::Statusline => "status line",
+            SlashCommand::Theme => "theme",
+            SlashCommand::Ps => "background terminals",
+            SlashCommand::Stop => "stop background terminals",
+            SlashCommand::MemoryDrop => "DO NOT USE",
+            SlashCommand::MemoryUpdate => "DO NOT USE",
+            SlashCommand::Model => "model",
+            SlashCommand::Profiles => "accounts",
+            SlashCommand::Setlang => "language",
+            SlashCommand::Fast => "fast",
+            SlashCommand::Personality => "style",
+            SlashCommand::Realtime => "voice",
+            SlashCommand::Settings => "settings",
+            SlashCommand::Plan => "plan mode",
+            SlashCommand::Collab => "work mode",
+            SlashCommand::Agent | SlashCommand::MultiAgents => "agents",
+            SlashCommand::Approvals => "approvals",
+            SlashCommand::Permissions => "permissions",
+            SlashCommand::ElevateSandbox => "sandbox",
+            SlashCommand::SandboxReadRoot => "add read directory",
+            SlashCommand::Experimental => "experimental",
+            SlashCommand::Mcp => "tools",
+            SlashCommand::Apps => "apps",
+            SlashCommand::Plugins => "plugins",
+            SlashCommand::Logout => "log out",
+            SlashCommand::Rollout => "rollout path",
+            SlashCommand::TestApproval => "test",
         }
     }
 
@@ -438,5 +492,17 @@ mod tests {
     #[test]
     fn russian_setlang_alias_parses() {
         assert_eq!(SlashCommand::from_str("язык"), Ok(SlashCommand::Setlang));
+    }
+
+    #[test]
+    fn description_is_localized_for_english() {
+        assert_eq!(
+            SlashCommand::Profiles.description_for_locale(false),
+            "accounts"
+        );
+        assert_eq!(
+            SlashCommand::Status.description_for_locale(false),
+            "show status"
+        );
     }
 }

@@ -392,11 +392,14 @@ fn resolve_text_color_choice(
 ) -> Option<Color> {
     match &choice {
         UiColorChoice::Auto => None,
-        _ => Some(best_terminal_color(resolve_color_choice_label_rgb(
-            &choice,
-            fallback_preset,
+        _ => Some(ensure_visible_text_color(
+            best_terminal_color(resolve_color_choice_label_rgb(
+                &choice,
+                fallback_preset,
+                is_secondary,
+            )),
             is_secondary,
-        ))),
+        )),
     }
 }
 
@@ -831,6 +834,12 @@ fn selection_highlight_base_style(is_secondary: bool) -> Style {
     let palette = selection_highlight_palette();
     let formats = current_selection_highlight_text_formats();
     let fill = current_selection_highlight_fill();
+    let selection_choice = match (fill, preferences.selection_highlight_color.clone()) {
+        (false, UiColorChoice::Auto) => {
+            UiColorChoice::Preset(current_selection_highlight_preset())
+        }
+        (_, choice) => choice,
+    };
 
     let mut style = if fill {
         let bg = if is_secondary {
@@ -846,18 +855,20 @@ fn selection_highlight_base_style(is_secondary: bool) -> Style {
         Style::default().fg(fg).bg(bg)
     } else {
         let direct_text_color = resolve_text_color_choice(
-            preferences.selection_highlight_color.clone(),
+            selection_choice,
             is_secondary,
             current_selection_highlight_preset(),
         );
         let base = direct_text_color.unwrap_or_else(|| {
             if is_secondary {
-                palette.text_secondary_fg
+                palette.text_secondary_fg_emphasis
             } else {
-                palette.text_fg
+                palette.text_fg_emphasis
             }
         });
-        Style::default().fg(base).bg(Color::Reset)
+        Style::default()
+            .fg(ensure_visible_text_color(base, is_secondary))
+            .bg(Color::Reset)
     };
 
     apply_terminal_safe_formats(style, formats, !fill, !fill)
@@ -873,6 +884,18 @@ fn selected_row_style() -> Style {
 
 fn selected_secondary_row_style() -> Style {
     selection_highlight_base_style(/*is_secondary*/ true)
+}
+
+fn row_default_foreground(
+    is_secondary: bool,
+    normal_primary_style: Style,
+    normal_secondary_style: Style,
+) -> Option<Color> {
+    if is_secondary {
+        normal_secondary_style.fg
+    } else {
+        normal_primary_style.fg
+    }
 }
 
 fn badge_style(label: &str) -> Style {
@@ -927,6 +950,7 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
     if selected {
         let selected_primary_style = selected_row_style();
         let selected_secondary_style = selected_secondary_row_style();
+        let normal_primary_style = unselected_row_styles().0;
         let normal_secondary_style = unselected_row_styles().1;
         for (line_idx, line) in lines.iter_mut().enumerate() {
             line.spans.iter_mut().for_each(|span| {
@@ -964,7 +988,15 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
                                 is_secondary,
                             ))
                         }
-                        _ => Some(explicit_fg),
+                        _ => {
+                            let default_fg =
+                                row_default_foreground(is_secondary, normal_primary_style, normal_secondary_style);
+                            if default_fg == Some(explicit_fg) {
+                                style.fg
+                            } else {
+                                Some(explicit_fg)
+                            }
+                        }
                     };
                 }
                 span.style = style;
@@ -1699,6 +1731,48 @@ mod tests {
 
         assert_ne!(lines[0].spans[0].style.fg, Some(Color::White));
         assert_eq!(lines[0].spans[0].style.bg, Some(Color::White));
+    }
+
+    #[test]
+    fn text_only_selection_recolors_default_row_text() {
+        set_selection_highlight_preset(SelectionHighlightPreset::Mint);
+        set_selection_highlight_fill(false);
+        set_selection_highlight_text_formats(SelectionHighlightTextFormats::empty());
+
+        let normal_primary = unselected_row_styles().0.fg;
+        let expected_selected = selection_highlight_style().fg;
+        let mut lines = vec![Line::from(vec![Span::styled(
+            "plain row",
+            unselected_row_styles().0,
+        )])];
+        apply_row_state_style(&mut lines, true, false);
+
+        assert_eq!(lines[0].spans[0].style.bg, Some(Color::Reset));
+        assert_eq!(lines[0].spans[0].style.fg, expected_selected);
+        assert_ne!(lines[0].spans[0].style.fg, normal_primary);
+
+        set_selection_highlight_fill(true);
+        set_selection_highlight_preset(SelectionHighlightPreset::Light);
+    }
+
+    #[test]
+    fn text_only_selection_preserves_explicit_color_examples() {
+        set_selection_highlight_preset(SelectionHighlightPreset::Graphite);
+        set_selection_highlight_fill(false);
+        set_selection_highlight_text_formats(SelectionHighlightTextFormats::empty());
+
+        let explicit = Color::Rgb(79, 140, 255);
+        let mut lines = vec![Line::from(vec![Span::styled(
+            "preview",
+            Style::default().fg(explicit),
+        )])];
+        apply_row_state_style(&mut lines, true, false);
+
+        assert_eq!(lines[0].spans[0].style.fg, Some(explicit));
+        assert_eq!(lines[0].spans[0].style.bg, Some(Color::Reset));
+
+        set_selection_highlight_fill(true);
+        set_selection_highlight_preset(SelectionHighlightPreset::Light);
     }
 
     #[test]

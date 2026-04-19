@@ -35,7 +35,9 @@ use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::ui_runtime_style::RuntimeTextRole;
+use crate::ui_runtime_style::patch_span_for_role;
 use crate::ui_runtime_style::patch_lines_for_role;
+use crate::ui_runtime_style::runtime_text_style;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
@@ -498,6 +500,32 @@ impl PlainHistoryCell {
 impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InfoHistoryCell {
+    message: String,
+    hint: Option<String>,
+}
+
+impl HistoryCell for InfoHistoryCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let primary_style = runtime_text_style(RuntimeTextRole::ListPrimary);
+        let secondary_style = runtime_text_style(RuntimeTextRole::ListSecondary);
+        let mut spans = vec![
+            patch_span_for_role("• ".into(), secondary_style, /*only_plain*/ false),
+            patch_span_for_role(self.message.clone().into(), primary_style, /*only_plain*/ false),
+        ];
+        if let Some(hint) = &self.hint {
+            spans.push(" ".into());
+            spans.push(patch_span_for_role(
+                hint.clone().into(),
+                secondary_style,
+                /*only_plain*/ false,
+            ));
+        }
+        vec![Line::from(spans)]
     }
 }
 
@@ -2195,14 +2223,8 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
-    let mut line = vec!["• ".dim(), message.into()];
-    if let Some(hint) = hint {
-        line.push(" ".into());
-        line.push(hint.dark_gray());
-    }
-    let lines: Vec<Line<'static>> = vec![line.into()];
-    PlainHistoryCell { lines }
+pub(crate) fn new_info_event(message: String, hint: Option<String>) -> InfoHistoryCell {
+    InfoHistoryCell { message, hint }
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {

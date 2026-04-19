@@ -20,6 +20,8 @@ use crate::ui_preferences::ui_preferences_revision;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeTextRole {
+    ListPrimary,
+    ListSecondary,
     Reply,
     Reasoning,
     Command,
@@ -80,6 +82,16 @@ fn role_choice(
     role: RuntimeTextRole,
 ) -> (UiColorChoice, SelectionHighlightTextFormats, Style) {
     match role {
+        RuntimeTextRole::ListPrimary => (
+            preferences.list_primary_color.clone(),
+            preferences.list_primary_text_formats,
+            Style::default(),
+        ),
+        RuntimeTextRole::ListSecondary => (
+            preferences.list_secondary_color.clone(),
+            preferences.list_secondary_text_formats,
+            Style::default().add_modifier(Modifier::DIM),
+        ),
         RuntimeTextRole::Reply => (
             preferences.reply_text_color.clone(),
             preferences.reply_text_formats,

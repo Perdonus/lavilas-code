@@ -271,6 +271,7 @@ const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Применить тольк
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Применить везде и для режима Plan";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const CUSTOM_SETTINGS_VIEW_ID: &str = "custom-settings";
+const MODEL_SETTINGS_VIEW_ID: &str = "model-settings";
 const LANGUAGE_PICKER_VIEW_ID: &str = "language-picker";
 const SELECTION_HIGHLIGHT_VIEW_ID: &str = "selection-highlight-picker";
 const SELECTION_HIGHLIGHT_COLOR_VIEW_ID: &str = "selection-highlight-color-picker";
@@ -297,6 +298,13 @@ const REASONING_PICKER_VIEW_ID: &str = "reasoning-picker";
 const PLAN_REASONING_SCOPE_VIEW_ID: &str = "plan-reasoning-scope";
 const REALTIME_AUDIO_VIEW_ID: &str = "realtime-audio-settings";
 const TUI_STUB_MESSAGE: &str = "Пока недоступно в TUI.";
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ModelSettingsNavigationOrigin {
+    Settings,
+    #[default]
+    Command,
+}
 
 fn realtime_audio_device_view_id(kind: RealtimeAudioDeviceKind) -> &'static str {
     match kind {
@@ -863,6 +871,7 @@ pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_target: CodexOpTarget,
     bottom_pane: BottomPane,
+    model_settings_navigation_origin: ModelSettingsNavigationOrigin,
     active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     ///
@@ -4816,6 +4825,7 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
+            model_settings_navigation_origin: ModelSettingsNavigationOrigin::Command,
             active_cell,
             active_cell_revision: 0,
             config,
@@ -5326,10 +5336,10 @@ impl ChatWidget {
                 self.show_rename_prompt();
             }
             SlashCommand::Model => {
-                self.open_model_popup();
+                self.open_model_popup_from_command();
             }
             SlashCommand::Profiles => {
-                self.open_profiles_manager_popup();
+                self.open_profiles_manager_popup_from_command();
             }
             SlashCommand::Setlang => {
                 self.open_language_picker_popup();
@@ -8042,6 +8052,156 @@ impl ChatWidget {
         });
     }
 
+    fn open_model_popup_from_command(&mut self) {
+        self.set_model_settings_navigation_origin(ModelSettingsNavigationOrigin::Command);
+        self.open_model_popup();
+    }
+
+    pub(crate) fn open_model_popup_from_settings(&mut self) {
+        self.set_model_settings_navigation_origin(ModelSettingsNavigationOrigin::Settings);
+        self.open_model_popup();
+    }
+
+    fn open_model_settings_back_item(&self) -> SelectionItem {
+        let is_ru = self.ui_language().is_ru();
+        SelectionItem {
+            name: if is_ru {
+                "← Назад в настройки".to_string()
+            } else {
+                "← Back to settings".to_string()
+            },
+            description: Some(if is_ru {
+                "Вернуться к общим настройкам.".to_string()
+            } else {
+                "Return to settings.".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "назад настройки модели".to_string()
+            } else {
+                "back settings model".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn open_model_settings_popup(&mut self) {
+        self.set_model_settings_navigation_origin(ModelSettingsNavigationOrigin::Settings);
+        let is_ru = self.ui_language().is_ru();
+        let replace_active = self.bottom_pane.active_view_id() == Some(MODEL_SETTINGS_VIEW_ID);
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(MODEL_SETTINGS_VIEW_ID)
+            .or(Some(1));
+        let can_open_models = self.is_session_configured();
+
+        let mut items = vec![self.open_model_settings_back_item()];
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Модели".to_string()
+            } else {
+                "Models".to_string()
+            },
+            description: Some(if is_ru {
+                "Выбор модели".to_string()
+            } else {
+                "Choose model".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "модели выбор модели размышления".to_string()
+            } else {
+                "models picker reasoning".to_string()
+            }),
+            actions: if can_open_models {
+                vec![Box::new(|tx| tx.send(AppEvent::OpenModelPopupFromSettings))]
+            } else {
+                Vec::new()
+            },
+            dismiss_on_select: can_open_models,
+            is_disabled: !can_open_models,
+            disabled_reason: (!can_open_models).then(|| {
+                if is_ru {
+                    "Сессия ещё запускается.".to_string()
+                } else {
+                    "Session is still starting.".to_string()
+                }
+            }),
+            ..Default::default()
+        });
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Профили".to_string()
+            } else {
+                "Profiles".to_string()
+            },
+            description: Some(if is_ru {
+                "Аккаунты и ключи".to_string()
+            } else {
+                "Accounts and keys".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "профили аккаунты провайдеры api ключи".to_string()
+            } else {
+                "profiles accounts providers api keys".to_string()
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenProfilesManagerFromSettings))],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
+            name: if is_ru {
+                "Пресеты".to_string()
+            } else {
+                "Presets".to_string()
+            },
+            description: Some(if is_ru {
+                "Быстрые модели".to_string()
+            } else {
+                "Quick presets".to_string()
+            }),
+            search_value: Some(if is_ru {
+                "пресеты моделей быстрые модели".to_string()
+            } else {
+                "model presets quick models".to_string()
+            }),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenModelPresetsSettingsFromSettings)
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        let params = SelectionViewParams {
+            view_id: Some(MODEL_SETTINGS_VIEW_ID),
+            title: Some(if is_ru {
+                "Настройки моделей".to_string()
+            } else {
+                "Model settings".to_string()
+            }),
+            subtitle: None,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some(if is_ru {
+                "Найти раздел".to_string()
+            } else {
+                "Find section".to_string()
+            }),
+            initial_selected_idx,
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            ..Default::default()
+        };
+
+        if replace_active {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(MODEL_SETTINGS_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
+    }
+
     /// Open a popup to choose a quick auto model. Selecting "Все модели"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
@@ -8051,7 +8211,8 @@ impl ChatWidget {
                 if is_ru {
                     "Выбор модели станет доступен после завершения запуска сессии.".to_string()
                 } else {
-                    "Выбор модели станет доступен после завершения запуска сессии.".to_string()
+                    "Model selection will become available once the session finishes starting."
+                        .to_string()
                 },
                 /*hint*/ None,
             );
@@ -8066,7 +8227,7 @@ impl ChatWidget {
                         "Каталог моделей ещё обновляется. Повторите /model через пару секунд."
                             .to_string()
                     } else {
-                        "Каталог моделей ещё обновляется. Повторите /model через пару секунд."
+                        "The model catalog is still refreshing. Try /model again in a couple of seconds."
                             .to_string()
                     },
                     /*hint*/ None,
@@ -8084,7 +8245,7 @@ impl ChatWidget {
                 if is_ru {
                     "Выбор стиля недоступен, пока сессия ещё запускается.".to_string()
                 } else {
-                    "Выбор стиля недоступен, пока сессия ещё запускается.".to_string()
+                    "Reply style is unavailable while the session is still starting.".to_string()
                 },
                 /*hint*/ None,
             );
@@ -8098,7 +8259,7 @@ impl ChatWidget {
                 )
             } else {
                 format!(
-                    "Текущая модель ({current_model}) не поддерживает стили ответов. Выберите другую через /model."
+                    "The current model ({current_model}) does not support reply styles. Pick a different model with /model."
                 )
             };
             self.add_error_message(message);
@@ -8125,12 +8286,12 @@ impl ChatWidget {
             name: if is_ru {
                 "← Назад в настройки".to_string()
             } else {
-                "← Назад в настройки".to_string()
+                "← Back to settings".to_string()
             },
             description: Some(if is_ru {
                 "Вернуться к единому центру настроек.".to_string()
             } else {
-                "Вернуться к единому центру настроек.".to_string()
+                "Return to settings.".to_string()
             }),
             search_value: Some(if is_ru {
                 "назад настройки стиль ответы".to_string()
@@ -8160,18 +8321,18 @@ impl ChatWidget {
                     "прагматичный pragmatic коротко по делу".to_string(),
                 ),
                 (false, Personality::None) => (
-                    "Без стиля".to_string(),
-                    "Нейтральный ответ без дополнительных указаний по тону.".to_string(),
+                    "No extra style".to_string(),
+                    "Neutral replies without extra tone instructions.".to_string(),
                     "none neutral tone".to_string(),
                 ),
                 (false, Personality::Friendly) => (
-                    "Дружелюбный".to_string(),
-                    "Более тёплый и поддерживающий тон без потери конкретики.".to_string(),
+                    "Friendly".to_string(),
+                    "Warmer, more supportive replies without losing precision.".to_string(),
                     "friendly warm supportive".to_string(),
                 ),
                 (false, Personality::Pragmatic) => (
-                    "Прагматичный".to_string(),
-                    "Коротко, прямо и с упором на действие, без лишней воды.".to_string(),
+                    "Pragmatic".to_string(),
+                    "Concise, direct, action-focused replies without extra filler.".to_string(),
                     "pragmatic concise direct action".to_string(),
                 ),
             };
@@ -8211,12 +8372,12 @@ impl ChatWidget {
         header.push(Line::from(if is_ru {
             "Стиль ответов".bold()
         } else {
-            "Стиль ответов".bold()
+            "Reply style".bold()
         }));
         header.push(Line::from(if is_ru {
             "Подберите манеру, с которой Lavilas Codex будет отвечать в этой сессии.".dim()
         } else {
-            "Подберите манеру, с которой Lavilas Codex будет отвечать в этой сессии.".dim()
+            "Choose how Lavilas Codex should answer in this session.".dim()
         }));
 
         let initial_selected_idx = remembered_selected_idx
@@ -8231,7 +8392,7 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти стиль ответа".to_string()
             } else {
-                "Найти стиль ответа".to_string()
+                "Find a reply style".to_string()
             }),
             initial_selected_idx,
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
@@ -8258,12 +8419,12 @@ impl ChatWidget {
             name: if is_ru {
                 "← Назад в настройки".to_string()
             } else {
-                "← Назад в настройки".to_string()
+                "← Back to settings".to_string()
             },
             description: Some(if is_ru {
                 "Вернуться к общим настройкам модели, профилей и команд.".to_string()
             } else {
-                "Вернуться к общим настройкам модели, профилей и команд.".to_string()
+                "Return to the shared settings for models, profiles, and commands.".to_string()
             }),
             search_value: Some(if is_ru {
                 "назад настройки звук".to_string()
@@ -8285,7 +8446,7 @@ impl ChatWidget {
                 let description = Some(if is_ru {
                     format!("Сейчас используется: {current_label}")
                 } else {
-                    format!("Сейчас используется: {current_label}")
+                    format!("Currently using: {current_label}")
                 });
                 let search_value = if is_ru {
                     format!(
@@ -8319,12 +8480,12 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Голос и звук".to_string()
             } else {
-                "Голос и звук".to_string()
+                "Voice and audio".to_string()
             }),
             subtitle: Some(if is_ru {
                 "Настройте микрофон и вывод для голосового режима.".to_string()
             } else {
-                "Настройте микрофон и вывод для голосового режима.".to_string()
+                "Choose the microphone and output used for voice mode.".to_string()
             }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -8332,7 +8493,7 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти настройку звука".to_string()
             } else {
-                "Найти настройку звука".to_string()
+                "Find an audio setting".to_string()
             }),
             initial_selected_idx,
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
@@ -8362,7 +8523,7 @@ impl ChatWidget {
                     )
                 } else {
                     format!(
-                    "Не удалось загрузить realtime-устройства для {}: {err}",
+                        "Failed to load realtime devices for {}: {err}",
                         self.realtime_audio_device_noun(kind)
                     )
                 });
@@ -8407,12 +8568,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "← Назад к голосу и звуку".to_string()
                 } else {
-                    "← Назад к настройкам аудио".to_string()
+                    "← Back to voice and audio".to_string()
                 },
                 description: Some(if is_ru {
                     "Вернуться к выбору микрофона и вывода для голосового режима.".to_string()
                 } else {
-                    "Вернуться к выбору микрофона и вывода для голосового режима.".to_string()
+                    "Return to the voice mode microphone and output settings.".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "назад голос звук".to_string()
@@ -8427,12 +8588,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "По умолчанию в системе".to_string()
                 } else {
-                    "По умолчанию в системе".to_string()
+                    "System default".to_string()
                 },
                 description: Some(if is_ru {
                     "Использовать устройство, которое сейчас выбрано в системе.".to_string()
                 } else {
-                    "Использовать устройство, которое сейчас выбрано в системе.".to_string()
+                    "Use whichever device is currently selected by the system.".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "по умолчанию система устройство".to_string()
@@ -8455,12 +8616,12 @@ impl ChatWidget {
                 name: if is_ru {
                     format!("Недоступно: {selection}")
                 } else {
-                    format!("Недоступно: {selection}")
+                    format!("Unavailable: {selection}")
                 },
                 description: Some(if is_ru {
                     "Сохранённое устройство сейчас не видно системе.".to_string()
                 } else {
-                    "Сохранённое устройство сейчас не видно системе.".to_string()
+                    "The saved device is not currently visible to the system.".to_string()
                 }),
                 search_value: Some(selection.to_string()),
                 is_current: true,
@@ -8468,7 +8629,7 @@ impl ChatWidget {
                 disabled_reason: Some(if is_ru {
                     "Подключите его снова или выберите другой вариант.".to_string()
                 } else {
-                    "Подключите его снова или выберите другой вариант.".to_string()
+                    "Reconnect it or choose another device.".to_string()
                 }),
                 ..Default::default()
             });
@@ -8497,12 +8658,12 @@ impl ChatWidget {
         header.push(Line::from(if is_ru {
             format!("Устройство: {}", self.realtime_audio_device_title(kind)).bold()
         } else {
-            format!("Устройство: {}", self.realtime_audio_device_title(kind)).bold()
+            format!("Device: {}", self.realtime_audio_device_title(kind)).bold()
         }));
         header.push(Line::from(if is_ru {
             "Сохранённый выбор влияет только на голосовой режим.".dim()
         } else {
-            "Сохранённый выбор влияет только на голосовой режим.".dim()
+            "The saved choice only affects voice mode.".dim()
         }));
 
         let params = SelectionViewParams {
@@ -8518,7 +8679,7 @@ impl ChatWidget {
                 )
             } else {
                 format!(
-                    "Найти устройство: {}",
+                    "Find device: {}",
                     self.realtime_audio_device_title(kind)
                 )
             }),
@@ -8546,7 +8707,7 @@ impl ChatWidget {
                 name: if is_ru {
                     "Перезапустить сейчас".to_string()
                 } else {
-                    "Перезапустить сейчас".to_string()
+                    "Restart now".to_string()
                 },
                 description: Some(if is_ru {
                     format!(
@@ -8555,7 +8716,7 @@ impl ChatWidget {
                     )
                 } else {
                     format!(
-                        "Перезапустить локальный звук и сразу переключиться на новый {}.",
+                        "Restart local audio now and switch to the new {} immediately.",
                         self.realtime_audio_device_noun(kind)
                     )
                 }),
@@ -8567,7 +8728,7 @@ impl ChatWidget {
                 name: if is_ru {
                     "Применить позже".to_string()
                 } else {
-                    "Применить позже".to_string()
+                    "Apply later".to_string()
                 },
                 description: Some(if is_ru {
                     format!(
@@ -8576,7 +8737,7 @@ impl ChatWidget {
                     )
                 } else {
                     format!(
-                        "Оставить текущее устройство до следующего запуска локального звука: {}.",
+                        "Keep the current device until local audio is started again: {}.",
                         self.realtime_audio_device_noun(kind)
                     )
                 }),
@@ -8594,7 +8755,7 @@ impl ChatWidget {
             .bold()
         } else {
             format!(
-                "Применить новый {} сейчас?",
+                "Apply the new {} now?",
                 self.realtime_audio_device_noun(kind)
             )
             .bold()
@@ -8602,7 +8763,7 @@ impl ChatWidget {
         header.push(Line::from(if is_ru {
             "Выбор уже сохранён. Чтобы применить его сразу, перезапустите локальное аудио.".dim()
         } else {
-            "Выбор уже сохранён. Чтобы применить его сразу, перезапустите локальное аудио.".dim()
+            "The choice is already saved. Restart local audio to apply it right away.".dim()
         }));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -8633,7 +8794,7 @@ impl ChatWidget {
             )
         } else {
             format!(
-                "Внимание: OpenAI использует нестандартный базовый URL API ({base_url}). Каталог моделей может быть неполным."
+                "Warning: OpenAI is using a custom API base URL ({base_url}). The model catalog may be incomplete."
             )
         };
         Some(Line::from(warning.red()))
@@ -8895,7 +9056,7 @@ impl ChatWidget {
                 ))
             } else {
                 Some(format!(
-                    "Текущий универсальный вариант {provider_name} для повседневной работы."
+                    "Current general-purpose {provider_name} variant for everyday work."
                 ))
             }
         } else if Self::looks_like_fast_model(preset.model.as_str()) {
@@ -9096,9 +9257,9 @@ impl ChatWidget {
                 } else if is_ru {
                     "Быстрые пресеты текущего провайдера. Выбор применяется сразу: этот провайдер сам управляет глубиной размышлений.".to_string()
                 } else if provider_supports_reasoning {
-                    "Быстрые пресеты активного провайдера. Выберите пресет, затем укажите бюджет размышлений.".to_string()
+                    "Quick presets for the active provider. Pick a preset, then choose the reasoning budget.".to_string()
                 } else {
-                    "Быстрые пресеты активного провайдера. Выбор применяется сразу, потому что этот провайдер сам управляет размышлениями.".to_string()
+                    "Quick presets for the active provider. The choice applies immediately because this provider manages reasoning on its own.".to_string()
                 },
             )
         } else {
@@ -9150,28 +9311,40 @@ impl ChatWidget {
                 if is_ru {
                     "Сначала быстрые пресеты для старта, затем полный каталог с ручной настройкой модели и режима размышлений.".to_string()
                 } else {
-                    "Выберите быстрый авто-пресет или откройте полный каталог моделей.".to_string()
+                    "Choose a quick preset or open the full model catalog.".to_string()
                 },
             )
         };
 
         let mut items: Vec<SelectionItem> = vec![SelectionItem {
-            name: if is_ru {
-                "← Назад в настройки".to_string()
-            } else {
-                "← Назад в настройки".to_string()
-            },
-            description: Some(if is_ru {
-                "Вернуться к единому центру настроек.".to_string()
-            } else {
-                "Вернуться к единому центру настроек.".to_string()
+            name: self.model_settings_back_name(is_ru),
+            description: Some(match (self.model_settings_navigation_origin, is_ru) {
+                (ModelSettingsNavigationOrigin::Settings, true) => {
+                    "Вернуться к настройкам моделей.".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Settings, false) => {
+                    "Return to model settings.".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Command, true) => {
+                    "Закрыть выбор модели.".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Command, false) => {
+                    "Close the model picker.".to_string()
+                }
             }),
-            search_value: Some(if is_ru {
-                "назад настройки модель".to_string()
-            } else {
-                "back settings model".to_string()
+            search_value: Some(match (self.model_settings_navigation_origin, is_ru) {
+                (ModelSettingsNavigationOrigin::Settings, true) => {
+                    "назад настройки моделей".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Settings, false) => {
+                    "back model settings".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Command, true) => "назад чат модель".to_string(),
+                (ModelSettingsNavigationOrigin::Command, false) => {
+                    "back chat model".to_string()
+                }
             }),
-            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            actions: self.model_settings_back_actions(),
             dismiss_on_select: true,
             ..Default::default()
         }];
@@ -9193,11 +9366,7 @@ impl ChatWidget {
                 } else {
                     "Full model catalog".to_string()
                 },
-                description: Some(if is_ru {
-                    "Все модели провайдера".to_string()
-                } else {
-                    "All provider models".to_string()
-                }),
+                description: None,
                 search_value: Some(if is_ru {
                     "полный каталог все модели manual reasoning".to_string()
                 } else {
@@ -9214,7 +9383,7 @@ impl ChatWidget {
             if is_ru {
                 "Выбор модели"
             } else {
-                "Выбор модели"
+                "Choose model"
             },
             &subtitle,
         );
@@ -9231,9 +9400,10 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти модель или пресет".to_string()
             } else {
-                "Найти модель или пресет".to_string()
+                "Find a model or preset".to_string()
             }),
             initial_selected_idx,
+            on_cancel: self.model_settings_on_cancel(),
             ..Default::default()
         };
 
@@ -9382,9 +9552,9 @@ impl ChatWidget {
             (UiLanguage::Ru, "fast") => "Быстрый".to_string(),
             (UiLanguage::Ru, "latest") => "Основной".to_string(),
             (UiLanguage::Ru, "tools") => "С инструментами".to_string(),
-            (UiLanguage::En, "fast") => "Быстрый".to_string(),
-            (UiLanguage::En, "latest") => "Основной".to_string(),
-            (UiLanguage::En, "tools") => "С инструментами".to_string(),
+            (UiLanguage::En, "fast") => "Fast".to_string(),
+            (UiLanguage::En, "latest") => "Main".to_string(),
+            (UiLanguage::En, "tools") => "With tools".to_string(),
             (_, other) => other.to_string(),
         }
     }
@@ -9396,7 +9566,7 @@ impl ChatWidget {
             (true, "latest") => format!("Основной · {model_label}"),
             (true, "tools") => format!("Инструменты · {model_label}"),
             (false, "fast") => format!("Fast · {model_label}"),
-            (false, "latest") => format!("Latest · {model_label}"),
+            (false, "latest") => format!("Main · {model_label}"),
             (false, "tools") => format!("Tools · {model_label}"),
             _ => model_label,
         }
@@ -9409,7 +9579,7 @@ impl ChatWidget {
                 if is_ru {
                     "Сейчас для этого провайдера нет дополнительных моделей.".to_string()
                 } else {
-                    "Для этого провайдера сейчас нет дополнительных моделей.".to_string()
+                    "There are no extra models for this provider right now.".to_string()
                 },
                 /*hint*/ None,
             );
@@ -9427,12 +9597,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "← К быстрым пресетам".to_string()
                 } else {
-                    "← Назад к быстрым пресетам".to_string()
+                    "← Back to quick presets".to_string()
                 },
                 description: Some(if is_ru {
                     "Вернуться к быстрым режимам выбора модели.".to_string()
                 } else {
-                    "Вернуться к быстрым пресетам моделей.".to_string()
+                    "Return to the quick model presets.".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "назад быстрые пресеты модели".to_string()
@@ -9445,22 +9615,36 @@ impl ChatWidget {
             });
         } else {
             items.push(SelectionItem {
-                name: if is_ru {
-                    "← Назад в настройки".to_string()
-                } else {
-                    "← Назад в настройки".to_string()
-                },
-                description: Some(if is_ru {
-                    "Вернуться к настройкам и профилям модели.".to_string()
-                } else {
-                    "Вернуться к настройкам моделей и профилей.".to_string()
+                name: self.model_settings_back_name(is_ru),
+                description: Some(match (self.model_settings_navigation_origin, is_ru) {
+                    (ModelSettingsNavigationOrigin::Settings, true) => {
+                        "Вернуться к настройкам моделей.".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Settings, false) => {
+                        "Return to model settings.".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Command, true) => {
+                        "Закрыть каталог моделей.".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Command, false) => {
+                        "Close the model catalog.".to_string()
+                    }
                 }),
-                search_value: Some(if is_ru {
-                    "назад настройки модели".to_string()
-                } else {
-                    "back settings model".to_string()
+                search_value: Some(match (self.model_settings_navigation_origin, is_ru) {
+                    (ModelSettingsNavigationOrigin::Settings, true) => {
+                        "назад настройки моделей".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Settings, false) => {
+                        "back model settings".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Command, true) => {
+                        "назад чат каталог моделей".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Command, false) => {
+                        "back chat model catalog".to_string()
+                    }
                 }),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+                actions: self.model_settings_back_actions(),
                 dismiss_on_select: true,
                 ..Default::default()
             });
@@ -9510,7 +9694,7 @@ impl ChatWidget {
             if is_ru {
                 "Все модели"
             } else {
-                "Выбор модели"
+                "All models"
             },
             &subtitle,
         );
@@ -9523,11 +9707,11 @@ impl ChatWidget {
                 if self.current_provider_supports_reasoning_controls() && is_ru {
                     "Enter открывает выбор размышлений для модели, Esc закрывает окно."
                 } else if self.current_provider_supports_reasoning_controls() {
-                    "Enter открывает выбор размышлений, Esc закрывает окно."
+                    "Enter opens the reasoning picker, Esc closes the menu."
                 } else if is_ru {
                     "Enter сразу применяет модель, Esc закрывает окно."
                 } else {
-                    "Enter сразу применяет модель, Esc закрывает окно."
+                    "Enter applies the model immediately, Esc closes the menu."
                 }
                 .into(),
             ),
@@ -9538,9 +9722,17 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти модель в каталоге".to_string()
             } else {
-                "Найти модель в каталоге".to_string()
+                "Find a model in the catalog".to_string()
             }),
             initial_selected_idx,
+            on_cancel: if can_return_to_quick_presets {
+                Some(
+                    Box::new(|tx: &AppEventSender| tx.send(AppEvent::OpenModelPopup))
+                        as Box<dyn Fn(&AppEventSender) + Send + Sync>,
+                )
+            } else {
+                self.model_settings_on_cancel()
+            },
             ..Default::default()
         };
 
@@ -9752,22 +9944,22 @@ impl ChatWidget {
         let subtitle = if is_ru {
             format!("Решите, менять только Plan или все режимы: {reasoning_phrase}.")
         } else {
-            format!("Выберите, где применять {reasoning_phrase}.")
+            format!("Choose where to apply {reasoning_phrase}.")
         };
         let title = if is_ru {
             "Где использовать новый режим размышлений".to_string()
         } else {
-            PLAN_MODE_REASONING_SCOPE_TITLE.to_string()
+            "Where should the reasoning change apply?".to_string()
         };
         let plan_only_label = if is_ru {
             "Только для Plan".to_string()
         } else {
-            PLAN_MODE_REASONING_SCOPE_PLAN_ONLY.to_string()
+            "Plan only".to_string()
         };
         let all_modes_label = if is_ru {
             "Для всех режимов".to_string()
         } else {
-            PLAN_MODE_REASONING_SCOPE_ALL_MODES.to_string()
+            "All modes".to_string()
         };
 
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
@@ -9795,12 +9987,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "← Назад к бюджету размышлений".to_string()
                 } else {
-                    "← Назад к уровням размышлений".to_string()
+                    "← Back to reasoning levels".to_string()
                 },
                 description: Some(if is_ru {
                     "Вернуться к выбору бюджета размышлений для этой модели.".to_string()
                 } else {
-                    "Вернуться к выбору бюджета размышлений для этой модели.".to_string()
+                    "Return to the reasoning picker for this model.".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "назад размышления модель".to_string()
@@ -9995,12 +10187,12 @@ impl ChatWidget {
                 name: if is_ru {
                     "← К списку моделей".to_string()
                 } else {
-                    "← Назад к списку моделей".to_string()
+                    "← Back to model list".to_string()
                 },
                 description: Some(if is_ru {
                     "Вернуться к каталогу моделей текущего провайдера.".to_string()
                 } else {
-                    "Вернуться к каталогу моделей провайдера.".to_string()
+                    "Return to this provider's model catalog.".to_string()
                 }),
                 search_value: Some(if is_ru {
                     "назад модели каталог".to_string()
@@ -10116,7 +10308,7 @@ impl ChatWidget {
             .dim()
         } else {
             format!(
-                "Провайдер: {}. Выберите баланс между качеством, задержкой и расходом токенов.",
+                "Provider: {}. Choose the balance between quality, latency, and token usage.",
                 self.config.model_provider.name
             )
             .dim()
@@ -10141,7 +10333,7 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти режим размышлений".to_string()
             } else {
-                "Найти уровень размышлений".to_string()
+                "Find a reasoning level".to_string()
             }),
             initial_selected_idx: remembered_selected_idx.or(default_initial_selected_idx),
             on_cancel,
@@ -10165,12 +10357,12 @@ impl ChatWidget {
             (UiLanguage::Ru, ReasoningEffortConfig::Medium) => "Стандартный",
             (UiLanguage::Ru, ReasoningEffortConfig::High) => "Глубокий",
             (UiLanguage::Ru, ReasoningEffortConfig::XHigh) => "Максимальный",
-            (UiLanguage::En, ReasoningEffortConfig::None) => "Без размышлений",
-            (UiLanguage::En, ReasoningEffortConfig::Minimal) => "Быстрый",
-            (UiLanguage::En, ReasoningEffortConfig::Low) => "Лёгкий",
-            (UiLanguage::En, ReasoningEffortConfig::Medium) => "Стандартный",
-            (UiLanguage::En, ReasoningEffortConfig::High) => "Глубокий",
-            (UiLanguage::En, ReasoningEffortConfig::XHigh) => "Максимальный",
+            (UiLanguage::En, ReasoningEffortConfig::None) => "No reasoning",
+            (UiLanguage::En, ReasoningEffortConfig::Minimal) => "Minimal",
+            (UiLanguage::En, ReasoningEffortConfig::Low) => "Low",
+            (UiLanguage::En, ReasoningEffortConfig::Medium) => "Medium",
+            (UiLanguage::En, ReasoningEffortConfig::High) => "High",
+            (UiLanguage::En, ReasoningEffortConfig::XHigh) => "Extra high",
         }
     }
 
@@ -10249,13 +10441,50 @@ impl ChatWidget {
         match (self.ui_language().is_ru(), language) {
             (true, UiLanguage::Ru) => "Русский",
             (true, UiLanguage::En) => "Английский",
-            (false, UiLanguage::Ru) => "Русский",
-            (false, UiLanguage::En) => "Английский",
+            (false, UiLanguage::Ru) => "Russian",
+            (false, UiLanguage::En) => "English",
         }
     }
 
     fn current_hidden_command_count(&self) -> usize {
         self.current_hidden_commands().len()
+    }
+
+    fn set_model_settings_navigation_origin(&mut self, origin: ModelSettingsNavigationOrigin) {
+        self.model_settings_navigation_origin = origin;
+    }
+
+    fn model_settings_back_name(&self, is_ru: bool) -> String {
+        match (self.model_settings_navigation_origin, is_ru) {
+            (ModelSettingsNavigationOrigin::Settings, true) => {
+                "← Назад к настройкам моделей".to_string()
+            }
+            (ModelSettingsNavigationOrigin::Settings, false) => {
+                "← Back to model settings".to_string()
+            }
+            (ModelSettingsNavigationOrigin::Command, true) => "← Назад в чат".to_string(),
+            (ModelSettingsNavigationOrigin::Command, false) => "← Back to chat".to_string(),
+        }
+    }
+
+    fn model_settings_back_actions(&self) -> Vec<SelectionAction> {
+        match self.model_settings_navigation_origin {
+            ModelSettingsNavigationOrigin::Settings => {
+                vec![Box::new(|tx| tx.send(AppEvent::OpenModelSettings))]
+            }
+            ModelSettingsNavigationOrigin::Command => Vec::new(),
+        }
+    }
+
+    fn model_settings_on_cancel(
+        &self,
+    ) -> Option<Box<dyn Fn(&AppEventSender) + Send + Sync>> {
+        match self.model_settings_navigation_origin {
+            ModelSettingsNavigationOrigin::Settings => {
+                Some(Box::new(|tx| tx.send(AppEvent::OpenModelSettings)))
+            }
+            ModelSettingsNavigationOrigin::Command => None,
+        }
     }
 
     fn current_model_settings_summary(&self) -> String {
@@ -10268,7 +10497,7 @@ impl ChatWidget {
                 if self.ui_language().is_ru() {
                     "Авто".to_string()
                 } else {
-                    "Авто".to_string()
+                    "Auto".to_string()
                 }
             });
         if self.ui_language().is_ru() {
@@ -10310,21 +10539,21 @@ impl ChatWidget {
         } else if preview.has_saved_api_key {
             match catalog_path {
                 Some(path) => format!(
-                    "Нажмите Enter, чтобы переключиться на этот аккаунт. Каталог моделей уже привязан: {}. Вернуться сюда можно через {prefix}settings.",
+                    "Press Enter to switch to this account. The model catalog is already linked: {}. You can return here with {prefix}settings.",
                     path.display()
                 ),
                 None => format!(
-                    "Нажмите Enter, чтобы переключиться на этот аккаунт. Вернуться сюда можно через {prefix}settings."
+                    "Press Enter to switch to this account. You can return here with {prefix}settings."
                 ),
             }
         } else {
             match catalog_path {
                 Some(path) => format!(
-                    "У этого профиля нет сохранённого API-ключа. Пересоздайте его через {prefix}profiles -> Добавить аккаунт. Каталог моделей: {}.",
+                    "This profile has no saved API key. Recreate it via {prefix}profiles -> Add account. Model catalog: {}.",
                     path.display()
                 ),
                 None => format!(
-                    "У этого профиля нет сохранённого API-ключа. Пересоздайте его через {prefix}profiles -> Добавить аккаунт."
+                    "This profile has no saved API key. Recreate it via {prefix}profiles -> Add account."
                 ),
             }
         }
@@ -10356,6 +10585,13 @@ impl ChatWidget {
 
     fn current_selection_highlight_color(&self) -> UiColorChoice {
         self.ui_preferences().selection_highlight_color.clone()
+    }
+
+    fn effective_selection_highlight_choice(&self) -> UiColorChoice {
+        match Self::normalized_popup_color_choice(&self.current_selection_highlight_color()) {
+            UiColorChoice::Auto => UiColorChoice::Preset(self.current_selection_highlight_preset()),
+            choice => choice,
+        }
     }
 
     fn current_selection_highlight_fill(&self) -> bool {
@@ -10535,7 +10771,7 @@ impl ChatWidget {
         };
         let mut parts = vec![
             describe_color_choice(
-                &self.current_selection_highlight_color(),
+                &self.effective_selection_highlight_choice(),
                 self.current_selection_highlight_preset(),
                 is_ru,
             ),
@@ -10828,7 +11064,7 @@ impl ChatWidget {
 
     fn popup_current_color_choice(&self, target: PopupColorTarget) -> UiColorChoice {
         match target {
-            PopupColorTarget::Selection => self.current_selection_highlight_color(),
+            PopupColorTarget::Selection => self.effective_selection_highlight_choice(),
             PopupColorTarget::ListPrimary => self.current_list_primary_color(),
             PopupColorTarget::ListSecondary => self.current_list_secondary_color(),
             PopupColorTarget::Reply => self.current_reply_text_color(),
@@ -11091,7 +11327,11 @@ impl ChatWidget {
             "ru" => UiLanguage::Ru,
             "en" => UiLanguage::En,
             _ => {
-                self.add_error_message("Использование: /setlang <ru|en>".to_string());
+                self.add_error_message(if self.ui_language().is_ru() {
+                    "Использование: /setlang <ru|en>".to_string()
+                } else {
+                    "Usage: /setlang <ru|en>".to_string()
+                });
                 return;
             }
         };
@@ -11099,7 +11339,7 @@ impl ChatWidget {
             let message = if self.ui_language().is_ru() {
                 format!("Не удалось сохранить язык интерфейса: {err}")
             } else {
-                format!("Не удалось сохранить язык интерфейса: {err}")
+                format!("Failed to save the interface language: {err}")
             };
             self.add_error_message(message);
             return;
@@ -11115,31 +11355,38 @@ impl ChatWidget {
                 )),
             ),
             UiLanguage::En => self.add_info_message(
-                "Язык интерфейса переключён на английский.".to_string(),
+                "Interface language switched to English.".to_string(),
                 Some(format!(
-                    "Сохранено в {}. /model, /profiles и /settings теперь открываются на английском. Точка входа: {prefix}settings.",
+                    "Saved to {}. /model, /profiles, and /settings now open in English. Entry point: {prefix}settings.",
                     settings_path.display()
                 )),
             ),
         }
+        self.app_event_tx.send(AppEvent::RefreshStyledHistory);
         self.request_redraw();
     }
 
     pub(crate) fn apply_selection_highlight_preset(&mut self, preset: SelectionHighlightPreset) {
         let is_ru = self.ui_language().is_ru();
-        if let Err(err) =
-            save_ui_selection_highlight_preset(self.config.codex_home.as_path(), preset)
+        if let Err(err) = save_ui_selection_highlight_preset(self.config.codex_home.as_path(), preset)
+            .and_then(|_| {
+                save_ui_selection_highlight_color(
+                    self.config.codex_home.as_path(),
+                    UiColorChoice::Auto,
+                )
+            })
         {
             let message = if is_ru {
                 format!("Не удалось сохранить цвет выделения: {err}")
             } else {
-                format!("Не удалось сохранить цвет выделения: {err}")
+                format!("Failed to save the selection color: {err}")
             };
             self.add_error_message(message);
             return;
         }
 
         set_selection_highlight_preset(preset);
+        self.app_event_tx.send(AppEvent::RefreshStyledHistory);
         self.request_redraw();
     }
 
@@ -11149,13 +11396,14 @@ impl ChatWidget {
             let message = if is_ru {
                 format!("Не удалось сохранить режим заливки: {err}")
             } else {
-                format!("Не удалось сохранить режим заливки выделения: {err}")
+                format!("Failed to save the selection fill mode: {err}")
             };
             self.add_error_message(message);
             return;
         }
 
         set_selection_highlight_fill(fill);
+        self.app_event_tx.send(AppEvent::RefreshStyledHistory);
         self.request_redraw();
     }
 
@@ -11171,13 +11419,14 @@ impl ChatWidget {
             let message = if is_ru {
                 format!("Не удалось сохранить формат выделения: {err}")
             } else {
-                format!("Не удалось сохранить форматирование выделения: {err}")
+                format!("Failed to save the selection formatting: {err}")
             };
             self.add_error_message(message);
             return;
         }
 
         set_selection_highlight_text_formats(updated);
+        self.app_event_tx.send(AppEvent::RefreshStyledHistory);
         self.request_redraw();
     }
 
@@ -11189,9 +11438,16 @@ impl ChatWidget {
         let is_ru = self.ui_language().is_ru();
         let save_result = match target {
             PopupColorTarget::Selection => match &choice {
-                UiColorChoice::Preset(preset) => {
-                    save_ui_selection_highlight_preset(self.config.codex_home.as_path(), *preset)
-                }
+                UiColorChoice::Preset(preset) => save_ui_selection_highlight_preset(
+                    self.config.codex_home.as_path(),
+                    *preset,
+                )
+                .and_then(|_| {
+                    save_ui_selection_highlight_color(
+                        self.config.codex_home.as_path(),
+                        UiColorChoice::Auto,
+                    )
+                }),
                 _ => save_ui_selection_highlight_color(
                     self.config.codex_home.as_path(),
                     choice.clone(),
@@ -11221,7 +11477,7 @@ impl ChatWidget {
             let message = if is_ru {
                 format!("Не удалось сохранить цвет интерфейса: {err}")
             } else {
-                format!("Не удалось сохранить цвет интерфейса: {err}")
+                format!("Failed to save the interface color: {err}")
             };
             self.add_error_message(message);
             return;
@@ -11230,6 +11486,7 @@ impl ChatWidget {
         if let (PopupColorTarget::Selection, UiColorChoice::Preset(preset)) = (target, &choice) {
             set_selection_highlight_preset(*preset);
         }
+        self.app_event_tx.send(AppEvent::RefreshStyledHistory);
         self.request_redraw();
     }
 
@@ -11305,7 +11562,7 @@ impl ChatWidget {
             let message = if is_ru {
                 format!("Не удалось сохранить формат текста: {err}")
             } else {
-                format!("Не удалось сохранить форматирование текста: {err}")
+                format!("Failed to save the text formatting: {err}")
             };
             self.add_error_message(message);
             return;
@@ -11314,6 +11571,7 @@ impl ChatWidget {
         if let PopupFormatTarget::Selection = target {
             set_selection_highlight_text_formats(updated);
         }
+        self.app_event_tx.send(AppEvent::RefreshStyledHistory);
         self.request_redraw();
     }
 
@@ -11433,7 +11691,7 @@ impl ChatWidget {
             let message = if self.ui_language().is_ru() {
                 "Префикс должен быть одним ASCII-символом без пробела.".to_string()
             } else {
-                "Префикс команды должен быть одним символом ASCII без пробелов.".to_string()
+                "The command prefix must be a single ASCII character without spaces.".to_string()
             };
             self.add_error_message(message);
             return;
@@ -11442,7 +11700,7 @@ impl ChatWidget {
             let message = if self.ui_language().is_ru() {
                 format!("Не удалось сохранить префикс: {err}")
             } else {
-                format!("Не удалось сохранить префикс команд: {err}")
+                format!("Failed to save the command prefix: {err}")
             };
             self.add_error_message(message);
             return;
@@ -11458,7 +11716,7 @@ impl ChatWidget {
             );
         } else {
             self.add_info_message(
-                format!("Префикс команд сохранён: {prefix}"),
+                format!("Command prefix saved: {prefix}"),
                 Some(format!(
                     "Menus and manual input already use the new prefix. Hidden commands: {hidden_count}."
                 )),
@@ -11485,7 +11743,7 @@ impl ChatWidget {
             let message = if self.ui_language().is_ru() {
                 format!("Не удалось сохранить видимость команд: {err}")
             } else {
-                format!("Не удалось сохранить видимость команд: {err}")
+                format!("Failed to save command visibility: {err}")
             };
             self.add_error_message(message);
             return;
@@ -11527,21 +11785,13 @@ impl ChatWidget {
         let initial_selected_idx = self
             .bottom_pane
             .selected_index_for_active_view(CUSTOM_SETTINGS_VIEW_ID);
-        let has_picker_models = if self.is_session_configured() {
-            self.model_catalog
-                .try_list_models()
-                .ok()
-                .is_some_and(|models| models.into_iter().any(|preset| preset.show_in_picker))
-        } else {
-            false
-        };
 
         let mut items: Vec<SelectionItem> = Vec::new();
         items.push(SelectionItem {
             name: if is_ru {
                 "Кастомизация".to_string()
             } else {
-                "Кастомизация".to_string()
+                "Customization".to_string()
             },
             description: Some(if is_ru {
                 "Цвета и форматирование".to_string()
@@ -11559,110 +11809,24 @@ impl ChatWidget {
             dismiss_on_select: true,
             ..Default::default()
         });
-        if has_picker_models {
-            items.push(SelectionItem {
-                name: if is_ru {
-                    "Модель".to_string()
-                } else {
-                    "Model".to_string()
-                },
-                description: Some(if is_ru {
-                    "Модель и размышления".to_string()
-                } else {
-                    "Model and reasoning".to_string()
-                }),
-                search_value: Some(if is_ru {
-                    "модель анализ reasoning провайдер effort".to_string()
-                } else {
-                    "model reasoning provider effort".to_string()
-                }),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelPopup))],
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        } else {
-            items.push(SelectionItem {
-                name: if is_ru {
-                    "Модель".to_string()
-                } else {
-                    "Model".to_string()
-                },
-                description: Some(if is_ru {
-                    "Модель и размышления".to_string()
-                } else {
-                    "Model and reasoning".to_string()
-                }),
-                search_value: Some(if is_ru {
-                    "модель анализ reasoning провайдер effort".to_string()
-                } else {
-                    "model reasoning provider effort".to_string()
-                }),
-                is_disabled: true,
-                disabled_reason: Some(if is_ru {
-                    "Сессия ещё запускается.".to_string()
-                } else {
-                    "Session is still starting.".to_string()
-                }),
-                ..Default::default()
-            });
-        }
-
-        let model_presets_actions: Vec<SelectionAction> = if self.current_model_presets_enabled() {
-            vec![Box::new(|tx| tx.send(AppEvent::OpenModelPresetsSettings))]
-        } else {
-            vec![Box::new(|tx| tx.send(AppEvent::ToggleModelPresetsEnabled))]
-        };
-
         items.extend(vec![
             SelectionItem {
                 name: if is_ru {
-                    "Профили аккаунтов".to_string()
+                    "Настройки моделей".to_string()
                 } else {
-                    "Profiles".to_string()
+                    "Model settings".to_string()
                 },
                 description: Some(if is_ru {
-                    "Провайдеры и ключи".to_string()
+                    "Модели, профили, пресеты".to_string()
                 } else {
-                    "Providers and keys".to_string()
+                    "Models, profiles, presets".to_string()
                 }),
                 search_value: Some(if is_ru {
-                    "профили аккаунты api ключи провайдеры модели".to_string()
+                    "настройка моделей профили пресеты".to_string()
                 } else {
-                    "profiles accounts api keys providers models".to_string()
+                    "model settings profiles presets".to_string()
                 }),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: if self.current_model_presets_enabled() {
-                    if is_ru {
-                        "Пресеты моделей".to_string()
-                    } else {
-                        "Пресеты моделей".to_string()
-                    }
-                } else if is_ru {
-                    "Включить быстрые пресеты моделей".to_string()
-                } else {
-                    "Включить быстрые пресеты моделей".to_string()
-                },
-                description: Some(if self.current_model_presets_enabled() {
-                    if is_ru {
-                        "Быстрый выбор моделей".to_string()
-                    } else {
-                        "Quick model presets".to_string()
-                    }
-                } else if is_ru {
-                    "Включить быстрый выбор".to_string()
-                } else {
-                    "Enable quick presets".to_string()
-                }),
-                search_value: Some(if is_ru {
-                    "пресеты моделей быстрый выбор".to_string()
-                } else {
-                    "model presets quick picker".to_string()
-                }),
-                actions: model_presets_actions,
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelSettings))],
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -11670,7 +11834,7 @@ impl ChatWidget {
                 name: if is_ru {
                     "Язык интерфейса".to_string()
                 } else {
-                    "Language".to_string()
+                    "Interface language".to_string()
                 },
                 description: Some(if is_ru {
                     lang_label.to_string()
@@ -11737,21 +11901,21 @@ impl ChatWidget {
                     if is_ru {
                         "без дополнительного стиля"
                     } else {
-                        "без дополнительного стиля"
+                        "no extra style"
                     }
                 }
                 Personality::Friendly => {
                     if is_ru {
                         "дружелюбный"
                     } else {
-                        "Дружелюбный"
+                        "friendly"
                     }
                 }
                 Personality::Pragmatic => {
                     if is_ru {
                         "прагматичный"
                     } else {
-                        "Прагматичный"
+                        "pragmatic"
                     }
                 }
             };
@@ -11759,7 +11923,7 @@ impl ChatWidget {
                 name: if is_ru {
                     "Стиль ответов".to_string()
                 } else {
-                    "Tone".to_string()
+                    "Reply style".to_string()
                 },
                 description: Some(if is_ru {
                     current_personality.to_string()
@@ -11781,7 +11945,7 @@ impl ChatWidget {
             name: if is_ru {
                 "Доступ и подтверждения".to_string()
             } else {
-                "Разрешения и подтверждения".to_string()
+                "Permissions and approvals".to_string()
             },
             description: Some(if is_ru {
                 "Права и подтверждения".to_string()
@@ -11835,7 +11999,7 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти раздел настроек".to_string()
             } else {
-                "Найти раздел настроек".to_string()
+                "Find a settings section".to_string()
             }),
             initial_selected_idx,
             ..Default::default()
@@ -11883,7 +12047,7 @@ impl ChatWidget {
             name: if is_ru {
                 "← Назад в настройки".to_string()
             } else {
-                "← Назад в настройки".to_string()
+                "← Back to settings".to_string()
             },
             description: None,
             search_value: Some(if is_ru {
@@ -11904,7 +12068,7 @@ impl ChatWidget {
             ),
             mk(
                 "en",
-                "Английский",
+                "English",
                 String::new(),
                 &current,
             ),
@@ -11915,7 +12079,7 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Язык интерфейса".to_string()
             } else {
-                "Язык интерфейса".to_string()
+                "Interface language".to_string()
             }),
             subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
@@ -11947,7 +12111,7 @@ impl ChatWidget {
             name: if is_ru {
                 "← Назад в настройки".to_string()
             } else {
-                "← Back".to_string()
+                "← Back to settings".to_string()
             },
             description: None,
             search_value: Some(if is_ru {
@@ -12074,11 +12238,11 @@ impl ChatWidget {
             name: String::new(),
             name_prefix_spans: self.popup_color_choice_label_spans(
                 PopupColorTarget::Selection,
-                &Self::normalized_popup_color_choice(&self.current_selection_highlight_color()),
+                &self.effective_selection_highlight_choice(),
                 Self::popup_color_target_label_for_locale(PopupColorTarget::Selection, is_ru),
             ),
             description: Some(color_preview_description(
-                &Self::normalized_popup_color_choice(&self.current_selection_highlight_color()),
+                &self.effective_selection_highlight_choice(),
                 self.current_selection_highlight_preset(),
                 is_ru,
             )),
@@ -12680,7 +12844,7 @@ impl ChatWidget {
             description: Some(if is_ru {
                 format!("Например: {prefix}model, {prefix}profiles")
             } else {
-                format!("Например: {prefix}model, {prefix}profiles")
+                format!("Examples: {prefix}model, {prefix}profiles")
             }),
             search_value: Some(if is_ru {
                 format!("{prefix} префикс команд")
@@ -12699,12 +12863,12 @@ impl ChatWidget {
             name: if is_ru {
                 "Свой символ".to_string()
             } else {
-                "Свой символ".to_string()
+                "Custom character".to_string()
             },
             description: Some(if is_ru {
                 "Ввести любой одиночный ASCII-символ без пробела.".to_string()
             } else {
-                "Введите любой один ASCII-символ без пробела.".to_string()
+                "Enter any single ASCII character without spaces.".to_string()
             }),
             search_value: Some(if is_ru {
                 "свой префикс символ".to_string()
@@ -12723,7 +12887,7 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Префикс команд".to_string()
             } else {
-                "Префикс команд".to_string()
+                "Command prefix".to_string()
             }),
             subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
@@ -12754,12 +12918,12 @@ impl ChatWidget {
                         header: if is_ru {
                             "Свой префикс команд".to_string()
                         } else {
-                            "Свой префикс команд".to_string()
+                            "Custom command prefix".to_string()
                         },
                         question: if is_ru {
                             "Введите один ASCII-символ без пробела. Примеры: ?, :, #.\n\nКакой символ использовать для команд?"
                         } else {
-                            "Введите один ASCII-символ без пробела. Примеры: ?, :, #.\n\nКакой символ использовать для команд?"
+                            "Enter one ASCII character without spaces. Examples: ?, :, #.\n\nWhich character should be used for commands?"
                         }
                         .to_string(),
                         is_other: false,
@@ -12788,21 +12952,21 @@ impl ChatWidget {
                 if is_ru {
                     "Провайдер не указан".to_string()
                 } else {
-                    "Провайдер не найден".to_string()
+                    "Provider not set".to_string()
                 }
             });
         let model = preview.model.unwrap_or_else(|| {
             if is_ru {
                 "Модель не указана".to_string()
             } else {
-                "Модель не найдена".to_string()
+                "Model not set".to_string()
             }
         });
         let mut items = vec![SelectionItem {
             name: if is_ru {
                 "← Назад к профилям".to_string()
             } else {
-                "← Назад к профилям".to_string()
+                "← Back to profiles".to_string()
             },
             actions: vec![Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))],
             dismiss_on_select: true,
@@ -12812,7 +12976,7 @@ impl ChatWidget {
             name: if is_ru {
                 "Активировать".to_string()
             } else {
-                "Активировать".to_string()
+                "Activate".to_string()
             },
             description: Some(format!("{provider} • {model}")),
             actions: vec![Box::new({
@@ -12830,12 +12994,12 @@ impl ChatWidget {
             name: if is_ru {
                 "Удалить профиль".to_string()
             } else {
-                "Удалить профиль".to_string()
+                "Delete profile".to_string()
             },
             description: Some(if is_ru {
                 "Удалит JSON профиля и локальный слепок моделей из папки Profiles.".to_string()
             } else {
-                "Удалит JSON профиля и локальный слепок моделей из папки Profiles.".to_string()
+                "Delete the profile JSON and the local model catalog snapshot from Profiles.".to_string()
             }),
             actions: vec![Box::new({
                 let profile_key = profile_key.to_string();
@@ -12855,13 +13019,18 @@ impl ChatWidget {
             subtitle: Some(if is_ru {
                 "Выберите действие для сохранённого профиля".to_string()
             } else {
-                "Выберите действие для этого сохранённого профиля".to_string()
+                "Choose an action for this saved profile".to_string()
             }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))),
             ..Default::default()
         });
+    }
+
+    pub(crate) fn open_model_presets_settings_popup_from_settings(&mut self) {
+        self.set_model_settings_navigation_origin(ModelSettingsNavigationOrigin::Settings);
+        self.open_model_presets_settings_popup();
     }
 
     pub(crate) fn open_model_presets_settings_popup(&mut self) {
@@ -12874,12 +13043,36 @@ impl ChatWidget {
             self.config.model_provider.name, self.config.model_provider_id
         );
         let mut items = vec![SelectionItem {
-            name: if is_ru {
-                "← Назад в настройки".to_string()
-            } else {
-                "← Назад в настройки".to_string()
-            },
-            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+            name: self.model_settings_back_name(is_ru),
+            description: Some(match (self.model_settings_navigation_origin, is_ru) {
+                (ModelSettingsNavigationOrigin::Settings, true) => {
+                    "Вернуться к настройкам моделей.".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Settings, false) => {
+                    "Return to model settings.".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Command, true) => {
+                    "Закрыть настройки пресетов.".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Command, false) => {
+                    "Close preset settings.".to_string()
+                }
+            }),
+            search_value: Some(match (self.model_settings_navigation_origin, is_ru) {
+                (ModelSettingsNavigationOrigin::Settings, true) => {
+                    "назад настройки моделей".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Settings, false) => {
+                    "back model settings".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Command, true) => {
+                    "назад чат пресеты".to_string()
+                }
+                (ModelSettingsNavigationOrigin::Command, false) => {
+                    "back chat presets".to_string()
+                }
+            }),
+            actions: self.model_settings_back_actions(),
             dismiss_on_select: true,
             ..Default::default()
         }];
@@ -12888,23 +13081,23 @@ impl ChatWidget {
                 if is_ru {
                     "Быстрые пресеты: включены".to_string()
                 } else {
-                    "Быстрые пресеты: включены".to_string()
+                    "Quick presets: enabled".to_string()
                 }
             } else if is_ru {
                 "Включить быстрые пресеты".to_string()
             } else {
-                "Включить быстрые пресеты".to_string()
+                "Enable quick presets".to_string()
             },
             description: Some(if enabled {
                 if is_ru {
                     "Переключает быстрые пресеты в /model.".to_string()
                 } else {
-                    "Переключает быстрые пресеты в /model.".to_string()
+                    "Toggle the quick presets shown in /model.".to_string()
                 }
             } else if is_ru {
                 "Снова включает быстрый выбор моделей в /model.".to_string()
             } else {
-                "Снова включает быстрый выбор моделей в /model.".to_string()
+                "Re-enable the quick model picker in /model.".to_string()
             }),
             actions: vec![Box::new(|tx| tx.send(AppEvent::ToggleModelPresetsEnabled))],
             dismiss_on_select: true,
@@ -12915,7 +13108,7 @@ impl ChatWidget {
                 name: if is_ru {
                     "Редактировать пресеты текущего провайдера".to_string()
                 } else {
-                    "Редактировать пресеты активного провайдера".to_string()
+                    "Edit presets for the active provider".to_string()
                 },
                 description: Some(if is_ru {
                     if has_quick_presets {
@@ -12927,10 +13120,10 @@ impl ChatWidget {
                     }
                 } else {
                     if has_quick_presets {
-                        format!("Активный провайдер: {provider_name}")
+                        format!("Active provider: {provider_name}")
                     } else {
                         format!(
-                            "Активный провайдер: {provider_name}. Быстрых пресетов пока нет, поэтому /model открывает полный каталог."
+                            "Active provider: {provider_name}. There are no quick presets yet, so /model opens the full catalog."
                         )
                     }
                 }),
@@ -12947,12 +13140,12 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Пресеты моделей".to_string()
             } else {
-                "Пресеты моделей".to_string()
+                "Model presets".to_string()
             }),
             subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
-            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            on_cancel: self.model_settings_on_cancel(),
             ..Default::default()
         });
     }
@@ -12965,7 +13158,7 @@ impl ChatWidget {
                 if is_ru {
                     "Каталог моделей текущего провайдера пока пуст.".to_string()
                 } else {
-                    "Каталог моделей активного провайдера пока пуст.".to_string()
+                    "The active provider model catalog is still empty.".to_string()
                 },
                 None,
             );
@@ -12977,7 +13170,7 @@ impl ChatWidget {
             name: if is_ru {
                 "← Назад к пресетам моделей".to_string()
             } else {
-                "← Назад к пресетам моделей".to_string()
+                "← Back to model presets".to_string()
             },
             actions: vec![Box::new(|tx| tx.send(AppEvent::OpenModelPresetsSettings))],
             dismiss_on_select: true,
@@ -12987,12 +13180,12 @@ impl ChatWidget {
             name: if is_ru {
                 "Добавить пресет".to_string()
             } else {
-                "Добавить пресет".to_string()
+                "Add preset".to_string()
             },
             description: Some(if is_ru {
                 "Сначала выберите модель, затем задайте имя пресета.".to_string()
             } else {
-                "Сначала выберите модель, затем задайте имя пресета.".to_string()
+                "Pick a model first, then give the preset a name.".to_string()
             }),
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenCurrentProviderModelPresetModelPicker { preset_id: None })
@@ -13026,7 +13219,7 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Пресеты текущего провайдера".to_string()
             } else {
-                "Пресеты активного провайдера".to_string()
+                "Active provider presets".to_string()
             }),
             subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
@@ -13035,7 +13228,7 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти пресет".to_string()
             } else {
-                "Найти пресет".to_string()
+                "Find a preset".to_string()
             }),
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenModelPresetsSettings))),
             ..Default::default()
@@ -13049,7 +13242,7 @@ impl ChatWidget {
             self.add_error_message(if is_ru {
                 "Не удалось найти пресет для редактирования.".to_string()
             } else {
-                "Пресет для редактирования не найден.".to_string()
+                "The preset to edit was not found.".to_string()
             });
             return;
         };
@@ -13058,7 +13251,7 @@ impl ChatWidget {
             name: if is_ru {
                 "← Назад к списку пресетов".to_string()
             } else {
-                "← Назад к пресетам".to_string()
+                "← Back to presets".to_string()
             },
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenCurrentProviderModelPresetEditor)
@@ -13070,7 +13263,7 @@ impl ChatWidget {
             name: if is_ru {
                 "Переименовать".to_string()
             } else {
-                "Переименовать".to_string()
+                "Rename".to_string()
             },
             actions: vec![Box::new({
                 let preset = preset.clone();
@@ -13089,7 +13282,7 @@ impl ChatWidget {
             name: if is_ru {
                 "Сменить модель".to_string()
             } else {
-                "Сменить модель".to_string()
+                "Change model".to_string()
             },
             actions: vec![Box::new({
                 let preset_id = preset.id.clone();
@@ -13106,7 +13299,7 @@ impl ChatWidget {
             name: if is_ru {
                 "Удалить пресет".to_string()
             } else {
-                "Удалить пресет".to_string()
+                "Delete preset".to_string()
             },
             actions: vec![Box::new({
                 let preset_id = preset.id.clone();
@@ -13144,7 +13337,7 @@ impl ChatWidget {
                 if is_ru {
                     "Сначала дождитесь каталога моделей текущего провайдера.".to_string()
                 } else {
-                    "Сначала дождитесь каталога моделей активного провайдера.".to_string()
+                    "Wait for the active provider model catalog first.".to_string()
                 },
                 None,
             );
@@ -13194,7 +13387,7 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Выберите модель для пресета".to_string()
             } else {
-                "Выберите модель для пресета".to_string()
+                "Choose a model for the preset".to_string()
             }),
             subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
@@ -13203,7 +13396,7 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти модель".to_string()
             } else {
-                "Найти модель".to_string()
+                "Find a model".to_string()
             }),
             on_cancel: Some(Box::new(|tx| {
                 tx.send(AppEvent::OpenCurrentProviderModelPresetEditor)
@@ -13227,7 +13420,7 @@ impl ChatWidget {
                 header: if is_ru {
                     "Название пресета".to_string()
                 } else {
-                    "Имя пресета".to_string()
+                    "Preset name".to_string()
                 },
                 question: if is_ru {
                     format!(
@@ -13235,7 +13428,7 @@ impl ChatWidget {
                     )
                 } else {
                     format!(
-                        "Введите название для пресета. Если оставить пустым, будет использовано `{suggested_name}`. Модель: {model}\n\nКак назвать этот пресет?"
+                        "Enter a preset name. Leave it empty to use `{suggested_name}`. Model: {model}\n\nWhat should this preset be called?"
                     )
                 },
                 is_other: false,
@@ -13251,7 +13444,7 @@ impl ChatWidget {
             self.add_error_message(if self.ui_language().is_ru() {
                 format!("Не удалось сохранить состояние пресетов моделей: {err}")
             } else {
-                format!("Не удалось сохранить состояние пресетов моделей: {err}")
+                format!("Failed to save the model preset state: {err}")
             });
             return;
         }
@@ -13264,17 +13457,13 @@ impl ChatWidget {
                     "Быстрые пресеты моделей выключены.".to_string()
                 }
             } else if enabled {
-                "Быстрые пресеты моделей включены.".to_string()
+                "Quick model presets enabled.".to_string()
             } else {
-                "Быстрые пресеты моделей выключены.".to_string()
+                "Quick model presets disabled.".to_string()
             },
             None,
         );
-        if enabled {
-            self.open_model_presets_settings_popup();
-        } else {
-            self.open_custom_settings_popup();
-        }
+        self.open_model_presets_settings_popup();
     }
 
     pub(crate) fn upsert_current_provider_model_preset(
@@ -13297,7 +13486,7 @@ impl ChatWidget {
             self.add_error_message(if self.ui_language().is_ru() {
                 "У пресета должны быть имя и модель.".to_string()
             } else {
-                "Для пресета нужны и имя, и модель.".to_string()
+                "A preset needs both a name and a model.".to_string()
             });
             return;
         }
@@ -13326,7 +13515,7 @@ impl ChatWidget {
             self.add_error_message(if self.ui_language().is_ru() {
                 format!("Не удалось сохранить пресет модели: {err}")
             } else {
-                format!("Не удалось сохранить пресет модели: {err}")
+                format!("Failed to save the model preset: {err}")
             });
             return;
         }
@@ -13341,7 +13530,7 @@ impl ChatWidget {
             self.add_error_message(if self.ui_language().is_ru() {
                 format!("Не удалось удалить пресет модели: {err}")
             } else {
-                format!("Не удалось удалить пресет модели: {err}")
+                format!("Failed to delete the model preset: {err}")
             });
             return;
         }
@@ -13399,9 +13588,13 @@ impl ChatWidget {
                         "Shown".to_string()
                     };
                     let search_value = if aliases.is_empty() {
-                        format!("{key} {}", cmd.description())
+                        format!("{key} {}", cmd.description_for_locale(is_ru))
                     } else {
-                        format!("{key} {} {}", aliases.join(" "), cmd.description())
+                        format!(
+                            "{key} {} {}",
+                            aliases.join(" "),
+                            cmd.description_for_locale(is_ru)
+                        )
                     };
                     SelectionItem {
                         name: display_name,
@@ -13429,11 +13622,11 @@ impl ChatWidget {
             ])
         } else {
             Line::from(vec![
-                "Нажмите ".into(),
+                "Press ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " чтобы скрыть или вернуть команду, ".into(),
+                " to hide or restore a command, ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
-                " для возврата".into(),
+                " to go back".into(),
             ])
         };
 
@@ -13467,6 +13660,16 @@ impl ChatWidget {
         }
     }
 
+    fn open_profiles_manager_popup_from_command(&mut self) {
+        self.set_model_settings_navigation_origin(ModelSettingsNavigationOrigin::Command);
+        self.open_profiles_manager_popup();
+    }
+
+    pub(crate) fn open_profiles_manager_popup_from_settings(&mut self) {
+        self.set_model_settings_navigation_origin(ModelSettingsNavigationOrigin::Settings);
+        self.open_profiles_manager_popup();
+    }
+
     pub(crate) fn open_profiles_manager_popup(&mut self) {
         let profiles_dir = self.profiles_dir();
         let prefix = self.current_command_prefix();
@@ -13482,14 +13685,14 @@ impl ChatWidget {
                 name: if is_ru {
                     "Добавить аккаунт".to_string()
                 } else {
-                    "Добавить аккаунт".to_string()
+                    "Add account".to_string()
                 },
                 description: Some(if is_ru {
                     "Открыть визуальную форму создания аккаунта: провайдер, имя профиля и ключ доступа. Для своего провайдера дополнительно запрашивается базовый URL."
                     .to_string()
                 } else {
-                    "Открыть визуальную форму создания аккаунта: провайдер, имя профиля и ключ доступа. Для своего провайдера дополнительно запрашивается базовый URL."
-                    .to_string()
+                    "Open the guided account form for provider, profile name, and API key. Custom providers also ask for a base URL."
+                        .to_string()
                 }),
                 search_value: Some(if is_ru {
                     "добавить аккаунт профиль провайдер api ключ".to_string()
@@ -13503,22 +13706,36 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: if is_ru {
-                    "← Назад в настройки".to_string()
-                } else {
-                    "← Назад в настройки".to_string()
-                },
-                description: Some(if is_ru {
-                    "Вернуться к общим настройкам.".to_string()
-                } else {
-                    "Вернуться к главному разделу настроек.".to_string()
+                name: self.model_settings_back_name(is_ru),
+                description: Some(match (self.model_settings_navigation_origin, is_ru) {
+                    (ModelSettingsNavigationOrigin::Settings, true) => {
+                        "Вернуться к настройкам моделей.".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Settings, false) => {
+                        "Return to model settings.".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Command, true) => {
+                        "Закрыть профили и вернуться в чат.".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Command, false) => {
+                        "Close profiles and return to chat.".to_string()
+                    }
                 }),
-                search_value: Some(if is_ru {
-                    "назад настройки".to_string()
-                } else {
-                    "back settings".to_string()
+                search_value: Some(match (self.model_settings_navigation_origin, is_ru) {
+                    (ModelSettingsNavigationOrigin::Settings, true) => {
+                        "назад настройки моделей".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Settings, false) => {
+                        "back model settings".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Command, true) => {
+                        "назад чат профили".to_string()
+                    }
+                    (ModelSettingsNavigationOrigin::Command, false) => {
+                        "back chat profiles".to_string()
+                    }
                 }),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))],
+                actions: self.model_settings_back_actions(),
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -13559,14 +13776,14 @@ impl ChatWidget {
                     if is_ru {
                         "провайдер не указан".to_string()
                     } else {
-                        "провайдер не указан".to_string()
+                        "provider not set".to_string()
                     }
                 });
             let model = preview.model.unwrap_or_else(|| {
                 if is_ru {
                     "модель не указана".to_string()
                 } else {
-                    "модель не указана".to_string()
+                    "model not set".to_string()
                 }
             });
             let display_name = preview.display_name.unwrap_or(file_name);
@@ -13574,20 +13791,20 @@ impl ChatWidget {
                 if is_ru {
                     "готов к переключению".to_string()
                 } else {
-                    "готов к переключению".to_string()
+                    "ready to switch".to_string()
                 }
             } else if is_ru {
                 "нет API-ключа".to_string()
             } else {
-                "нет API-ключа".to_string()
+                "API key missing".to_string()
             };
             let catalog_status = match catalog_path.as_ref() {
                 Some(path) if path.exists() && is_ru => format!("каталог: {}", path.display()),
-                Some(path) if path.exists() => format!("каталог: {}", path.display()),
+                Some(path) if path.exists() => format!("catalog: {}", path.display()),
                 Some(path) if is_ru => format!("каталог не найден: {}", path.display()),
-                Some(path) => format!("каталог не найден: {}", path.display()),
+                Some(path) => format!("catalog missing: {}", path.display()),
                 None if is_ru => "каталог не привязан".to_string(),
-                None => "каталог не привязан".to_string(),
+                None => "catalog not linked".to_string(),
             };
             let description = format!("{provider} • {model} • {account_status}");
             let selected_description = self.profile_setup_hint(path.as_path());
@@ -13621,11 +13838,11 @@ impl ChatWidget {
             ])
         } else {
             Line::from(vec![
-                "Нажмите ".into(),
+                "Press ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
-                ", чтобы открыть действия профиля, ".into(),
+                " to open profile actions, ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
-                " для возврата".into(),
+                " to go back".into(),
             ])
         };
 
@@ -13634,7 +13851,7 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Профили аккаунтов".to_string()
             } else {
-                "Профили".to_string()
+                "Profiles".to_string()
             }),
             subtitle: Some(if is_ru {
                 format!(
@@ -13643,7 +13860,7 @@ impl ChatWidget {
                 )
             } else {
                 format!(
-                    "Папка профилей: {}. Быстрый вызов: {prefix}profiles",
+                    "Profiles folder: {}. Quick command: {prefix}profiles",
                     profiles_dir.display()
                 )
             }),
@@ -13653,10 +13870,10 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти профиль, модель или провайдера".to_string()
             } else {
-                "Найти профиль, модель или провайдера".to_string()
+                "Find a profile, model, or provider".to_string()
             }),
             initial_selected_idx,
-            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
+            on_cancel: self.model_settings_on_cancel(),
             ..Default::default()
         };
 
@@ -13681,12 +13898,12 @@ impl ChatWidget {
             name: if is_ru {
                 "← Назад к профилям".to_string()
             } else {
-                "← Назад к профилям".to_string()
+                "← Back to profiles".to_string()
             },
             description: Some(if is_ru {
                 "Вернуться к списку сохранённых аккаунтов.".to_string()
             } else {
-                "Вернуться к менеджеру профилей.".to_string()
+                "Return to the profile manager.".to_string()
             }),
             search_value: Some(if is_ru {
                 "назад профили".to_string()
@@ -13708,7 +13925,7 @@ impl ChatWidget {
                     )
                 } else {
                     format!(
-                        "Откроется форма имени профиля и стандартного входа Codex/OpenAI. Модель по умолчанию: {}",
+                        "Open the profile-name form and the standard Codex/OpenAI sign-in flow. Default model: {}",
                         default_profile_model_for_provider(provider.id)
                     )
                 }
@@ -13720,7 +13937,7 @@ impl ChatWidget {
                     )
                 } else {
                     format!(
-                        "Откроется форма имени, API-ключа и базового URL. Модель по умолчанию: {}",
+                        "Open the profile name, API key, and base URL form. Default model: {}",
                         default_profile_model_for_provider(provider.id)
                     )
                 }
@@ -13731,7 +13948,7 @@ impl ChatWidget {
                 )
             } else {
                 format!(
-                    "Откроется форма имени профиля и API-ключа. Endpoint провайдера зафиксирован. Модель по умолчанию: {}",
+                    "Open the profile-name and API-key form. The provider endpoint is fixed. Default model: {}",
                     default_profile_model_for_provider(provider.id)
                 )
             };
@@ -13760,12 +13977,12 @@ impl ChatWidget {
             title: Some(if is_ru {
                 "Добавить аккаунт".to_string()
             } else {
-                "Добавить аккаунт".to_string()
+                "Add account".to_string()
             }),
             subtitle: Some(if is_ru {
                 "Выберите провайдера. У фиксированных провайдеров вводятся имя профиля и ключ, а свой провайдер дополнительно просит базовый URL.".to_string()
             } else {
-                "Выберите провайдера. У фиксированных провайдеров вводятся имя профиля и ключ, а свой провайдер дополнительно просит базовый URL.".to_string()
+                "Choose a provider. Fixed providers ask for profile name and key, while a custom provider also asks for a base URL.".to_string()
             }),
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -13773,7 +13990,7 @@ impl ChatWidget {
             search_placeholder: Some(if is_ru {
                 "Найти провайдера".to_string()
             } else {
-                "Найти провайдера".to_string()
+                "Find a provider".to_string()
             }),
             initial_selected_idx,
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenProfilesManager))),
@@ -15141,7 +15358,7 @@ impl ChatWidget {
                 if self.ui_language().is_ru() {
                     "По умолчанию в системе".to_string()
                 } else {
-                    "По умолчанию в системе".to_string()
+                    "System default".to_string()
                 }
             })
     }

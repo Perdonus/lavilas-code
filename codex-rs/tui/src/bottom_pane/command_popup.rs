@@ -84,10 +84,16 @@ impl CommandPopup {
     }
 
     fn filter_prefers_english(&self) -> bool {
-        self.command_filter
-            .chars()
-            .next()
+        self.first_filter_letter()
             .is_some_and(|ch| ch.is_ascii_alphabetic())
+    }
+
+    fn filter_prefers_russian(&self) -> bool {
+        self.first_filter_letter().is_some_and(is_cyrillic_char)
+    }
+
+    fn first_filter_letter(&self) -> Option<char> {
+        self.command_filter.chars().find(|ch| ch.is_alphabetic())
     }
 
     /// Update the filter string based on the current composer text. The text
@@ -130,8 +136,9 @@ impl CommandPopup {
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
-    /// Build the display label used in popup rows:
-    /// canonical English key first, then discoverable aliases in parentheses.
+    /// Build the display label used in popup rows according to the UI locale.
+    /// If the user types in the opposite alphabet, show the matching alias and
+    /// keep the canonical command in parentheses for discoverability.
     fn display_name(&self, cmd: SlashCommand) -> String {
         if self.ui_language_is_ru {
             if self.filter_prefers_english() {
@@ -140,19 +147,26 @@ impl CommandPopup {
             return cmd.command_ru().to_string();
         }
 
-        let aliases = cmd.popup_aliases();
-        if aliases.is_empty() {
-            cmd.command().to_string()
-        } else {
-            format!("{} ({})", cmd.command(), aliases.join(", "))
+        if self.filter_prefers_russian() {
+            return format!("{} ({})", cmd.command_ru(), cmd.command_en());
         }
+
+        cmd.command_en().to_string()
     }
 
     pub(crate) fn inserted_command(&self, cmd: SlashCommand) -> String {
-        if self.ui_language_is_ru && !self.filter_prefers_english() {
-            cmd.command_ru().to_string()
+        match (self.ui_language_is_ru, self.filter_prefers_english(), self.filter_prefers_russian())
+        {
+            (true, false, _) | (false, _, true) => cmd.command_ru().to_string(),
+            _ => cmd.command_en().to_string(),
+        }
+    }
+
+    fn empty_state_label(&self) -> &'static str {
+        if self.ui_language_is_ru {
+            "ничего не найдено"
         } else {
-            cmd.command_en().to_string()
+            "nothing found"
         }
     }
 
@@ -252,7 +266,10 @@ impl CommandPopup {
                     name_prefix_spans: Vec::new(),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
-                    description: Some(cmd.description().to_string()),
+                    description: Some(
+                        cmd.description_for_locale(self.ui_language_is_ru)
+                            .to_string(),
+                    ),
                     category_tag: None,
                     category_tags: Vec::new(),
                     wrap_indent: None,
@@ -389,9 +406,19 @@ impl WidgetRef for CommandPopup {
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
-            "ничего не найдено",
+            self.empty_state_label(),
         );
     }
+}
+
+fn is_cyrillic_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0400}'..='\u{052F}'
+            | '\u{1C80}'..='\u{1C8F}'
+            | '\u{2DE0}'..='\u{2DFF}'
+            | '\u{A640}'..='\u{A69F}'
+    )
 }
 
 #[cfg(test)]
@@ -469,6 +496,47 @@ mod tests {
         let rows = popup.rows_from_matches(vec![model_match]);
         assert_eq!(rows[0].name, "/модель");
         assert_eq!(rows[0].match_indices, None);
+    }
+
+    #[test]
+    fn russian_ui_english_input_shows_english_with_russian_alias_and_inserts_english() {
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), true);
+        popup.on_composer_text_change("/mo".to_string());
+
+        assert_eq!(popup.display_name(SlashCommand::Model), "model (модель)");
+        assert_eq!(popup.inserted_command(SlashCommand::Model), "model");
+    }
+
+    #[test]
+    fn english_ui_russian_input_shows_russian_with_english_alias_and_inserts_russian() {
+        let mut popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
+        popup.on_composer_text_change("/мод".to_string());
+
+        assert_eq!(popup.display_name(SlashCommand::Model), "модель (model)");
+        assert_eq!(popup.inserted_command(SlashCommand::Model), "модель");
+    }
+
+    #[test]
+    fn english_ui_default_shows_english_name_without_aliases() {
+        let popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
+
+        assert_eq!(popup.display_name(SlashCommand::Settings), "settings");
+        assert_eq!(popup.inserted_command(SlashCommand::Settings), "settings");
+    }
+
+    #[test]
+    fn rows_use_localized_english_descriptions() {
+        let popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
+        let rows = popup.rows_from_matches(vec![(CommandItem::Builtin(SlashCommand::Model), None)]);
+
+        assert_eq!(rows[0].description.as_deref(), Some("model"));
+    }
+
+    #[test]
+    fn empty_state_is_localized_for_english_ui() {
+        let popup = CommandPopup::new_with_language(CommandPopupFlags::default(), false);
+
+        assert_eq!(popup.empty_state_label(), "nothing found");
     }
 
     #[test]

@@ -17,12 +17,56 @@ pub enum StdoutColorLevel {
     Unknown,
 }
 
+fn env_var_contains(name: &str, needles: &[&str]) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            let value = value.to_ascii_lowercase();
+            needles.iter().any(|needle| value.contains(needle))
+        })
+        .unwrap_or(false)
+}
+
+fn has_truecolor_env_hint() -> bool {
+    std::env::var_os("WT_SESSION").is_some()
+        || env_var_contains("COLORTERM", &["truecolor", "24bit"])
+        || env_var_contains(
+            "TERM",
+            &[
+                "truecolor",
+                "24bit",
+                "direct",
+                "kitty",
+                "wezterm",
+                "ghostty",
+                "alacritty",
+            ],
+        )
+        || env_var_contains(
+            "TERM_PROGRAM",
+            &[
+                "wezterm",
+                "warp",
+                "ghostty",
+                "vscode",
+                "iterm",
+                "apple_terminal",
+            ],
+        )
+}
+
 pub fn stdout_color_level() -> StdoutColorLevel {
-    match supports_color::on_cached(supports_color::Stream::Stdout) {
+    let detected = match supports_color::on_cached(supports_color::Stream::Stdout) {
         Some(level) if level.has_16m => StdoutColorLevel::TrueColor,
         Some(level) if level.has_256 => StdoutColorLevel::Ansi256,
         Some(_) => StdoutColorLevel::Ansi16,
         None => StdoutColorLevel::Unknown,
+    };
+
+    if detected != StdoutColorLevel::TrueColor && has_truecolor_env_hint() {
+        StdoutColorLevel::TrueColor
+    } else {
+        detected
     }
 }
 

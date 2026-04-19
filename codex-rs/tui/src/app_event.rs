@@ -316,14 +316,23 @@ pub(crate) enum AppEvent {
     /// Open the unified custom settings popup.
     OpenCustomSettings,
 
+    /// Open the model-settings submenu from the unified settings popup.
+    OpenModelSettings,
+
     /// Open the quick model picker popup.
     OpenModelPopup,
+
+    /// Open the quick model picker from the model-settings submenu.
+    OpenModelPopupFromSettings,
 
     /// Open the personality picker popup.
     OpenPersonalityPopup,
 
     /// Open profiles manager popup.
     OpenProfilesManager,
+
+    /// Open the profiles manager from the model-settings submenu.
+    OpenProfilesManagerFromSettings,
 
     /// Open provider picker to add an account profile.
     OpenAddAccountProviderPicker,
@@ -422,6 +431,9 @@ pub(crate) enum AppEvent {
         format: SelectionHighlightTextFormat,
     },
 
+    /// Clear and replay the inline transcript so style changes apply immediately.
+    RefreshStyledHistory,
+
     /// Open the fonts section root.
     OpenSelectionHighlightFontsPicker,
 
@@ -483,6 +495,9 @@ pub(crate) enum AppEvent {
 
     /// Open model preset settings for the active provider.
     OpenModelPresetsSettings,
+
+    /// Open model preset settings from the model-settings submenu.
+    OpenModelPresetsSettingsFromSettings,
 
     /// Toggle whether quick model presets are shown before the full catalog.
     ToggleModelPresetsEnabled,

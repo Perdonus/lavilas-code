@@ -2198,7 +2198,7 @@ impl App {
             let recreate_hint = if self.ui_language_is_ru() {
                 "Сохранённый API-ключ не найден. Пересоздайте аккаунт через /profiles -> Добавить аккаунт."
             } else {
-                "Сохранённый API-ключ не найден. Пересоздайте аккаунт через /profiles -> Добавить аккаунт."
+                "Saved API key not found. Recreate the account via /profiles -> Add account."
             };
             self.chat_widget
                 .add_error_message(recreate_hint.to_string());
@@ -2472,7 +2472,7 @@ impl App {
                 )
             } else {
                 format!(
-                    "Активный профиль: {config_profile}. Локальный слепок каталога: {}.",
+                    "Active profile: {config_profile}. Local catalog snapshot: {}.",
                     path.display()
                 )
             }
@@ -2484,7 +2484,7 @@ impl App {
             );
         } else {
             self.chat_widget.add_info_message(
-                format!("Аккаунт переключен: {provider_name} ({config_profile})"),
+                format!("Account switched: {provider_name} ({config_profile})"),
                 hint,
             );
         }
@@ -2500,7 +2500,7 @@ impl App {
             let message = if self.ui_language_is_ru() {
                 format!("Неподдерживаемый провайдер: {provider}")
             } else {
-                format!("Неподдерживаемый провайдер: {provider}")
+                format!("Unsupported provider: {provider}")
             };
             self.chat_widget.add_error_message(message);
             return;
@@ -2546,7 +2546,7 @@ impl App {
                 )
             } else {
                 format!(
-                    "Профиль `{profile_key}` не содержит сохранённый API-ключ. Пересоздайте его через /profiles -> Добавить аккаунт."
+                    "Profile `{profile_key}` has no saved API key. Recreate it via /profiles -> Add account."
                 )
             };
             self.chat_widget.add_error_message(message);
@@ -2576,7 +2576,7 @@ impl App {
             let message = if is_ru {
                 format!("Неподдерживаемый провайдер: {provider}")
             } else {
-                format!("Неподдерживаемый провайдер: {provider}")
+                format!("Unsupported provider: {provider}")
             };
             self.chat_widget.add_error_message(message);
             return Ok(true);
@@ -2604,7 +2604,7 @@ impl App {
             let message = if is_ru {
                 format!("Для провайдера `{provider}` нужен API-ключ.")
             } else {
-                format!("Для провайдера `{provider}` нужен API-ключ.")
+                format!("Provider `{provider}` requires an API key.")
             };
             self.chat_widget.add_error_message(message);
             return Ok(true);
@@ -2648,7 +2648,7 @@ impl App {
                 .add_error_message(if self.ui_language_is_ru() {
                     "Не удалось прочитать введённый префикс команд.".to_string()
                 } else {
-                    "Не удалось прочитать введённый префикс команд.".to_string()
+                    "Failed to read the entered command prefix.".to_string()
                 });
             return Ok(true);
         };
@@ -2659,7 +2659,7 @@ impl App {
                 .add_error_message(if self.ui_language_is_ru() {
                     "Префикс команд не может быть пустым.".to_string()
                 } else {
-                    "Префикс команды не может быть пустым.".to_string()
+                    "The command prefix cannot be empty.".to_string()
                 });
             return Ok(true);
         };
@@ -2668,7 +2668,7 @@ impl App {
                 .add_error_message(if self.ui_language_is_ru() {
                     "Префикс команд должен быть одним ASCII-символом без пробела.".to_string()
                 } else {
-                    "Префикс команд должен быть одним ASCII-символом без пробела.".to_string()
+                    "The command prefix must be a single ASCII character without spaces.".to_string()
                 });
             return Ok(true);
         }
@@ -2790,7 +2790,7 @@ impl App {
                     self.chat_widget.add_error_message(if is_ru {
                         format!("Не удалось удалить `{}`: {err}", path.display())
                     } else {
-                        format!("Не удалось удалить `{}`: {err}", path.display())
+                        format!("Failed to delete `{}`: {err}", path.display())
                     });
                     return;
                 }
@@ -2828,7 +2828,7 @@ impl App {
             self.chat_widget.add_error_message(if is_ru {
                 format!("Не удалось очистить конфигурацию профиля `{profile_key}`: {err}")
             } else {
-                format!("Не удалось очистить конфигурацию профиля `{profile_key}`: {err}")
+                format!("Failed to clean the configuration for profile `{profile_key}`: {err}")
             });
             return;
         }
@@ -2841,7 +2841,7 @@ impl App {
                     "Удалён только сохранённый профиль. Текущая сессия останется активной до переключения аккаунта."
                         .to_string()
                 } else {
-                    "Удалён только сохранённый профиль. Текущая сессия останется активной до переключения аккаунта."
+                    "Only the saved profile was removed. The current session stays active until you switch accounts."
                         .to_string()
                 })
             } else {
@@ -2851,7 +2851,7 @@ impl App {
                 if is_ru {
                     format!("Профиль `{profile_key}` удалён.")
                 } else {
-                    format!("Профиль `{profile_key}` удалён.")
+                    format!("Profile `{profile_key}` deleted.")
                 },
                 active_hint,
             );
@@ -2860,7 +2860,7 @@ impl App {
                 if is_ru {
                     format!("Профиль `{profile_key}` уже отсутствует.")
                 } else {
-                    format!("Профиль `{profile_key}` уже отсутствует.")
+                    format!("Profile `{profile_key}` is already absent.")
                 },
                 None,
             );
@@ -3266,6 +3266,42 @@ impl App {
         if redraw_header {
             self.queue_clear_ui_header(tui);
         }
+        Ok(())
+    }
+
+    fn rebuild_inline_history_with_current_styles(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if tui.is_alt_screen_active() {
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        }
+
+        self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
+        self.deferred_history_lines.clear();
+        self.has_emitted_history_lines = false;
+
+        let width = tui.terminal.last_known_screen_size.width;
+        for cell in &self.transcript_cells {
+            let mut display = cell.display_lines(width);
+            if display.is_empty() {
+                continue;
+            }
+
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+
+            tui.insert_history_lines(display);
+        }
+
+        if !self.has_emitted_history_lines {
+            self.queue_clear_ui_header(tui);
+        }
+
+        tui.frame_requester().schedule_frame();
         Ok(())
     }
 
@@ -6302,14 +6338,23 @@ impl App {
             AppEvent::OpenCustomSettings => {
                 self.chat_widget.open_custom_settings_popup();
             }
+            AppEvent::OpenModelSettings => {
+                self.chat_widget.open_model_settings_popup();
+            }
             AppEvent::OpenModelPopup => {
                 self.chat_widget.open_model_popup();
+            }
+            AppEvent::OpenModelPopupFromSettings => {
+                self.chat_widget.open_model_popup_from_settings();
             }
             AppEvent::OpenPersonalityPopup => {
                 self.chat_widget.open_personality_popup();
             }
             AppEvent::OpenProfilesManager => {
                 self.chat_widget.open_profiles_manager_popup();
+            }
+            AppEvent::OpenProfilesManagerFromSettings => {
+                self.chat_widget.open_profiles_manager_popup_from_settings();
             }
             AppEvent::OpenStoredProfileActions { profile_key } => {
                 self.chat_widget
@@ -6388,6 +6433,15 @@ impl App {
             AppEvent::TogglePopupTextFormat { target, format } => {
                 self.chat_widget.toggle_popup_text_format(target, format);
             }
+            AppEvent::RefreshStyledHistory => {
+                if let Err(err) = self.rebuild_inline_history_with_current_styles(tui) {
+                    self.chat_widget.add_error_message(if self.ui_language_is_ru() {
+                        format!("Не удалось обновить историю после смены оформления: {err}")
+                    } else {
+                        format!("Failed to refresh history after the style change: {err}")
+                    });
+                }
+            }
             AppEvent::OpenSelectionHighlightFontsPicker => {
                 self.chat_widget.open_selection_highlight_picker_popup();
             }
@@ -6437,6 +6491,10 @@ impl App {
             }
             AppEvent::OpenModelPresetsSettings => {
                 self.chat_widget.open_model_presets_settings_popup();
+            }
+            AppEvent::OpenModelPresetsSettingsFromSettings => {
+                self.chat_widget
+                    .open_model_presets_settings_popup_from_settings();
             }
             AppEvent::ToggleModelPresetsEnabled => {
                 let enabled =

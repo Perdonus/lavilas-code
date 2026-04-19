@@ -168,7 +168,7 @@ pub(crate) fn describe_color_choice(
             if is_ru {
                 format!("Авто · {}", named.name_ru)
             } else {
-                format!("Авто · {}", named.name_ru)
+                format!("Auto · {}", named.name_en)
             }
         }
         UiColorChoice::Preset(preset) => {
@@ -176,7 +176,7 @@ pub(crate) fn describe_color_choice(
             if is_ru {
                 named.name_ru.to_string()
             } else {
-                named.name_ru.to_string()
+                named.name_en.to_string()
             }
         }
         UiColorChoice::Custom(hex) => {
@@ -184,7 +184,7 @@ pub(crate) fn describe_color_choice(
             if is_ru {
                 format!("{} {}", named.name_ru, hex.to_ascii_uppercase())
             } else {
-                format!("{} {}", named.name_ru, hex.to_ascii_uppercase())
+                format!("{} {}", named.name_en, hex.to_ascii_uppercase())
             }
         }
         UiColorChoice::Gradient { .. } => unreachable!(),
@@ -195,7 +195,7 @@ pub(crate) fn named_color_for_hex(hex: &str) -> NamedColor {
     let Some(rgb) = parse_hex_color(hex) else {
         return NamedColor {
             name_ru: "Свой цвет",
-            name_en: "Свой цвет",
+            name_en: "Custom color",
             hex: "#000000",
             rgb: (0, 0, 0),
         };
@@ -439,28 +439,28 @@ fn style_foreground_rgb(style: Style) -> Option<(u8, u8, u8)> {
 }
 
 fn emphasize_foreground(mut style: Style, weight: f32) -> Style {
-    if style.bg.is_some_and(|background| background != Color::Reset) {
-        return style;
-    }
-
     let Some(rgb) = style_foreground_rgb(style) else {
         return style;
     };
 
-    style.fg = Some(rgb_color(blend(rgb, emphasis_target(rgb), weight)));
+    style.fg = Some(rgb_color(visible_terminal_rgb(blend(
+        rgb,
+        emphasis_target(rgb),
+        weight,
+    ))));
     style
 }
 
 fn italicize_foreground(mut style: Style) -> Style {
-    if style.bg.is_some_and(|background| background != Color::Reset) {
-        return style;
-    }
-
     let Some(rgb) = style_foreground_rgb(style) else {
         return style;
     };
 
-    style.fg = Some(rgb_color(blend(rgb, italic_target(rgb), 0.3)));
+    style.fg = Some(rgb_color(visible_terminal_rgb(blend(
+        rgb,
+        italic_target(rgb),
+        0.72,
+    ))));
     style
 }
 
@@ -493,9 +493,16 @@ pub(crate) fn color_swatch_spans(
     vec![Span::styled("  ", color_badge_style(rgb))]
 }
 
+fn preview_format_style(formats: SelectionHighlightTextFormats) -> Style {
+    apply_text_formats(
+        Style::default().fg(best_terminal_color((232, 236, 242))),
+        formats,
+    )
+}
+
 pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTextFormats) -> Style {
     if formats.contains(SelectionHighlightTextFormat::Bold) {
-        style = emphasize_foreground(style, 0.32);
+        style = emphasize_foreground(style, 0.82);
         style = style.add_modifier(Modifier::BOLD);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
@@ -518,12 +525,18 @@ pub(crate) fn format_preview_label(
     match (is_ru, format) {
         (true, SelectionHighlightTextFormat::Bold) => (
             "Жирный",
-            Style::default().add_modifier(Modifier::BOLD),
+            preview_format_style(
+                SelectionHighlightTextFormats::empty()
+                    .with_toggled(SelectionHighlightTextFormat::Bold),
+            ),
             Some("B"),
         ),
         (false, SelectionHighlightTextFormat::Bold) => (
-            "Жирный",
-            Style::default().add_modifier(Modifier::BOLD),
+            "Bold",
+            preview_format_style(
+                SelectionHighlightTextFormats::empty()
+                    .with_toggled(SelectionHighlightTextFormat::Bold),
+            ),
             Some("B"),
         ),
         (true, SelectionHighlightTextFormat::Semibold) => (
@@ -534,7 +547,7 @@ pub(crate) fn format_preview_label(
             Some("◧"),
         ),
         (false, SelectionHighlightTextFormat::Semibold) => (
-            "Полужирный",
+            "Semi-bold",
             Style::default()
                 .add_modifier(Modifier::BOLD)
                 .fg(best_terminal_color((214, 218, 224))),
@@ -542,22 +555,34 @@ pub(crate) fn format_preview_label(
         ),
         (true, SelectionHighlightTextFormat::Italic) => (
             "Курсив",
-            Style::default().add_modifier(Modifier::ITALIC),
+            preview_format_style(
+                SelectionHighlightTextFormats::empty()
+                    .with_toggled(SelectionHighlightTextFormat::Italic),
+            ),
             Some("/"),
         ),
         (false, SelectionHighlightTextFormat::Italic) => (
-            "Курсив",
-            Style::default().add_modifier(Modifier::ITALIC),
+            "Italic",
+            preview_format_style(
+                SelectionHighlightTextFormats::empty()
+                    .with_toggled(SelectionHighlightTextFormat::Italic),
+            ),
             Some("/"),
         ),
         (true, SelectionHighlightTextFormat::Underlined) => (
             "Подчёркнутый",
-            Style::default().add_modifier(Modifier::UNDERLINED),
+            preview_format_style(
+                SelectionHighlightTextFormats::empty()
+                    .with_toggled(SelectionHighlightTextFormat::Underlined),
+            ),
             Some("_"),
         ),
         (false, SelectionHighlightTextFormat::Underlined) => (
-            "Подчёркнутый",
-            Style::default().add_modifier(Modifier::UNDERLINED),
+            "Underlined",
+            preview_format_style(
+                SelectionHighlightTextFormats::empty()
+                    .with_toggled(SelectionHighlightTextFormat::Underlined),
+            ),
             Some("_"),
         ),
         (true, SelectionHighlightTextFormat::Mono) => (
@@ -566,22 +591,44 @@ pub(crate) fn format_preview_label(
             Some("</>"),
         ),
         (false, SelectionHighlightTextFormat::Mono) => (
-            "Моно",
+            "Monospace",
             Style::default().fg(best_terminal_color((120, 193, 255))),
             Some("</>"),
         ),
-        (true, SelectionHighlightTextFormat::Dim) => ("Приглушённый", Style::default().add_modifier(Modifier::DIM), None),
-        (false, SelectionHighlightTextFormat::Dim) => ("Приглушённый", Style::default().add_modifier(Modifier::DIM), None),
-        (true, SelectionHighlightTextFormat::Reversed) => ("Инверсия", Style::default().add_modifier(Modifier::REVERSED), None),
-        (false, SelectionHighlightTextFormat::Reversed) => ("Инверсия", Style::default().add_modifier(Modifier::REVERSED), None),
+        (true, SelectionHighlightTextFormat::Dim) => (
+            "Приглушённый",
+            Style::default().add_modifier(Modifier::DIM),
+            None,
+        ),
+        (false, SelectionHighlightTextFormat::Dim) => (
+            "Dim",
+            Style::default().add_modifier(Modifier::DIM),
+            None,
+        ),
+        (true, SelectionHighlightTextFormat::Reversed) => (
+            "Инверсия",
+            Style::default().add_modifier(Modifier::REVERSED),
+            None,
+        ),
+        (false, SelectionHighlightTextFormat::Reversed) => (
+            "Reversed",
+            Style::default().add_modifier(Modifier::REVERSED),
+            None,
+        ),
         (true, SelectionHighlightTextFormat::CrossedOut) => (
             "Зачёркнутый",
-            Style::default().add_modifier(Modifier::CROSSED_OUT),
+            preview_format_style(
+                SelectionHighlightTextFormats::empty()
+                    .with_toggled(SelectionHighlightTextFormat::CrossedOut),
+            ),
             Some("~"),
         ),
         (false, SelectionHighlightTextFormat::CrossedOut) => (
-            "Зачёркнутый",
-            Style::default().add_modifier(Modifier::CROSSED_OUT),
+            "Crossed out",
+            preview_format_style(
+                SelectionHighlightTextFormats::empty()
+                    .with_toggled(SelectionHighlightTextFormat::CrossedOut),
+            ),
             Some("~"),
         ),
     }
