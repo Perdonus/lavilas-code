@@ -412,6 +412,27 @@ fn color_label_style(rgb: (u8, u8, u8)) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+fn emphasis_target(rgb: (u8, u8, u8)) -> (u8, u8, u8) {
+    if is_light(rgb) {
+        (12, 12, 12)
+    } else {
+        (245, 245, 245)
+    }
+}
+
+fn emphasize_foreground(mut style: Style, weight: f32) -> Style {
+    if style.bg.is_some_and(|background| background != Color::Reset) {
+        return style;
+    }
+
+    let Some(rgb) = style.fg.and_then(color_to_rgb) else {
+        return style;
+    };
+
+    style.fg = Some(best_terminal_color(blend(rgb, emphasis_target(rgb), weight)));
+    style
+}
+
 pub(crate) fn styled_color_label_spans(
     choice: &UiColorChoice,
     fallback_preset: SelectionHighlightPreset,
@@ -443,9 +464,11 @@ pub(crate) fn color_swatch_spans(
 
 pub(crate) fn apply_text_formats(mut style: Style, formats: SelectionHighlightTextFormats) -> Style {
     if formats.contains(SelectionHighlightTextFormat::Bold) {
+        style = emphasize_foreground(style, 0.24);
         style = style.add_modifier(Modifier::BOLD);
     }
     if formats.contains(SelectionHighlightTextFormat::Italic) {
+        style = emphasize_foreground(style, 0.12);
         style = style.add_modifier(Modifier::ITALIC);
     }
     if formats.contains(SelectionHighlightTextFormat::Underlined) {
@@ -465,12 +488,12 @@ pub(crate) fn format_preview_label(
         (true, SelectionHighlightTextFormat::Bold) => (
             "Жирный",
             Style::default().add_modifier(Modifier::BOLD),
-            None,
+            Some("B"),
         ),
         (false, SelectionHighlightTextFormat::Bold) => (
             "Жирный",
             Style::default().add_modifier(Modifier::BOLD),
-            None,
+            Some("B"),
         ),
         (true, SelectionHighlightTextFormat::Semibold) => (
             "Полужирный",
@@ -489,22 +512,22 @@ pub(crate) fn format_preview_label(
         (true, SelectionHighlightTextFormat::Italic) => (
             "Курсив",
             Style::default().add_modifier(Modifier::ITALIC),
-            None,
+            Some("/"),
         ),
         (false, SelectionHighlightTextFormat::Italic) => (
             "Курсив",
             Style::default().add_modifier(Modifier::ITALIC),
-            None,
+            Some("/"),
         ),
         (true, SelectionHighlightTextFormat::Underlined) => (
             "Подчёркнутый",
             Style::default().add_modifier(Modifier::UNDERLINED),
-            None,
+            Some("_"),
         ),
         (false, SelectionHighlightTextFormat::Underlined) => (
             "Подчёркнутый",
             Style::default().add_modifier(Modifier::UNDERLINED),
-            None,
+            Some("_"),
         ),
         (true, SelectionHighlightTextFormat::Mono) => (
             "Моно",
@@ -523,12 +546,12 @@ pub(crate) fn format_preview_label(
         (true, SelectionHighlightTextFormat::CrossedOut) => (
             "Зачёркнутый",
             Style::default().add_modifier(Modifier::CROSSED_OUT),
-            None,
+            Some("~"),
         ),
         (false, SelectionHighlightTextFormat::CrossedOut) => (
             "Зачёркнутый",
             Style::default().add_modifier(Modifier::CROSSED_OUT),
-            None,
+            Some("~"),
         ),
     }
 }

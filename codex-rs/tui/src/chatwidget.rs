@@ -73,7 +73,6 @@ use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_font::SetTerminalFontResult;
 use crate::terminal_font::set_terminal_font;
 use crate::terminal_font::terminal_font_support_note;
-use crate::terminal_font::terminal_font_support_summary;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
@@ -10497,15 +10496,6 @@ impl ChatWidget {
         }
     }
 
-    fn selection_highlight_fill_label_for_locale(fill: bool, is_ru: bool) -> &'static str {
-        match (is_ru, fill) {
-            (true, true) => "Включено",
-            (true, false) => "Выключено",
-            (false, true) => "On",
-            (false, false) => "Off",
-        }
-    }
-
     fn selection_highlight_format_label_for_locale(
         format: SelectionHighlightTextFormat,
         is_ru: bool,
@@ -10527,55 +10517,6 @@ impl ChatWidget {
             (false, SelectionHighlightTextFormat::Dim) => "Dim",
             (false, SelectionHighlightTextFormat::Reversed) => "Reversed",
             (false, SelectionHighlightTextFormat::CrossedOut) => "Crossed out",
-        }
-    }
-
-    fn selection_highlight_format_description_for_locale(
-        format: SelectionHighlightTextFormat,
-        enabled: bool,
-        is_ru: bool,
-    ) -> String {
-        let state = Self::selection_highlight_fill_label_for_locale(enabled, is_ru);
-        match (is_ru, format) {
-            (true, SelectionHighlightTextFormat::Bold) => format!("{state} · акцент"),
-            (true, SelectionHighlightTextFormat::Italic) => format!("{state} · наклон"),
-            (true, SelectionHighlightTextFormat::Underlined) => format!("{state} · линия"),
-            (true, SelectionHighlightTextFormat::CrossedOut) => format!("{state} · зачерк"),
-            (false, SelectionHighlightTextFormat::Bold) => format!("{state} · accent"),
-            (false, SelectionHighlightTextFormat::Italic) => format!("{state} · italic"),
-            (false, SelectionHighlightTextFormat::Underlined) => format!("{state} · underline"),
-            (false, SelectionHighlightTextFormat::CrossedOut) => format!("{state} · strike"),
-            (_, SelectionHighlightTextFormat::Semibold)
-            | (_, SelectionHighlightTextFormat::Mono)
-            | (_, SelectionHighlightTextFormat::Dim)
-            | (_, SelectionHighlightTextFormat::Reversed) => state.to_string(),
-        }
-    }
-
-    fn selection_highlight_format_summary_for_locale(
-        formats: SelectionHighlightTextFormats,
-        is_ru: bool,
-    ) -> String {
-        if formats.is_empty() {
-            return if is_ru {
-                "Без форматов".to_string()
-            } else {
-                "No styles".to_string()
-            };
-        }
-
-        let labels = SelectionHighlightTextFormat::all()
-            .into_iter()
-            .filter(|format| formats.contains(*format))
-            .map(|format| Self::selection_highlight_format_label_for_locale(format, is_ru))
-            .collect::<Vec<_>>();
-
-        if labels.len() <= 2 {
-            labels.join(", ")
-        } else if is_ru {
-            format!("{} формата", labels.len())
-        } else {
-            format!("{} styles", labels.len())
         }
     }
 
@@ -10752,29 +10693,6 @@ impl ChatWidget {
             "авто-вывод",
             "auto output",
         )
-    }
-
-    fn current_font_summary(&self) -> String {
-        let is_ru = self.ui_language().is_ru();
-        let fonts = self.current_installed_fonts();
-        let support = terminal_font_support_summary(is_ru);
-        let Some(active_id) = self.current_active_font_id() else {
-            return if is_ru {
-                format!("системный · установлено {} · {}", fonts.len(), support)
-            } else {
-                format!("system · installed {} · {}", fonts.len(), support)
-            };
-        };
-        let active = fonts
-            .iter()
-            .find(|font| font.id == active_id)
-            .map(|font| font.family.clone())
-            .unwrap_or(active_id);
-        if is_ru {
-            format!("{active} · установлено {} · {}", fonts.len(), support)
-        } else {
-            format!("{active} · installed {} · {}", fonts.len(), support)
-        }
     }
 
     fn popup_color_target_label_for_locale(target: PopupColorTarget, is_ru: bool) -> &'static str {
@@ -12554,10 +12472,9 @@ impl ChatWidget {
             PopupFormatTarget::CommandOutput,
         ] {
             let formats = self.popup_current_text_formats(target);
-            let summary = Self::selection_highlight_format_summary_for_locale(formats, is_ru);
             items.push(SelectionItem {
                 name: Self::popup_format_target_label_for_locale(target, is_ru).to_string(),
-                description: Some(summary),
+                description: None,
                 search_value: Some(if is_ru {
                     format!(
                         "{} форматирование текст",
@@ -12573,6 +12490,7 @@ impl ChatWidget {
                     tx.send(AppEvent::OpenSelectionHighlightFormatTargetPicker { target })
                 })],
                 dismiss_on_select: false,
+                category_tags: Self::popup_target_state_tags(!formats.is_empty()),
                 ..Default::default()
             });
         }
@@ -12993,11 +12911,7 @@ impl ChatWidget {
             } else {
                 "Пресеты моделей".to_string()
             }),
-            subtitle: Some(if is_ru {
-                "Быстрые пресеты для /model хранятся отдельно по активному провайдеру.".to_string()
-            } else {
-                "Быстрые пресеты /model хранятся отдельно для активного провайдера.".to_string()
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenCustomSettings))),
@@ -13049,7 +12963,6 @@ impl ChatWidget {
             ..Default::default()
         });
 
-        let presets_are_empty = presets.is_empty();
         items.extend(presets.into_iter().map(|preset| {
             let model_label = provider_models
                 .iter()
@@ -13077,29 +12990,7 @@ impl ChatWidget {
             } else {
                 "Пресеты активного провайдера".to_string()
             }),
-            subtitle: Some(if presets_are_empty {
-                if is_ru {
-                    format!(
-                        "Провайдер: {} ({}). Быстрых пресетов сейчас нет: /model сразу откроет полный каталог, пока вы не добавите свои.",
-                        self.config.model_provider.name, self.config.model_provider_id
-                    )
-                } else {
-                    format!(
-                        "Провайдер: {} ({}). Быстрых пресетов пока нет, поэтому /model открывает полный каталог, пока вы не добавите свой.",
-                        self.config.model_provider.name, self.config.model_provider_id
-                    )
-                }
-            } else if is_ru {
-                format!(
-                    "Провайдер: {} ({}). Здесь можно добавить, переименовать, переназначить и удалить пресеты.",
-                    self.config.model_provider.name, self.config.model_provider_id
-                )
-            } else {
-                format!(
-                    "Провайдер: {} ({}). Здесь можно добавлять, переименовывать, переназначать и удалять пресеты.",
-                    self.config.model_provider.name, self.config.model_provider_id
-                )
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
@@ -13194,7 +13085,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(MODEL_PRESET_ACTIONS_VIEW_ID),
             title: Some(preset.name),
-            subtitle: Some(preset.model),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             on_cancel: Some(Box::new(|tx| {
@@ -13267,11 +13158,7 @@ impl ChatWidget {
             } else {
                 "Выберите модель для пресета".to_string()
             }),
-            subtitle: Some(if is_ru {
-                "Список моделей активного провайдера.".to_string()
-            } else {
-                "Список моделей активного провайдера.".to_string()
-            }),
+            subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,

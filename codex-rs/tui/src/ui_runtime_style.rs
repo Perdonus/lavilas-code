@@ -10,9 +10,7 @@ use ratatui::text::Span;
 
 use crate::ui_appearance::apply_text_formats;
 use crate::ui_appearance::best_terminal_color;
-use crate::ui_appearance::resolve_color_choice_label_rgb;
 use crate::ui_appearance::resolve_color_choice_rgb;
-use crate::ui_appearance::visible_terminal_rgb;
 use crate::ui_preferences::SelectionHighlightTextFormats;
 use crate::ui_preferences::UiColorChoice;
 use crate::ui_preferences::UiPreferences;
@@ -118,77 +116,6 @@ pub(crate) fn runtime_text_style(role: RuntimeTextRole) -> Style {
         default_style.fg(best_terminal_color(rgb))
     };
     apply_text_formats(style, formats)
-}
-
-fn mix_channel(a: u8, b: u8, weight: f32) -> u8 {
-    let weight = weight.clamp(0.0, 1.0);
-    (((a as f32) * (1.0 - weight)) + ((b as f32) * weight)).round() as u8
-}
-
-fn mix_rgb(left: (u8, u8, u8), right: (u8, u8, u8), weight: f32) -> (u8, u8, u8) {
-    (
-        mix_channel(left.0, right.0, weight),
-        mix_channel(left.1, right.1, weight),
-        mix_channel(left.2, right.2, weight),
-    )
-}
-
-fn gradient_weight(index: usize, total: usize) -> f32 {
-    if total <= 1 {
-        0.0
-    } else {
-        index as f32 / (total - 1) as f32
-    }
-}
-
-fn patch_gradient_line_for_role(
-    line: Line<'static>,
-    choice: &UiColorChoice,
-    fallback_preset: crate::ui_preferences::SelectionHighlightPreset,
-    base_style: Style,
-    only_plain: bool,
-) -> Line<'static> {
-    let start_rgb = resolve_color_choice_label_rgb(choice, fallback_preset, false);
-    let end_rgb = resolve_color_choice_label_rgb(choice, fallback_preset, true);
-    let total_chars = line
-        .spans
-        .iter()
-        .filter(|span| !(only_plain && (span.style.fg.is_some() || span.style.bg.is_some())))
-        .map(|span| span.content.chars().filter(|ch| !ch.is_control()).count())
-        .sum::<usize>()
-        .max(1);
-
-    let mut char_index = 0usize;
-    let spans = line
-        .spans
-        .into_iter()
-        .flat_map(|span| {
-            if only_plain && (span.style.fg.is_some() || span.style.bg.is_some()) {
-                return vec![span];
-            }
-
-            let patched_style = span.style.patch(base_style);
-
-            span.content
-                .chars()
-                .map(|ch| {
-                    let mut style = patched_style;
-                    if !ch.is_whitespace() {
-                        let rgb = mix_rgb(start_rgb, end_rgb, gradient_weight(char_index, total_chars));
-                        style = style.fg(best_terminal_color(visible_terminal_rgb(rgb)));
-                    }
-                    char_index += usize::from(!ch.is_control());
-                    Span::styled(ch.to_string(), style)
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
-
-    Line {
-        style: line.style,
-        alignment: line.alignment,
-        spans,
-    }
 }
 
 pub(crate) fn patch_line_for_role(
