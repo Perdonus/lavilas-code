@@ -41,6 +41,7 @@ if version:
     data["version"] = version
 
 missing_paths = []
+output_manifest.parent.mkdir(parents=True, exist_ok=True)
 
 readme_path = data.get("readme")
 if readme_path:
@@ -49,7 +50,7 @@ if readme_path:
         missing_paths.append(str(resolved_readme))
     staged_readme = output_manifest.parent / resolved_readme.name
     shutil.copy2(resolved_readme, staged_readme)
-    data["readme"] = str(staged_readme.resolve())
+    data["readme"] = staged_readme.name
 
 for variant in data.get("variants", []):
     artifact_path = variant.get("artifact")
@@ -59,14 +60,16 @@ for variant in data.get("variants", []):
     resolved_artifact = (source_manifest.parent / artifact_path).resolve()
     if not resolved_artifact.exists():
         missing_paths.append(str(resolved_artifact))
-    variant["artifact"] = str(resolved_artifact)
+    staged_artifact = output_manifest.parent / resolved_artifact.name
+    if resolved_artifact != staged_artifact:
+        shutil.copy2(resolved_artifact, staged_artifact)
+    variant["artifact"] = staged_artifact.name
 
 if missing_paths:
     raise SystemExit(
         "manifest references missing files:\n" + "\n".join(sorted(set(missing_paths)))
     )
 
-output_manifest.parent.mkdir(parents=True, exist_ok=True)
 output_manifest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 print(output_manifest)
 PY
