@@ -213,7 +213,10 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str =
     "Сохраните изменения и закройте внешний редактор, чтобы продолжить.";
-const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+// Multi-worker sessions do not need 32k buffered thread events per thread on weak hardware.
+// Keeping this lower trims resident memory and replay/snapshot churn without touching the
+// active-thread drain budget.
+const THREAD_EVENT_CHANNEL_CAPACITY: usize = 8192;
 const ACTIVE_THREAD_EVENT_DRAIN_BUDGET: usize = 64;
 const SUBAGENT_BACKFILL_PAGE_SIZE: usize = 100;
 
@@ -987,7 +990,7 @@ fn guardian_approvals_mode() -> GuardianApprovalsMode {
 ///
 /// Smooth-mode streaming still looks live at ~30 FPS, while avoiding the redraw
 /// storm that 120 FPS creates on weaker CPUs during worker-heavy sessions.
-const COMMIT_ANIMATION_TICK: Duration = Duration::from_millis(33);
+const COMMIT_ANIMATION_TICK: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {

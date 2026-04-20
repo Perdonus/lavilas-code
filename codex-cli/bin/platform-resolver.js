@@ -202,6 +202,21 @@ function readyMarkerFor(vendorRoot) {
   return readJsonFile(readyMarkerPathFor(vendorRoot));
 }
 
+function packageVersionForVendorRoot(vendorRoot) {
+  const packageJsonPath = path.join(path.dirname(vendorRoot), "package.json");
+  const metadata = readJsonFile(packageJsonPath);
+  return typeof metadata?.version === "string" ? metadata.version : null;
+}
+
+function candidateMatchesPackageVersion(candidate, expectedVersion) {
+  if (!expectedVersion) {
+    return true;
+  }
+
+  const candidateVersion = packageVersionForVendorRoot(candidate.vendorRoot);
+  return candidateVersion === null || candidateVersion === expectedVersion;
+}
+
 function validateVendorManifest(manifest, vendorRoot) {
   if (!manifest || typeof manifest !== "object") {
     return { valid: false, reason: "missing manifest.json" };
@@ -577,6 +592,9 @@ export function selectVendorInstallation({
     requireResolve,
   });
   for (const candidate of candidates) {
+    if (!candidateMatchesPackageVersion(candidate, packageVersion)) {
+      continue;
+    }
     const result = validateVendorRoot(candidate, targetTriple, binaryName);
     if (result.valid) {
       return (

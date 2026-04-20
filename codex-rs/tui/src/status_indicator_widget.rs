@@ -32,8 +32,8 @@ use crate::wrapping::word_wrap_lines;
 pub(crate) const STATUS_DETAILS_DEFAULT_MAX_LINES: usize = 3;
 const DETAILS_PREFIX: &str = "  └ ";
 const STATUS_ELAPSED_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-const STATUS_SHIMMER_FRAME_INTERVAL: Duration = Duration::from_millis(200);
-const STATUS_BLINK_FRAME_INTERVAL: Duration = Duration::from_millis(600);
+const STATUS_SHIMMER_FRAME_INTERVAL: Duration = Duration::from_millis(300);
+const STATUS_BLINK_FRAME_INTERVAL: Duration = Duration::from_millis(900);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatusDetailsCapitalization {

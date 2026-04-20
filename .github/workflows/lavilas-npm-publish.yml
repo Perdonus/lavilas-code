@@ -19,6 +19,12 @@ jobs:
             artifact_name: npm-codex-linux-x64
             bin_path: codex-rs/target/x86_64-unknown-linux-musl/release/codex
             rust_target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            package: codex-linux-arm64
+            target_triple: aarch64-unknown-linux-musl
+            artifact_name: npm-codex-linux-arm64
+            bin_path: codex-rs/target/aarch64-unknown-linux-musl/release/codex
+            rust_target: aarch64-unknown-linux-musl
 
     runs-on: ${{ matrix.os }}
     steps:

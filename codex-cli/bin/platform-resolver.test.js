@@ -113,6 +113,46 @@ test("selectVendorInstallation falls back to staged sibling when current binary 
   rmSync(tempRoot, { force: true, recursive: true });
 });
 
+test("selectVendorInstallation ignores stale platform package version when packageVersion is newer", () => {
+  const tempRoot = path.join(os.tmpdir(), `codex-platform-test-${Date.now()}-stale-version`);
+  rmSync(tempRoot, { force: true, recursive: true });
+
+  const packageDir = path.join(tempRoot, "node_modules", "@lavilas", "codex");
+  const nestedPlatformDir = path.join(
+    packageDir,
+    "node_modules",
+    "@lavilas",
+    "codex-linux-arm64",
+  );
+  makeVendorTree(nestedPlatformDir, 48);
+  writeFileSync(
+    path.join(nestedPlatformDir, "package.json"),
+    JSON.stringify(
+      {
+        name: "@lavilas/codex-linux-arm64",
+        version: "1.3.66",
+      },
+      null,
+      2,
+    ),
+  );
+
+  const selected = selectVendorInstallation({
+    packageDir,
+    platformPackage: "@lavilas/codex-linux-arm64",
+    targetTriple: "x86_64-unknown-linux-musl",
+    binaryName: "codex",
+    packageVersion: "1.3.72-beta.21",
+    requireResolve: () => {
+      throw new Error("not installed");
+    },
+  });
+
+  assert.equal(selected, null);
+
+  rmSync(tempRoot, { force: true, recursive: true });
+});
+
 test("ensurePlatformPackageMetadata recreates missing package.json from vendor tree", () => {
   const tempRoot = path.join(os.tmpdir(), `codex-platform-test-${Date.now()}-metadata`);
   rmSync(tempRoot, { force: true, recursive: true });
