@@ -29,6 +29,7 @@ fi
 python3 - "$SOURCE_MANIFEST" "$OUTPUT_MANIFEST" "$VERSION" <<'PY'
 import json
 import pathlib
+import shutil
 import sys
 
 source_manifest = pathlib.Path(sys.argv[1]).resolve()
