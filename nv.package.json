@@ -1,8 +1,8 @@
 {
   "name": "lavilas",
   "version": "0.1.0-alpha.1",
-  "title": "Lavilas Go Alpha",
-  "description": "Go alpha rewrite of Lavilas Codex for NV.",
+  "title": "Go Lavilas Alpha",
+  "description": "Go alpha rewrite of Lavilas for NV.",
   "homepage": "https://github.com/Perdonus/lavilas-code/tree/nv-go-alpha",
   "aliases": [
     "lavilas-go",
