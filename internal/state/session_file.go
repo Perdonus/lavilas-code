@@ -19,6 +19,7 @@ type SessionMeta struct {
 	Provider  string    `json:"provider,omitempty"`
 	Profile   string    `json:"profile,omitempty"`
 	Reasoning string    `json:"reasoning,omitempty"`
+	CWD       string    `json:"cwd,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -30,6 +31,7 @@ type sessionLine struct {
 	Provider   string            `json:"provider,omitempty"`
 	Profile    string            `json:"profile,omitempty"`
 	Reasoning  string            `json:"reasoning,omitempty"`
+	CWD        string            `json:"cwd,omitempty"`
 	CreatedAt  string            `json:"created_at,omitempty"`
 	UpdatedAt  string            `json:"updated_at,omitempty"`
 	Role       string            `json:"role,omitempty"`
@@ -59,7 +61,7 @@ type sessionContent struct {
 }
 
 func CreateSession(root string, meta SessionMeta, messages []runtime.Message) (SessionEntry, error) {
-	meta = normalizeSessionMeta(meta)
+	meta = prepareSessionMetaForPersist(meta)
 	path := sessionPath(root, meta)
 	if err := persistSession(path, meta, messages); err != nil {
 		return SessionEntry{}, err
@@ -69,10 +71,7 @@ func CreateSession(root string, meta SessionMeta, messages []runtime.Message) (S
 	if err != nil {
 		return SessionEntry{}, err
 	}
-	entry := buildSessionEntry(root, path, info)
-	if !meta.UpdatedAt.IsZero() {
-		entry.ModTime = meta.UpdatedAt.UTC()
-	}
+	entry := buildSessionEntry(root, path, info, meta)
 	_ = UpsertSessionIndexEntry(root, entry)
 	return entry, nil
 }
@@ -86,11 +85,12 @@ func AppendSession(path string, messages ...runtime.Message) error {
 	if err != nil {
 		return err
 	}
+	meta = prepareSessionMetaForPersist(meta)
 	meta.UpdatedAt = time.Now().UTC()
 	if err := appendSessionDelta(path, meta, messages); err != nil {
 		return err
 	}
-	return refreshSessionIndexEntry(path, meta.UpdatedAt)
+	return refreshSessionIndexEntry(path, meta)
 }
 
 func AppendSessionHistory(path string, meta SessionMeta, history []runtime.Message) error {
@@ -110,11 +110,12 @@ func AppendSessionHistory(path string, meta SessionMeta, history []runtime.Messa
 	if meta.UpdatedAt.IsZero() {
 		merged.UpdatedAt = time.Now().UTC()
 	}
+	merged = prepareSessionMetaForPersist(merged)
 	tail := history[len(existing):]
 	if err := appendSessionDelta(path, merged, tail); err != nil {
 		return err
 	}
-	return refreshSessionIndexEntry(path, merged.UpdatedAt)
+	return refreshSessionIndexEntry(path, merged)
 }
 
 func LoadSession(path string) (SessionMeta, []runtime.Message, error) {
@@ -182,6 +183,7 @@ func LoadSessionMeta(path string) (SessionMeta, error) {
 }
 
 func normalizeSessionMeta(meta SessionMeta) SessionMeta {
+	meta.CWD = sanitizeSessionCWD(meta.CWD)
 	now := time.Now().UTC()
 	if strings.TrimSpace(meta.SessionID) == "" {
 		meta.SessionID = fmt.Sprintf("%x", now.UnixNano())
@@ -193,6 +195,30 @@ func normalizeSessionMeta(meta SessionMeta) SessionMeta {
 		meta.UpdatedAt = meta.CreatedAt
 	}
 	return meta
+}
+
+func prepareSessionMetaForPersist(meta SessionMeta) SessionMeta {
+	meta = normalizeSessionMeta(meta)
+	if strings.TrimSpace(meta.CWD) == "" {
+		meta.CWD = sessionWorkingDirectory()
+	}
+	return meta
+}
+
+func sanitizeSessionCWD(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return ""
+	}
+	return filepath.Clean(cwd)
+}
+
+func sessionWorkingDirectory() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return sanitizeSessionCWD(cwd)
 }
 
 func sessionPath(root string, meta SessionMeta) string {
@@ -219,6 +245,7 @@ func writeSessionMeta(writer *bufio.Writer, meta SessionMeta) error {
 		Provider:  meta.Provider,
 		Profile:   meta.Profile,
 		Reasoning: meta.Reasoning,
+		CWD:       meta.CWD,
 		CreatedAt: meta.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt: meta.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -265,6 +292,7 @@ func sessionMetaFromLine(line sessionLine) SessionMeta {
 		Provider:  line.Provider,
 		Profile:   line.Profile,
 		Reasoning: line.Reasoning,
+		CWD:       line.CWD,
 	}
 	if parsed, err := time.Parse(time.RFC3339Nano, line.CreatedAt); err == nil {
 		meta.CreatedAt = parsed
@@ -384,6 +412,9 @@ func mergeSessionMeta(current SessionMeta, next SessionMeta) SessionMeta {
 	if strings.TrimSpace(next.Reasoning) != "" {
 		merged.Reasoning = next.Reasoning
 	}
+	if strings.TrimSpace(next.CWD) != "" {
+		merged.CWD = next.CWD
+	}
 	if merged.CreatedAt.IsZero() {
 		merged.CreatedAt = next.CreatedAt
 	}
@@ -420,7 +451,7 @@ func appendSessionDelta(path string, meta SessionMeta, messages []runtime.Messag
 }
 
 func persistSession(path string, meta SessionMeta, messages []runtime.Message) (err error) {
-	meta = normalizeSessionMeta(meta)
+	meta = prepareSessionMetaForPersist(meta)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -459,7 +490,7 @@ func persistSession(path string, meta SessionMeta, messages []runtime.Message) (
 	return os.Rename(tmpPath, path)
 }
 
-func refreshSessionIndexEntry(path string, updatedAt time.Time) error {
+func refreshSessionIndexEntry(path string, meta SessionMeta) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -468,10 +499,7 @@ func refreshSessionIndexEntry(path string, updatedAt time.Time) error {
 	if root == "" {
 		return nil
 	}
-	entry := buildSessionEntry(root, path, info)
-	if !updatedAt.IsZero() {
-		entry.ModTime = updatedAt.UTC()
-	}
+	entry := buildSessionEntry(root, path, info, meta)
 	return UpsertSessionIndexEntry(root, entry)
 }
 

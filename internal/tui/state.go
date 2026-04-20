@@ -40,6 +40,7 @@ type State struct {
 	Footer      string
 	Busy        bool
 	SessionPath string
+	CWD         string
 	Model       string
 	Provider    string
 	Profile     string
@@ -145,6 +146,7 @@ func (s State) clone() State {
 		Footer:      s.Footer,
 		Busy:        s.Busy,
 		SessionPath: s.SessionPath,
+		CWD:         s.CWD,
 		Model:       s.Model,
 		Provider:    s.Provider,
 		Profile:     s.Profile,

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Perdonus/lavilas-code/internal/commandcatalog"
@@ -31,14 +32,23 @@ type PaletteCommandLocale struct {
 }
 
 type PaletteCommandSpec struct {
-	Key            string
-	CatalogCommand string
-	English        PaletteCommandLocale
-	Russian        PaletteCommandLocale
-	Action         PaletteCommandAction
-	Mode           PaletteMode
-	ShowInRoot     bool
-	ShowInHelp     bool
+	Key               string
+	CatalogCommand    string
+	PresentationOrder int
+	English           PaletteCommandLocale
+	Russian           PaletteCommandLocale
+	Action            PaletteCommandAction
+	Mode              PaletteMode
+	ShowInRoot        bool
+	ShowInHelp        bool
+}
+
+type paletteCommandPresentation struct {
+	Label       string
+	Description string
+	InsertSlash string
+	Aliases     []string
+	Keywords    []string
 }
 
 type PaletteCommandCatalog interface {
@@ -59,7 +69,8 @@ func defaultPaletteCatalog() PaletteCommandCatalog {
 func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 	return []PaletteCommandSpec{
 		{
-			Key: "new",
+			Key:               "new",
+			PresentationOrder: 40,
 			English: PaletteCommandLocale{
 				Slash:       "new",
 				Title:       "New Session",
@@ -79,8 +90,9 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			ShowInHelp: true,
 		},
 		{
-			Key:            "resume_latest",
-			CatalogCommand: "resume",
+			Key:               "resume_latest",
+			CatalogCommand:    "resume",
+			PresentationOrder: 50,
 			English: PaletteCommandLocale{
 				Slash:       "resume",
 				Title:       "Resume Latest",
@@ -100,8 +112,9 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			ShowInHelp: true,
 		},
 		{
-			Key:            "fork_latest",
-			CatalogCommand: "fork",
+			Key:               "fork_latest",
+			CatalogCommand:    "fork",
+			PresentationOrder: 60,
 			English: PaletteCommandLocale{
 				Slash:       "fork",
 				Title:       "Fork Latest",
@@ -121,7 +134,8 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			ShowInHelp: true,
 		},
 		{
-			Key: "sessions_resume",
+			Key:               "sessions_resume",
+			PresentationOrder: 70,
 			English: PaletteCommandLocale{
 				Slash:       "sessions",
 				Title:       "Sessions",
@@ -141,7 +155,8 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			ShowInHelp: true,
 		},
 		{
-			Key: "sessions_fork",
+			Key:               "sessions_fork",
+			PresentationOrder: 80,
 			English: PaletteCommandLocale{
 				Title:       "Fork Session",
 				Description: "Browse saved sessions to fork",
@@ -156,46 +171,52 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			ShowInRoot: true,
 		},
 		{
-			Key:            "model",
-			CatalogCommand: "model",
-			Action:         PaletteActionOpenMode,
-			Mode:           PaletteModeModel,
-			ShowInRoot:     true,
-			ShowInHelp:     true,
+			Key:               "model",
+			CatalogCommand:    "model",
+			PresentationOrder: 10,
+			Action:            PaletteActionOpenMode,
+			Mode:              PaletteModeModel,
+			ShowInRoot:        true,
+			ShowInHelp:        true,
 		},
 		{
-			Key:            "profiles",
-			CatalogCommand: "profiles",
-			Action:         PaletteActionOpenMode,
-			Mode:           PaletteModeProfiles,
-			ShowInRoot:     true,
-			ShowInHelp:     true,
+			Key:               "profiles",
+			CatalogCommand:    "profiles",
+			PresentationOrder: 20,
+			Action:            PaletteActionOpenMode,
+			Mode:              PaletteModeProfiles,
+			ShowInRoot:        true,
+			ShowInHelp:        true,
 		},
 		{
-			Key:            "providers",
-			CatalogCommand: "providers",
-			Action:         PaletteActionOpenMode,
-			Mode:           PaletteModeProviders,
-			ShowInRoot:     true,
-			ShowInHelp:     true,
+			Key:               "providers",
+			CatalogCommand:    "providers",
+			PresentationOrder: 90,
+			Action:            PaletteActionOpenMode,
+			Mode:              PaletteModeProviders,
+			ShowInRoot:        true,
+			ShowInHelp:        true,
 		},
 		{
-			Key:            "settings",
-			CatalogCommand: "settings",
-			Action:         PaletteActionOpenMode,
-			Mode:           PaletteModeSettings,
-			ShowInRoot:     true,
-			ShowInHelp:     true,
+			Key:               "settings",
+			CatalogCommand:    "settings",
+			PresentationOrder: 30,
+			Action:            PaletteActionOpenMode,
+			Mode:              PaletteModeSettings,
+			ShowInRoot:        true,
+			ShowInHelp:        true,
 		},
 		{
-			Key:            "status",
-			CatalogCommand: "status",
-			Action:         PaletteActionShowStatus,
-			ShowInRoot:     true,
-			ShowInHelp:     true,
+			Key:               "status",
+			CatalogCommand:    "status",
+			PresentationOrder: 100,
+			Action:            PaletteActionShowStatus,
+			ShowInRoot:        true,
+			ShowInHelp:        true,
 		},
 		{
-			Key: "help",
+			Key:               "help",
+			PresentationOrder: 110,
 			English: PaletteCommandLocale{
 				Slash:       "help",
 				Title:       "Help",
@@ -215,7 +236,8 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			ShowInHelp: true,
 		},
 		{
-			Key: "palette",
+			Key:               "palette",
+			PresentationOrder: 130,
 			English: PaletteCommandLocale{
 				Slash:       "palette",
 				Title:       "Palette",
@@ -232,7 +254,8 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			ShowInHelp: true,
 		},
 		{
-			Key: "exit",
+			Key:               "exit",
+			PresentationOrder: 120,
 			English: PaletteCommandLocale{
 				Slash:       "exit",
 				Title:       "Exit",
@@ -255,13 +278,12 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 
 func (catalog staticPaletteCommandCatalog) RootItems(language commandcatalog.CatalogLanguage, query string) []PaletteItem {
 	preferred := normalizePaletteLanguage(language)
-	display := paletteDisplayLanguage(preferred, query)
 	items := make([]PaletteItem, 0, len(catalog.commands))
-	for _, command := range catalog.commands {
+	for _, command := range catalog.orderedCommands() {
 		if !command.ShowInRoot {
 			continue
 		}
-		items = append(items, catalog.commandToItem(command, preferred, display))
+		items = append(items, catalog.commandToItem(command, preferred, query))
 	}
 	return items
 }
@@ -271,7 +293,7 @@ func (catalog staticPaletteCommandCatalog) LookupByKey(key string) (PaletteComma
 	if needle == "" {
 		return PaletteCommandSpec{}, false
 	}
-	for _, command := range catalog.commands {
+	for _, command := range catalog.orderedCommands() {
 		if strings.ToLower(command.Key) == needle {
 			return command, true
 		}
@@ -284,7 +306,7 @@ func (catalog staticPaletteCommandCatalog) LookupBySlash(name string) (PaletteCo
 	if needle == "" {
 		return PaletteCommandSpec{}, false
 	}
-	for _, command := range catalog.commands {
+	for _, command := range catalog.orderedCommands() {
 		for _, alias := range catalog.commandSlashKeys(command) {
 			if normalizePaletteCommandName(alias) == needle {
 				return command, true
@@ -300,59 +322,42 @@ func (catalog staticPaletteCommandCatalog) HelpText(prefix string, language comm
 		prefix = "/"
 	}
 	preferred := normalizePaletteLanguage(language)
-	display := paletteDisplayLanguage(preferred, query)
 	lines := []string{localizedPaletteText(preferred, "Slash commands:", "Слэш-команды:")}
 	width := 0
 	commands := make([]PaletteCommandSpec, 0, len(catalog.commands))
-	for _, command := range catalog.commands {
+	for _, command := range catalog.orderedCommands() {
 		if !command.ShowInHelp {
 			continue
 		}
 		commands = append(commands, command)
-		label := catalog.commandHelpLabel(command, prefix, preferred, display)
+		label := catalog.commandHelpLabel(command, prefix, preferred, query)
 		if len(label) > width {
 			width = len(label)
 		}
 	}
 	for _, command := range commands {
-		label := catalog.commandHelpLabel(command, prefix, preferred, display)
-		description := catalog.commandDescription(command, display)
+		presentation := catalog.commandPresentation(command, preferred, query)
+		label := prefix + presentation.Label
+		description := presentation.Description
 		lines = append(lines, fmt.Sprintf("%-*s %s", width, label, description))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func (catalog staticPaletteCommandCatalog) commandToItem(command PaletteCommandSpec, preferred commandcatalog.CatalogLanguage, display commandcatalog.CatalogLanguage) PaletteItem {
-	locale := catalog.commandLocale(command, display)
-	mirror := catalog.commandLocale(command, oppositePaletteLanguage(display))
-	title := locale.Title
-	if display != preferred && mirror.Title != "" && mirror.Title != title {
-		title = fmt.Sprintf("%s (%s)", title, mirror.Title)
-	}
+func (catalog staticPaletteCommandCatalog) commandToItem(command PaletteCommandSpec, preferred commandcatalog.CatalogLanguage, query string) PaletteItem {
+	presentation := catalog.commandPresentation(command, preferred, query)
 	return PaletteItem{
 		Key:         command.Key,
-		Title:       title,
-		Description: locale.Description,
-		Aliases:     catalog.commandAliases(command),
-		Keywords:    catalog.commandKeywords(command),
+		Title:       presentation.Label,
+		Description: presentation.Description,
+		Value:       presentation.InsertSlash,
+		Aliases:     presentation.Aliases,
+		Keywords:    presentation.Keywords,
 	}
 }
 
-func (catalog staticPaletteCommandCatalog) commandHelpLabel(command PaletteCommandSpec, prefix string, preferred commandcatalog.CatalogLanguage, display commandcatalog.CatalogLanguage) string {
-	locale := catalog.commandLocale(command, display)
-	mirror := catalog.commandLocale(command, oppositePaletteLanguage(display))
-	label := prefix + fallbackPaletteSlash(locale)
-	if display != preferred {
-		mirrorSlash := fallbackPaletteSlash(mirror)
-		if mirrorSlash != "" && mirrorSlash != fallbackPaletteSlash(locale) {
-			label = fmt.Sprintf("%s (%s%s)", label, prefix, mirrorSlash)
-		}
-	}
-	return label
-}
-
-func (catalog staticPaletteCommandCatalog) commandDescription(command PaletteCommandSpec, language commandcatalog.CatalogLanguage) string {
-	return catalog.commandLocale(command, language).Description
+func (catalog staticPaletteCommandCatalog) commandHelpLabel(command PaletteCommandSpec, prefix string, preferred commandcatalog.CatalogLanguage, query string) string {
+	return prefix + catalog.commandPresentation(command, preferred, query).Label
 }
 
 func (catalog staticPaletteCommandCatalog) commandLocale(command PaletteCommandSpec, language commandcatalog.CatalogLanguage) PaletteCommandLocale {
@@ -375,35 +380,6 @@ func (catalog staticPaletteCommandCatalog) commandLocale(command PaletteCommandS
 	return clonePaletteLocale(command.English)
 }
 
-func (catalog staticPaletteCommandCatalog) commandAliases(command PaletteCommandSpec) []string {
-	aliases := make([]string, 0, 16)
-	for _, locale := range []PaletteCommandLocale{catalog.commandLocale(command, commandcatalog.CatalogLanguageEnglish), catalog.commandLocale(command, commandcatalog.CatalogLanguageRussian)} {
-		if slash := strings.TrimSpace(locale.Slash); slash != "" {
-			aliases = append(aliases, slash, "/"+slash)
-		}
-		for _, alias := range locale.Aliases {
-			alias = strings.TrimSpace(alias)
-			if alias == "" {
-				continue
-			}
-			aliases = append(aliases, alias)
-			if !strings.HasPrefix(alias, "/") {
-				aliases = append(aliases, "/"+alias)
-			}
-		}
-	}
-	return uniquePaletteStrings(aliases)
-}
-
-func (catalog staticPaletteCommandCatalog) commandKeywords(command PaletteCommandSpec) []string {
-	keywords := make([]string, 0, 16)
-	for _, locale := range []PaletteCommandLocale{catalog.commandLocale(command, commandcatalog.CatalogLanguageEnglish), catalog.commandLocale(command, commandcatalog.CatalogLanguageRussian)} {
-		keywords = append(keywords, locale.Keywords...)
-		keywords = append(keywords, locale.Title, locale.Slash)
-	}
-	return uniquePaletteStrings(keywords)
-}
-
 func (catalog staticPaletteCommandCatalog) commandSlashKeys(command PaletteCommandSpec) []string {
 	keys := make([]string, 0, 12)
 	for _, locale := range []PaletteCommandLocale{catalog.commandLocale(command, commandcatalog.CatalogLanguageEnglish), catalog.commandLocale(command, commandcatalog.CatalogLanguageRussian)} {
@@ -413,6 +389,76 @@ func (catalog staticPaletteCommandCatalog) commandSlashKeys(command PaletteComma
 		keys = append(keys, locale.Aliases...)
 	}
 	return uniquePaletteStrings(keys)
+}
+
+func (catalog staticPaletteCommandCatalog) orderedCommands() []PaletteCommandSpec {
+	commands := append([]PaletteCommandSpec(nil), catalog.commands...)
+	sort.SliceStable(commands, func(i, j int) bool {
+		left := commands[i].PresentationOrder
+		right := commands[j].PresentationOrder
+		switch {
+		case left == 0 && right == 0:
+			return false
+		case left == 0:
+			return false
+		case right == 0:
+			return true
+		default:
+			return left < right
+		}
+	})
+	return commands
+}
+
+func (catalog staticPaletteCommandCatalog) commandPresentation(command PaletteCommandSpec, preferred commandcatalog.CatalogLanguage, query string) paletteCommandPresentation {
+	if command.CatalogCommand != "" {
+		if item, ok := commandcatalog.Catalog().Present(command.CatalogCommand, preferred, query); ok {
+			aliases := make([]string, 0, 16)
+			aliases = append(aliases, item.Name, item.MirrorName, item.InsertName)
+			aliases = append(aliases, item.Aliases...)
+			aliases = append(aliases, item.MirrorAliases...)
+			keywords := make([]string, 0, 16)
+			keywords = append(keywords, item.Tags...)
+			keywords = append(keywords, item.Name, item.MirrorName, item.DisplayName, item.Command)
+			return paletteCommandPresentation{
+				Label:       fallbackPaletteLabel(item.DisplayName, item.Name),
+				Description: item.Description,
+				InsertSlash: fallbackPaletteLabel(item.InsertName, item.Name),
+				Aliases:     expandPaletteSlashAliases(aliases...),
+				Keywords:    uniquePaletteStrings(keywords),
+			}
+		}
+	}
+
+	display := paletteDisplayLanguage(preferred, query)
+	preferred = normalizePaletteLanguage(preferred)
+	if preferred == commandcatalog.CatalogLanguageUnknown {
+		preferred = display
+	}
+	locale := catalog.commandLocale(command, display)
+	mirror := catalog.commandLocale(command, oppositePaletteLanguage(display))
+	label := fallbackPaletteSlash(locale)
+	mirrorLabel := fallbackPaletteSlash(mirror)
+	if display != preferred && mirrorLabel != "" && mirrorLabel != label {
+		label = fmt.Sprintf("%s (%s)", label, mirrorLabel)
+	}
+	keywords := make([]string, 0, 16)
+	for _, locale := range []PaletteCommandLocale{catalog.commandLocale(command, commandcatalog.CatalogLanguageEnglish), catalog.commandLocale(command, commandcatalog.CatalogLanguageRussian)} {
+		keywords = append(keywords, locale.Keywords...)
+		keywords = append(keywords, locale.Title, locale.Slash)
+	}
+	aliases := make([]string, 0, 16)
+	aliases = append(aliases, fallbackPaletteSlash(locale), fallbackPaletteSlash(mirror), locale.Title, mirror.Title)
+	for _, locale := range []PaletteCommandLocale{catalog.commandLocale(command, commandcatalog.CatalogLanguageEnglish), catalog.commandLocale(command, commandcatalog.CatalogLanguageRussian)} {
+		aliases = append(aliases, locale.Aliases...)
+	}
+	return paletteCommandPresentation{
+		Label:       label,
+		Description: locale.Description,
+		InsertSlash: fallbackPaletteSlash(locale),
+		Aliases:     expandPaletteSlashAliases(aliases...),
+		Keywords:    uniquePaletteStrings(keywords),
+	}
 }
 
 func normalizePaletteCommandName(value string) string {
@@ -464,6 +510,13 @@ func fallbackPaletteSlash(locale PaletteCommandLocale) string {
 	return ""
 }
 
+func fallbackPaletteLabel(value string, fallbackValue string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return strings.TrimSpace(fallbackValue)
+}
+
 func clonePaletteLocale(locale PaletteCommandLocale) PaletteCommandLocale {
 	locale.Aliases = clonePaletteStrings(locale.Aliases)
 	locale.Keywords = clonePaletteStrings(locale.Keywords)
@@ -490,4 +543,19 @@ func uniquePaletteStrings(values []string) []string {
 		result = append(result, trimmed)
 	}
 	return result
+}
+
+func expandPaletteSlashAliases(values ...string) []string {
+	expanded := make([]string, 0, len(values)*2)
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		expanded = append(expanded, trimmed)
+		if !strings.HasPrefix(trimmed, "/") && !strings.ContainsAny(trimmed, " \t") {
+			expanded = append(expanded, "/"+trimmed)
+		}
+	}
+	return uniquePaletteStrings(expanded)
 }

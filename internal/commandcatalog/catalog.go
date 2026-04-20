@@ -25,6 +25,7 @@ type CatalogLocale struct {
 }
 
 type CatalogEntry struct {
+	PresentationOrder  int
 	Name               string
 	Description        string
 	Category           string
@@ -54,20 +55,25 @@ type CatalogListOptions struct {
 }
 
 type CatalogListItem struct {
-	Command           string
-	Name              string
-	MirrorName        string
-	Description       string
-	MirrorDescription string
-	Category          string
-	CategoryLabel     string
-	Aliases           []string
-	MirrorAliases     []string
-	Tags              []string
-	PreferredLanguage CatalogLanguage
-	QueryLanguage     CatalogLanguage
-	DisplayLanguage   CatalogLanguage
-	Match             *CatalogMatch
+	Command            string
+	Name               string
+	MirrorName         string
+	DisplayName        string
+	InsertName         string
+	DisplayMirrorName  string
+	DisplayShowsMirror bool
+	Description        string
+	MirrorDescription  string
+	Category           string
+	CategoryLabel      string
+	Aliases            []string
+	MirrorAliases      []string
+	Tags               []string
+	PresentationOrder  int
+	PreferredLanguage  CatalogLanguage
+	QueryLanguage      CatalogLanguage
+	DisplayLanguage    CatalogLanguage
+	Match              *CatalogMatch
 }
 
 type Command struct {
@@ -99,96 +105,7 @@ func Catalog() *CommandCatalog {
 	defaultCatalogOnce.Do(func() {
 		defaultCatalog = NewCommandCatalog([]CatalogEntry{
 			{
-				Name:               "chat",
-				Category:           "interactive",
-				Tags:               []string{"interactive", "repl", "tui"},
-				EnglishAliases:     []string{"interactive", "repl"},
-				EnglishDescription: "Open interactive chat mode",
-				RussianName:        "чат",
-				RussianDescription: "Открыть интерактивный чат"},
-			{
-				Name:               "resume",
-				Category:           "interactive",
-				Tags:               []string{"sessions", "history"},
-				EnglishAliases:     []string{"r", "continue"},
-				EnglishDescription: "Resume or inspect saved sessions",
-				RussianName:        "продолжить",
-				RussianDescription: "Продолжить или открыть сохранённые сессии"},
-			{
-				Name:               "fork",
-				Category:           "interactive",
-				Tags:               []string{"sessions", "branch"},
-				EnglishAliases:     []string{"branch-chat"},
-				EnglishDescription: "Fork a previous session",
-				RussianName:        "форк",
-				RussianDescription: "Ответвить предыдущую сессию"},
-			{
-				Name:               "run",
-				Category:           "interactive",
-				Tags:               []string{"task", "one-shot"},
-				EnglishAliases:     []string{"exec", "ask"},
-				EnglishDescription: "Execute a one-shot task",
-				RussianName:        "запуск",
-				RussianDescription: "Выполнить разовую задачу"},
-			{
-				Name:               "review",
-				Category:           "interactive",
-				Tags:               []string{"review", "code"},
-				EnglishAliases:     []string{"rev"},
-				EnglishDescription: "Run non-interactive review",
-				RussianName:        "ревью",
-				RussianDescription: "Запустить ревью без интерактивного режима"},
-			{
-				Name:               "apply",
-				Category:           "interactive",
-				Tags:               []string{"patch", "stdin"},
-				EnglishAliases:     []string{"patch"},
-				EnglishDescription: "Apply a patch from stdin or file",
-				RussianName:        "применить",
-				RussianDescription: "Применить патч из stdin или файла"},
-			{
-				Name:               "login",
-				Category:           "account",
-				Tags:               []string{"auth", "token"},
-				EnglishAliases:     []string{"auth"},
-				EnglishDescription: "Save provider token and profile",
-				RussianName:        "вход",
-				RussianDescription: "Сохранить токен провайдера и профиль"},
-			{
-				Name:               "logout",
-				Category:           "account",
-				Tags:               []string{"auth", "token"},
-				EnglishAliases:     []string{"unauth"},
-				EnglishDescription: "Remove saved token or profile",
-				RussianName:        "выход",
-				RussianDescription: "Удалить сохранённый токен или профиль"},
-			{
-				Name:               "status",
-				Category:           "account",
-				Tags:               []string{"status", "runtime"},
-				EnglishAliases:     []string{"info", "whoami"},
-				EnglishDescription: "Show active runtime and account state",
-				RussianName:        "статус",
-				RussianDescription: "Показать активное состояние рантайма и аккаунта"},
-			{
-				Name:               "profiles",
-				Category:           "account",
-				Tags:               []string{"profiles", "accounts"},
-				EnglishAliases:     []string{"accounts", "prof"},
-				EnglishDescription: "Manage saved profiles",
-				RussianName:        "профили",
-				RussianAliases:     []string{"аккаунты"},
-				RussianDescription: "Управлять сохранёнными профилями"},
-			{
-				Name:               "providers",
-				Category:           "account",
-				Tags:               []string{"providers", "models"},
-				EnglishAliases:     []string{"provider", "prov"},
-				EnglishDescription: "Manage model providers",
-				RussianName:        "провайдеры",
-				RussianAliases:     []string{"провайдер"},
-				RussianDescription: "Управлять провайдерами моделей"},
-			{
+				PresentationOrder:  10,
 				Name:               "model",
 				Category:           "config",
 				Tags:               []string{"model", "reasoning"},
@@ -198,14 +115,119 @@ func Catalog() *CommandCatalog {
 				RussianAliases:     []string{"модели"},
 				RussianDescription: "Показать или сменить активную модель"},
 			{
+				PresentationOrder:  20,
+				Name:               "profiles",
+				Category:           "account",
+				Tags:               []string{"profiles", "accounts"},
+				EnglishAliases:     []string{"accounts", "prof"},
+				EnglishDescription: "Manage saved profiles",
+				RussianName:        "профили",
+				RussianAliases:     []string{"аккаунты"},
+				RussianDescription: "Управлять сохранёнными профилями"},
+			{
+				PresentationOrder:  30,
+				Name:               "review",
+				Category:           "interactive",
+				Tags:               []string{"review", "code"},
+				EnglishAliases:     []string{"rev"},
+				EnglishDescription: "Run non-interactive review",
+				RussianName:        "ревью",
+				RussianDescription: "Запустить ревью без интерактивного режима"},
+			{
+				PresentationOrder:  40,
+				Name:               "resume",
+				Category:           "interactive",
+				Tags:               []string{"sessions", "history"},
+				EnglishAliases:     []string{"r", "continue"},
+				EnglishDescription: "Resume or inspect saved sessions",
+				RussianName:        "продолжить",
+				RussianDescription: "Продолжить или открыть сохранённые сессии"},
+			{
+				PresentationOrder:  50,
+				Name:               "fork",
+				Category:           "interactive",
+				Tags:               []string{"sessions", "branch"},
+				EnglishAliases:     []string{"branch-chat"},
+				EnglishDescription: "Fork a previous session",
+				RussianName:        "форк",
+				RussianDescription: "Ответвить предыдущую сессию"},
+			{
+				PresentationOrder:  60,
+				Name:               "status",
+				Category:           "account",
+				Tags:               []string{"status", "runtime"},
+				EnglishAliases:     []string{"info", "whoami"},
+				EnglishDescription: "Show active runtime and account state",
+				RussianName:        "статус",
+				RussianDescription: "Показать активное состояние рантайма и аккаунта"},
+			{
+				PresentationOrder:  70,
+				Name:               "logout",
+				Category:           "account",
+				Tags:               []string{"auth", "token"},
+				EnglishAliases:     []string{"unauth"},
+				EnglishDescription: "Remove saved token or profile",
+				RussianName:        "выход",
+				RussianAliases:     []string{"выйти-аккаунт"},
+				RussianDescription: "Удалить сохранённый токен или профиль"},
+			{
+				PresentationOrder:  80,
 				Name:               "settings",
 				Category:           "config",
 				Tags:               []string{"settings", "prefs", "ui"},
 				EnglishAliases:     []string{"prefs", "config"},
 				EnglishDescription: "Show saved UI settings",
 				RussianName:        "настройки",
+				RussianAliases:     []string{"параметры"},
 				RussianDescription: "Показать сохранённые настройки интерфейса"},
 			{
+				PresentationOrder:  90,
+				Name:               "providers",
+				Category:           "account",
+				Tags:               []string{"providers", "models"},
+				EnglishAliases:     []string{"provider", "prov"},
+				EnglishDescription: "Manage model providers",
+				RussianName:        "провайдеры",
+				RussianAliases:     []string{"провайдер"},
+				RussianDescription: "Управлять провайдерами моделей"},
+			{
+				PresentationOrder:  100,
+				Name:               "chat",
+				Category:           "interactive",
+				Tags:               []string{"interactive", "repl", "tui"},
+				EnglishAliases:     []string{"interactive", "repl"},
+				EnglishDescription: "Open interactive chat mode",
+				RussianName:        "чат",
+				RussianDescription: "Открыть интерактивный чат"},
+			{
+				PresentationOrder:  110,
+				Name:               "run",
+				Category:           "interactive",
+				Tags:               []string{"task", "one-shot"},
+				EnglishAliases:     []string{"exec", "ask"},
+				EnglishDescription: "Execute a one-shot task",
+				RussianName:        "запуск",
+				RussianDescription: "Выполнить разовую задачу"},
+			{
+				PresentationOrder:  120,
+				Name:               "apply",
+				Category:           "interactive",
+				Tags:               []string{"patch", "stdin"},
+				EnglishAliases:     []string{"patch"},
+				EnglishDescription: "Apply a patch from stdin or file",
+				RussianName:        "применить",
+				RussianDescription: "Применить патч из stdin или файла"},
+			{
+				PresentationOrder:  130,
+				Name:               "login",
+				Category:           "account",
+				Tags:               []string{"auth", "token"},
+				EnglishAliases:     []string{"auth"},
+				EnglishDescription: "Save provider token and profile",
+				RussianName:        "вход",
+				RussianDescription: "Сохранить токен провайдера и профиль"},
+			{
+				PresentationOrder:  140,
 				Name:               "completion",
 				Category:           "config",
 				Tags:               []string{"shell", "completion"},
@@ -214,6 +236,7 @@ func Catalog() *CommandCatalog {
 				RussianName:        "автодополнение",
 				RussianDescription: "Сгенерировать скрипты автодополнения shell"},
 			{
+				PresentationOrder:  150,
 				Name:               "features",
 				Category:           "config",
 				Tags:               []string{"features", "flags"},
@@ -222,6 +245,7 @@ func Catalog() *CommandCatalog {
 				RussianName:        "фичи",
 				RussianDescription: "Показать матрицу alpha-функций"},
 			{
+				PresentationOrder:  160,
 				Name:               "doctor",
 				Category:           "runtime",
 				Tags:               []string{"diagnostics", "env"},
@@ -335,6 +359,15 @@ func (catalog *CommandCatalog) Commands() []Command {
 	return commands
 }
 
+func (catalog *CommandCatalog) Present(command string, preferred CatalogLanguage, query string) (CatalogListItem, bool) {
+	entry, ok := catalog.Find(command)
+	if !ok {
+		return CatalogListItem{}, false
+	}
+	displayLanguage, queryLanguage := catalogDisplayContext(preferred, query)
+	return catalogListItem(entry, displayLanguage, preferred, queryLanguage), true
+}
+
 func (catalog *CommandCatalog) Find(name string) (CatalogEntry, bool) {
 	index, ok := catalog.byName[normalizeCatalogKey(name)]
 	if !ok {
@@ -387,23 +420,17 @@ func (result CatalogMatchResult) Entry() CatalogEntry {
 func (catalog *CommandCatalog) List(options CatalogListOptions) []CatalogListItem {
 	preferred := normalizeCatalogLanguage(options.Language)
 	query := strings.TrimSpace(options.Query)
-	queryLanguage := DetectCatalogLanguage(query)
-	displayLanguage := preferred
-	if queryLanguage == CatalogLanguageEnglish || queryLanguage == CatalogLanguageRussian {
-		displayLanguage = queryLanguage
-	}
-	if displayLanguage == CatalogLanguageUnknown {
-		displayLanguage = CatalogLanguageEnglish
-	}
+	displayLanguage, queryLanguage := catalogDisplayContext(preferred, query)
 
 	type scoredEntry struct {
 		entry CatalogEntry
 		item  CatalogListItem
 		score int
+		order int
 	}
 
 	items := make([]scoredEntry, 0, len(catalog.entries))
-	for _, originalEntry := range catalog.entries {
+	for index, originalEntry := range catalog.entries {
 		entry := cloneCatalogEntry(originalEntry)
 		if !catalogEntryMatchesFilters(entry, options.Category, options.Tag) {
 			continue
@@ -423,6 +450,7 @@ func (catalog *CommandCatalog) List(options CatalogListOptions) []CatalogListIte
 			entry: entry,
 			item:  item,
 			score: match.score,
+			order: index,
 		})
 	}
 
@@ -430,10 +458,10 @@ func (catalog *CommandCatalog) List(options CatalogListOptions) []CatalogListIte
 		if items[i].score != items[j].score {
 			return items[i].score > items[j].score
 		}
-		if items[i].item.Category != items[j].item.Category {
-			return items[i].item.Category < items[j].item.Category
+		if items[i].item.PresentationOrder != items[j].item.PresentationOrder {
+			return items[i].item.PresentationOrder < items[j].item.PresentationOrder
 		}
-		return normalizeCatalogKey(items[i].item.Name) < normalizeCatalogKey(items[j].item.Name)
+		return items[i].order < items[j].order
 	})
 
 	result := make([]CatalogListItem, len(items))
@@ -512,13 +540,31 @@ var (
 )
 
 func NewCommandCatalog(entries []CatalogEntry) *CommandCatalog {
-	catalog := &CommandCatalog{
-		entries: make([]CatalogEntry, len(entries)),
-		byName:  make(map[string]int, len(entries)),
-		byKey:   make(map[string]catalogKeyMatch, len(entries)*6),
-	}
+	orderedEntries := make([]CatalogEntry, len(entries))
 	for index, entry := range entries {
-		entry = cloneCatalogEntry(entry)
+		orderedEntries[index] = cloneCatalogEntry(entry)
+	}
+	sort.SliceStable(orderedEntries, func(i, j int) bool {
+		left := orderedEntries[i].PresentationOrder
+		right := orderedEntries[j].PresentationOrder
+		switch {
+		case left == 0 && right == 0:
+			return false
+		case left == 0:
+			return false
+		case right == 0:
+			return true
+		default:
+			return left < right
+		}
+	})
+
+	catalog := &CommandCatalog{
+		entries: make([]CatalogEntry, len(orderedEntries)),
+		byName:  make(map[string]int, len(orderedEntries)),
+		byKey:   make(map[string]catalogKeyMatch, len(orderedEntries)*6),
+	}
+	for index, entry := range orderedEntries {
 		nameKey := normalizeCatalogKey(entry.Name)
 		if nameKey == "" {
 			panic("command catalog: empty command name")
@@ -608,21 +654,50 @@ func catalogListItem(
 ) CatalogListItem {
 	locale := entry.Locale(displayLanguage)
 	mirror := entry.MirrorLocale(displayLanguage)
-	return CatalogListItem{
-		Command:           entry.Name,
-		Name:              locale.Name,
-		MirrorName:        mirror.Name,
-		Description:       locale.Description,
-		MirrorDescription: mirror.Description,
-		Category:          entry.Category,
-		CategoryLabel:     CatalogCategoryLabel(entry.Category, displayLanguage),
-		Aliases:           cloneStrings(locale.Aliases),
-		MirrorAliases:     cloneStrings(mirror.Aliases),
-		Tags:              cloneStrings(entry.Tags),
-		PreferredLanguage: normalizeCatalogLanguage(preferred),
-		QueryLanguage:     queryLanguage,
-		DisplayLanguage:   displayLanguage,
+	displayName := locale.Name
+	displayMirrorName := ""
+	displayShowsMirror := false
+	normalizedPreferred := normalizeCatalogLanguage(preferred)
+	if normalizedPreferred == CatalogLanguageUnknown {
+		normalizedPreferred = displayLanguage
 	}
+	if displayLanguage != normalizedPreferred && mirror.Name != "" && normalizeCatalogKey(mirror.Name) != normalizeCatalogKey(locale.Name) {
+		displayMirrorName = mirror.Name
+		displayShowsMirror = true
+		displayName = fmt.Sprintf("%s (%s)", locale.Name, mirror.Name)
+	}
+	return CatalogListItem{
+		Command:            entry.Name,
+		Name:               locale.Name,
+		MirrorName:         mirror.Name,
+		DisplayName:        displayName,
+		InsertName:         locale.Name,
+		DisplayMirrorName:  displayMirrorName,
+		DisplayShowsMirror: displayShowsMirror,
+		Description:        locale.Description,
+		MirrorDescription:  mirror.Description,
+		Category:           entry.Category,
+		CategoryLabel:      CatalogCategoryLabel(entry.Category, displayLanguage),
+		Aliases:            cloneStrings(locale.Aliases),
+		MirrorAliases:      cloneStrings(mirror.Aliases),
+		Tags:               cloneStrings(entry.Tags),
+		PresentationOrder:  entry.PresentationOrder,
+		PreferredLanguage:  normalizeCatalogLanguage(preferred),
+		QueryLanguage:      queryLanguage,
+		DisplayLanguage:    displayLanguage,
+	}
+}
+
+func catalogDisplayContext(preferred CatalogLanguage, query string) (CatalogLanguage, CatalogLanguage) {
+	queryLanguage := DetectCatalogLanguage(query)
+	displayLanguage := normalizeCatalogLanguage(preferred)
+	if queryLanguage == CatalogLanguageEnglish || queryLanguage == CatalogLanguageRussian {
+		displayLanguage = queryLanguage
+	}
+	if displayLanguage == CatalogLanguageUnknown {
+		displayLanguage = CatalogLanguageEnglish
+	}
+	return displayLanguage, queryLanguage
 }
 
 func (catalog *CommandCatalog) matchEntry(

@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/Perdonus/lavilas-code/internal/apphome"
@@ -99,9 +98,6 @@ func printCommands(commands []Command) {
 		if len(items) == 0 {
 			continue
 		}
-		sort.Slice(items, func(i, j int) bool {
-			return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
-		})
 		fmt.Printf("  %s:\n", CatalogCategoryLabel(category, language))
 		for _, item := range items {
 			aliases := ""

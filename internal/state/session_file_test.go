@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,22 @@ import (
 
 	"github.com/Perdonus/lavilas-code/internal/runtime"
 )
+
+func withWorkingDirectory(t *testing.T, dir string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(%s): %v", dir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+}
 
 func TestCreateAndLoadSessionRoundTripsRichMessages(t *testing.T) {
 	root := t.TempDir()
@@ -85,6 +102,47 @@ func TestCreateAndLoadSessionRoundTripsRichMessages(t *testing.T) {
 	}
 	if messages[3].Refusal != "cannot comply" {
 		t.Fatalf("unexpected refusal: %+v", messages[3])
+	}
+}
+
+func TestCreateSessionDefaultsWorkingDirectoryIntoMetaAndIndex(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll workspace: %v", err)
+	}
+	withWorkingDirectory(t, workspace)
+
+	createdAt := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	entry, err := CreateSession(root, SessionMeta{
+		SessionID: "cwd123",
+		Model:     "gpt-test",
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	}, []runtime.Message{
+		runtime.TextMessage(runtime.RoleUser, "hello"),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if entry.CWD != workspace {
+		t.Fatalf("unexpected entry cwd: %q", entry.CWD)
+	}
+
+	meta, err := LoadSessionMeta(entry.Path)
+	if err != nil {
+		t.Fatalf("LoadSessionMeta: %v", err)
+	}
+	if meta.CWD != workspace {
+		t.Fatalf("unexpected meta cwd: %q", meta.CWD)
+	}
+
+	entries, err := LoadSessions(root, 1)
+	if err != nil {
+		t.Fatalf("LoadSessions: %v", err)
+	}
+	if len(entries) != 1 || entries[0].CWD != workspace {
+		t.Fatalf("unexpected indexed sessions: %+v", entries)
 	}
 }
 
@@ -326,5 +384,60 @@ func TestLoadSessionsUsesUpdatedIndexOrdering(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Path != target {
 		t.Fatalf("unexpected latest session after append: %+v", entries)
+	}
+}
+
+func TestLoadSessionIndexHydratesWorkingDirectoryFromLegacyIndex(t *testing.T) {
+	root := t.TempDir()
+	createdAt := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll workspace: %v", err)
+	}
+
+	entry, err := CreateSession(root, SessionMeta{
+		SessionID: "legacyindex",
+		Model:     "gpt-test",
+		CWD:       workspace,
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt.Add(2 * time.Minute),
+	}, []runtime.Message{
+		runtime.TextMessage(runtime.RoleUser, "hello"),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	legacyPayload := sessionIndexFile{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Entries: []SessionEntry{{
+			ID:      entry.ID,
+			Name:    entry.Name,
+			Path:    entry.Path,
+			RelPath: entry.RelPath,
+			ModTime: createdAt,
+			Size:    entry.Size,
+		}},
+	}
+	data, err := json.Marshal(legacyPayload)
+	if err != nil {
+		t.Fatalf("Marshal legacy index: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, sessionIndexFileName), data, 0o644); err != nil {
+		t.Fatalf("WriteFile legacy index: %v", err)
+	}
+
+	index, err := LoadSessionIndex(root)
+	if err != nil {
+		t.Fatalf("LoadSessionIndex: %v", err)
+	}
+	if len(index.Entries) != 1 {
+		t.Fatalf("unexpected hydrated index entries: %+v", index.Entries)
+	}
+	if index.Entries[0].CWD != workspace {
+		t.Fatalf("unexpected hydrated cwd: %q", index.Entries[0].CWD)
+	}
+	if !index.Entries[0].ModTime.Equal(createdAt.Add(2 * time.Minute)) {
+		t.Fatalf("unexpected hydrated mod time: %s", index.Entries[0].ModTime)
 	}
 }

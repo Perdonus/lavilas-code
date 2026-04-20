@@ -77,6 +77,20 @@ type approvalPromptState struct {
 	DecisionCh chan taskrun.ApprovalDecision
 }
 
+type cwdSelection int
+
+const (
+	cwdSelectionSession cwdSelection = iota
+	cwdSelectionCurrent
+)
+
+type cwdPromptState struct {
+	Pending    sessionLoadedMsg
+	CurrentCWD string
+	SessionCWD string
+	Selection  cwdSelection
+}
+
 type Model struct {
 	state        State
 	keys         KeyMap
@@ -91,10 +105,12 @@ type Model struct {
 	mainWidth    int
 	layout       apphome.Layout
 	options      taskrun.Options
+	startup      StartupOptions
 	history      []runtimeapi.Message
 	catalog      PaletteCommandCatalog
 	language     commandcatalog.CatalogLanguage
 	approval     *approvalPromptState
+	cwdPrompt    *cwdPromptState
 }
 
 func New() *Model {
@@ -159,10 +175,12 @@ func newModel(options Options) (*Model, error) {
 	state.Provider = fallback(options.TaskOptions.Provider, config.EffectiveProviderName())
 	state.Profile = fallback(options.TaskOptions.Profile, config.ActiveProfileName())
 	state.Reasoning = fallback(options.TaskOptions.ReasoningEffort, config.EffectiveReasoningEffort())
+	state.CWD = fallback(strings.TrimSpace(options.TaskOptions.CWD), currentWorkingDirectory())
 	state.Status = buildStatusItems(layout, state, 0)
 	model := NewModel(state)
 	model.layout = layout
 	model.options = options.TaskOptions
+	model.startup = options.Startup
 	model.language = language
 	if options.PaletteCatalog != nil {
 		model.catalog = options.PaletteCatalog
@@ -172,10 +190,16 @@ func newModel(options Options) (*Model, error) {
 }
 
 func (m *Model) Init() tea.Cmd {
+	var cmds []tea.Cmd
 	if m.state.Palette.Visible {
-		return m.setFocus(FocusPalette)
+		cmds = append(cmds, m.setFocus(FocusPalette))
+	} else {
+		cmds = append(cmds, m.setFocus(FocusInput))
 	}
-	return m.setFocus(FocusInput)
+	if startupCmd := m.startupCmd(); startupCmd != nil {
+		cmds = append(cmds, startupCmd)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -226,6 +250,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateStatus()
 			return m, nil
 		}
+		if m.beginCWDPrompt(msg) {
+			return m, nil
+		}
 		m.applyLoadedSession(msg)
 		return m, nil
 	case approvalRequestedMsg:
@@ -243,6 +270,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.approval != nil {
 			return m, m.updateApproval(msg)
+		}
+		if m.cwdPrompt != nil {
+			return m, m.updateCWDPrompt(msg)
 		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
@@ -297,6 +327,9 @@ func (m *Model) View() string {
 	mainSections := make([]string, 0, 3)
 	if m.approval != nil {
 		mainSections = append(mainSections, m.renderApprovalPane())
+	}
+	if m.cwdPrompt != nil {
+		mainSections = append(mainSections, m.renderCWDPromptPane())
 	}
 	if m.state.Palette.Visible {
 		mainSections = append(mainSections, m.renderPalettePane())
@@ -443,6 +476,40 @@ func (m *Model) renderApprovalPane() string {
 		m.styles.helpKey.Render("N")+" "+m.styles.helpDesc.Render(m.localize("deny", "запретить")),
 	)
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, content...))
+}
+
+func (m *Model) renderCWDPromptPane() string {
+	if m.cwdPrompt == nil {
+		return ""
+	}
+	prompt := m.cwdPrompt
+	pane := m.styles.paneActive.Width(m.mainWidth)
+	sessionSelected := prompt.Selection == cwdSelectionSession
+	currentSelected := prompt.Selection == cwdSelectionCurrent
+	lines := []string{
+		m.styles.paneTitle.Render(m.localize("Choose Working Directory", "Выберите рабочую папку")),
+		m.styles.muted.Render(m.localize("Session = last directory from the saved session", "Сессия = последняя папка из сохранённой сессии")),
+		m.styles.muted.Render(m.localize("Current = the directory of the active chat", "Текущая = папка активного чата")),
+		"",
+		m.cwdPromptRow(prompt.SessionCWD, sessionSelected, m.localize("Use session directory", "Использовать папку из сессии")),
+		m.cwdPromptRow(prompt.CurrentCWD, currentSelected, m.localize("Use current directory", "Использовать текущую папку")),
+		"",
+		m.styles.helpKey.Render("Enter") + " " + m.styles.helpDesc.Render(m.localize("continue", "продолжить")),
+		m.styles.helpKey.Render("Esc") + " " + m.styles.helpDesc.Render(m.localize("use session directory", "использовать папку сессии")),
+	}
+	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+func (m *Model) cwdPromptRow(path string, selected bool, label string) string {
+	prefix := "[ ]"
+	if selected {
+		prefix = "[x]"
+	}
+	style := m.styles.body
+	if selected {
+		style = m.styles.selected
+	}
+	return style.Render(fmt.Sprintf("%s %s (%s)", prefix, label, fallback(strings.TrimSpace(path), localizedUnsetTUI(m.language))))
 }
 
 func (m *Model) renderPalettePane() string {
@@ -699,6 +766,8 @@ func (m *Model) applyTaskResult(msg taskFinishedMsg) {
 	m.state.Provider = fallback(msg.Result.ProviderName, m.state.Provider)
 	m.state.Profile = fallback(msg.Result.Profile, m.state.Profile)
 	m.state.Reasoning = fallback(msg.Result.Reasoning, m.state.Reasoning)
+	m.state.CWD = fallback(strings.TrimSpace(msg.Result.CWD), m.state.CWD)
+	m.options.CWD = m.state.CWD
 	m.state.Footer = m.localize("Turn complete", "Ход завершён")
 	if msg.Warn != nil {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Turn complete with warning", "Ход завершён с предупреждением"), msg.Warn)
@@ -716,6 +785,8 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 	m.state.Provider = msg.Meta.Provider
 	m.state.Profile = msg.Meta.Profile
 	m.state.Reasoning = msg.Meta.Reasoning
+	m.state.CWD = fallback(strings.TrimSpace(msg.Meta.CWD), m.state.CWD)
+	m.options.CWD = m.state.CWD
 	if msg.Fork {
 		m.state.SessionPath = ""
 		m.state.Footer = fmt.Sprintf("%s %s", m.localize("Forked from", "Ответвлено от"), msg.Entry.RelPath)
@@ -733,6 +804,64 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 	m.applyFocusState()
 	m.updateStatus()
 	m.refreshViewport()
+}
+
+func (m *Model) beginCWDPrompt(msg sessionLoadedMsg) bool {
+	sessionCWD := strings.TrimSpace(msg.Meta.CWD)
+	currentCWD := strings.TrimSpace(m.effectiveWorkingDirectory())
+	if sessionCWD == "" || currentCWD == "" || sessionCWD == currentCWD {
+		return false
+	}
+	m.cwdPrompt = &cwdPromptState{
+		Pending:    msg,
+		CurrentCWD: currentCWD,
+		SessionCWD: sessionCWD,
+		Selection:  cwdSelectionSession,
+	}
+	m.state.Footer = m.localize("Choose the directory for this session", "Выберите папку для этой сессии")
+	return true
+}
+
+func (m *Model) updateCWDPrompt(keyMsg tea.KeyMsg) tea.Cmd {
+	if m.cwdPrompt == nil {
+		return nil
+	}
+	switch {
+	case key.Matches(keyMsg, m.keys.Close):
+		return m.confirmCWDPrompt(cwdSelectionSession)
+	case key.Matches(keyMsg, m.keys.Up):
+		m.cwdPrompt.Selection = cwdSelectionSession
+		return nil
+	case key.Matches(keyMsg, m.keys.Down):
+		m.cwdPrompt.Selection = cwdSelectionCurrent
+		return nil
+	case key.Matches(keyMsg, m.keys.Submit):
+		return m.confirmCWDPrompt(m.cwdPrompt.Selection)
+	}
+	switch strings.ToLower(strings.TrimSpace(keyMsg.String())) {
+	case "1":
+		return m.confirmCWDPrompt(cwdSelectionSession)
+	case "2":
+		return m.confirmCWDPrompt(cwdSelectionCurrent)
+	}
+	return nil
+}
+
+func (m *Model) confirmCWDPrompt(selection cwdSelection) tea.Cmd {
+	if m.cwdPrompt == nil {
+		return nil
+	}
+	prompt := m.cwdPrompt
+	m.cwdPrompt = nil
+	msg := prompt.Pending
+	switch selection {
+	case cwdSelectionCurrent:
+		msg.Meta.CWD = prompt.CurrentCWD
+	default:
+		msg.Meta.CWD = prompt.SessionCWD
+	}
+	m.applyLoadedSession(msg)
+	return nil
 }
 
 func (m *Model) openPaletteMode(mode PaletteMode, pushCurrent bool) tea.Cmd {
@@ -1396,12 +1525,20 @@ func (m *Model) openSessionsPalette(fork bool, pushCurrent bool) tea.Cmd {
 		if len(entries) == 0 {
 			return paletteItemsMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
 		}
+		entries = m.filterSessionEntries(entries)
+		if len(entries) == 0 {
+			return paletteItemsMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
+		}
 		items := make([]PaletteItem, 0, len(entries))
 		for _, entry := range entries {
+			description := entry.RelPath
+			if m.startup.ShowAll && strings.TrimSpace(entry.CWD) != "" {
+				description = fmt.Sprintf("%s · %s", entry.RelPath, entry.CWD)
+			}
 			items = append(items, PaletteItem{
 				Key:         "session",
 				Title:       entry.Name,
-				Description: entry.RelPath,
+				Description: description,
 				Value:       entry.Path,
 			})
 		}
@@ -1412,6 +1549,57 @@ func (m *Model) openSessionsPalette(fork bool, pushCurrent bool) tea.Cmd {
 			footer = m.localize("Select a saved session to fork", "Выберите сохранённую сессию для ответвления")
 		}
 		return paletteItemsMsg{Mode: mode, Items: items, Footer: footer, PushCurrent: pushCurrent}
+	}
+}
+
+func (m *Model) filterSessionEntries(entries []appstate.SessionEntry) []appstate.SessionEntry {
+	if m.startup.ShowAll {
+		return entries
+	}
+	currentCWD := strings.TrimSpace(m.effectiveWorkingDirectory())
+	if currentCWD == "" {
+		return entries
+	}
+	filtered := make([]appstate.SessionEntry, 0, len(entries))
+	for _, entry := range entries {
+		entryCWD := strings.TrimSpace(entry.CWD)
+		if entryCWD == "" || entryCWD == currentCWD {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func (m *Model) startupCmd() tea.Cmd {
+	switch m.startup.Mode {
+	case StartupModeResumePicker:
+		return m.openSessionsPalette(false, false)
+	case StartupModeForkPicker:
+		return m.openSessionsPalette(true, false)
+	case StartupModeResumeLatest:
+		return m.loadLatestSessionCmd(false)
+	case StartupModeForkLatest:
+		return m.loadLatestSessionCmd(true)
+	case StartupModeResumePath:
+		if strings.TrimSpace(m.startup.SessionPath) == "" {
+			return nil
+		}
+		return m.loadSessionCmd(m.startup.SessionPath, false)
+	case StartupModeForkPath:
+		if strings.TrimSpace(m.startup.SessionPath) == "" {
+			return nil
+		}
+		return m.loadSessionCmd(m.startup.SessionPath, true)
+	case StartupModeModel:
+		return m.openPaletteMode(PaletteModeModel, false)
+	case StartupModeProfiles:
+		return m.openPaletteMode(PaletteModeProfiles, false)
+	case StartupModeProviders:
+		return m.openPaletteMode(PaletteModeProviders, false)
+	case StartupModeSettings:
+		return m.openPaletteMode(PaletteModeSettings, false)
+	default:
+		return nil
 	}
 }
 
@@ -1518,6 +1706,7 @@ func buildStatusItems(layout apphome.Layout, state State, historyLen int) []Stat
 		{Label: localize("Provider", "Провайдер"), Value: fallback(state.Provider, localizedUnsetTUI(language))},
 		{Label: localize("Profile", "Профиль"), Value: fallback(state.Profile, localizedUnsetTUI(language))},
 		{Label: localize("Reasoning", "Размышления"), Value: fallback(state.Reasoning, localizedUnsetTUI(language))},
+		{Label: localize("CWD", "Папка"), Value: fallback(state.CWD, localizedUnsetTUI(language))},
 		{Label: localize("Session", "Сессия"), Value: sessionValue},
 		{Label: localize("History", "История"), Value: fmt.Sprintf("%d", historyLen)},
 		{Label: localize("Home", "Каталог"), Value: layout.CodexHome()},
@@ -1570,6 +1759,7 @@ func persistTurn(layout apphome.Layout, sessionPath string, result taskrun.Resul
 			Provider:  result.ProviderName,
 			Profile:   result.Profile,
 			Reasoning: result.Reasoning,
+			CWD:       result.CWD,
 		}, history)
 		if err != nil {
 			return "", err
@@ -1582,6 +1772,7 @@ func persistTurn(layout apphome.Layout, sessionPath string, result taskrun.Resul
 		Provider:  result.ProviderName,
 		Profile:   result.Profile,
 		Reasoning: result.Reasoning,
+		CWD:       result.CWD,
 	}, history); err != nil {
 		return sessionPath, err
 	}
@@ -1938,4 +2129,22 @@ func loadSettingsOptional(path string) (appstate.Settings, error) {
 		return appstate.Settings{}, nil
 	}
 	return appstate.Settings{}, err
+}
+
+func currentWorkingDirectory() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return cwd
+}
+
+func (m *Model) effectiveWorkingDirectory() string {
+	if cwd := strings.TrimSpace(m.options.CWD); cwd != "" {
+		return cwd
+	}
+	if cwd := strings.TrimSpace(m.state.CWD); cwd != "" {
+		return cwd
+	}
+	return currentWorkingDirectory()
 }

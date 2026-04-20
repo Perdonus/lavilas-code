@@ -17,6 +17,7 @@ type SessionEntry struct {
 	Name    string    `json:"name"`
 	Path    string    `json:"path"`
 	RelPath string    `json:"rel_path"`
+	CWD     string    `json:"cwd,omitempty"`
 	ModTime time.Time `json:"mod_time"`
 	Size    int64     `json:"size"`
 }
@@ -44,7 +45,11 @@ func ScanSessions(root string) (SessionIndex, error) {
 		if err != nil {
 			return err
 		}
-		index.Entries = append(index.Entries, buildSessionEntry(root, path, info))
+		entry, err := loadSessionEntry(root, path, info)
+		if err != nil {
+			return err
+		}
+		index.Entries = append(index.Entries, entry)
 		return nil
 	})
 	if err != nil {
@@ -91,7 +96,14 @@ func LoadSessionIndex(root string) (SessionIndex, error) {
 		Root:    root,
 		Entries: payload.Entries,
 	}
+	changed, err := hydrateSessionIndexEntries(&index)
+	if err != nil {
+		return SessionIndex{}, err
+	}
 	sortSessionEntries(index.Entries)
+	if changed {
+		_ = SaveSessionIndex(index)
+	}
 	return index, nil
 }
 
@@ -165,20 +177,64 @@ func (s SessionIndex) Limit(limit int) []SessionEntry {
 	return result
 }
 
-func buildSessionEntry(root string, path string, info fs.FileInfo) SessionEntry {
+func loadSessionEntry(root string, path string, info fs.FileInfo) (SessionEntry, error) {
+	meta, err := LoadSessionMeta(path)
+	if err != nil {
+		return SessionEntry{}, err
+	}
+	return buildSessionEntry(root, path, info, meta), nil
+}
+
+func buildSessionEntry(root string, path string, info fs.FileInfo, meta SessionMeta) SessionEntry {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		rel = filepath.Base(path)
 	}
 	name := filepath.Base(path)
+	modTime := info.ModTime()
+	if !meta.UpdatedAt.IsZero() {
+		modTime = meta.UpdatedAt.UTC()
+	}
 	return SessionEntry{
 		ID:      strings.TrimSuffix(name, filepath.Ext(name)),
 		Name:    name,
 		Path:    path,
 		RelPath: rel,
-		ModTime: info.ModTime(),
+		CWD:     meta.CWD,
+		ModTime: modTime,
 		Size:    info.Size(),
 	}
+}
+
+func hydrateSessionIndexEntries(index *SessionIndex) (bool, error) {
+	changed := false
+	for i := range index.Entries {
+		entry := &index.Entries[i]
+		if strings.TrimSpace(entry.CWD) != "" {
+			continue
+		}
+		info, err := os.Stat(entry.Path)
+		if err != nil {
+			return false, err
+		}
+		hydrated, err := loadSessionEntry(index.Root, entry.Path, info)
+		if err != nil {
+			return false, err
+		}
+		if hydrated.CWD != "" {
+			entry.CWD = hydrated.CWD
+			changed = true
+		}
+		if !hydrated.ModTime.IsZero() && !entry.ModTime.Equal(hydrated.ModTime) {
+			entry.ModTime = hydrated.ModTime
+			changed = true
+		}
+		if entry.Size != hydrated.Size {
+			entry.Size = hydrated.Size
+			changed = true
+		}
+	}
+	return changed, nil
 }
 
 func sortSessionEntries(entries []SessionEntry) {

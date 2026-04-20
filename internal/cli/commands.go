@@ -17,10 +17,15 @@ import (
 	"github.com/Perdonus/lavilas-code/internal/state"
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
 	"github.com/Perdonus/lavilas-code/internal/tooling"
+	"github.com/Perdonus/lavilas-code/internal/tui"
 )
 
 func runDoctor(args []string) int {
 	return doctor.Run(hasFlag(args, "--json"))
+}
+
+func shouldOpenInteractiveConfig(args []string) bool {
+	return isInteractiveTerminal() && len(args) == 0 && !hasFlag(args, "--json")
 }
 
 func runTask(args []string) int {
@@ -60,6 +65,9 @@ func runTask(args []string) int {
 }
 
 func runModel(args []string) int {
+	if shouldOpenInteractiveConfig(args) {
+		return tui.Run(tui.Options{Startup: tui.StartupOptions{Mode: tui.StartupModeModel}})
+	}
 	configPath := apphome.ConfigPath()
 	config, err := loadConfigOptional(configPath)
 	if err != nil {
@@ -158,6 +166,9 @@ func runModel(args []string) int {
 }
 
 func runProfiles(args []string) int {
+	if shouldOpenInteractiveConfig(args) {
+		return tui.Run(tui.Options{Startup: tui.StartupOptions{Mode: tui.StartupModeProfiles}})
+	}
 	configPath := apphome.ConfigPath()
 	config, err := loadConfigOptional(configPath)
 	if err != nil {
@@ -319,6 +330,9 @@ func runProfiles(args []string) int {
 }
 
 func runProviders(args []string) int {
+	if shouldOpenInteractiveConfig(args) {
+		return tui.Run(tui.Options{Startup: tui.StartupOptions{Mode: tui.StartupModeProviders}})
+	}
 	configPath := apphome.ConfigPath()
 	config, err := loadConfigOptional(configPath)
 	if err != nil {
@@ -443,6 +457,9 @@ func runProviders(args []string) int {
 }
 
 func runSettings(args []string) int {
+	if shouldOpenInteractiveConfig(args) {
+		return tui.Run(tui.Options{Startup: tui.StartupOptions{Mode: tui.StartupModeSettings}})
+	}
 	settingsPath := apphome.SettingsPath()
 	settings, err := loadSettingsOptional(settingsPath)
 	if err != nil {
@@ -529,13 +546,16 @@ func runSettings(args []string) int {
 }
 
 func runResume(args []string) int {
-	target, prompt, jsonOutput, err := parseResumeArgs(args)
+	input, err := parseResumeArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
 		return 2
 	}
+	if shouldRunInteractiveResume(input) {
+		return runResumeTUI(input, false)
+	}
 
-	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), target)
+	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), input.Selector, input.Last)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			fmt.Println("No sessions found.")
@@ -551,8 +571,8 @@ func runResume(args []string) int {
 		return 1
 	}
 
-	if strings.TrimSpace(prompt) == "" {
-		if jsonOutput {
+	if strings.TrimSpace(input.Prompt) == "" {
+		if input.JSONOutput {
 			return printJSON(map[string]any{
 				"session":  sessionEntry,
 				"meta":     meta,
@@ -577,13 +597,13 @@ func runResume(args []string) int {
 	}
 
 	result, err := taskrun.Run(contextBackground(), taskrun.Options{
-		Prompt:          prompt,
+		Prompt:          input.Prompt,
 		Model:           meta.Model,
 		Profile:         meta.Profile,
 		Provider:        meta.Provider,
 		ReasoningEffort: meta.Reasoning,
 		History:         messages,
-		JSON:            jsonOutput,
+		JSON:            input.JSONOutput,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
@@ -595,7 +615,7 @@ func runResume(args []string) int {
 	}
 	result.SessionPath = sessionEntry.Path
 
-	if jsonOutput {
+	if input.JSONOutput {
 		return printJSON(result)
 	}
 	if err := taskrun.Print(result); err != nil {
@@ -606,17 +626,20 @@ func runResume(args []string) int {
 }
 
 func runFork(args []string) int {
-	target, prompt, jsonOutput, err := parseResumeArgs(args)
+	input, err := parseResumeArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
 		return 2
 	}
-	if strings.TrimSpace(prompt) == "" {
+	if shouldRunInteractiveResume(input) {
+		return runResumeTUI(input, true)
+	}
+	if strings.TrimSpace(input.Prompt) == "" {
 		fmt.Fprintln(os.Stderr, "fork: prompt is required")
 		return 2
 	}
 
-	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), target)
+	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), input.Selector, input.Last)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			fmt.Println("No sessions found.")
@@ -633,13 +656,13 @@ func runFork(args []string) int {
 	}
 
 	result, err := taskrun.Run(contextBackground(), taskrun.Options{
-		Prompt:          prompt,
+		Prompt:          input.Prompt,
 		Model:           meta.Model,
 		Profile:         meta.Profile,
 		Provider:        meta.Provider,
 		ReasoningEffort: meta.Reasoning,
 		History:         messages,
-		JSON:            jsonOutput,
+		JSON:            input.JSONOutput,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
@@ -653,7 +676,7 @@ func runFork(args []string) int {
 		result.SessionPath = entry.Path
 	}
 
-	if jsonOutput {
+	if input.JSONOutput {
 		return printJSON(result)
 	}
 	if err := taskrun.Print(result); err != nil {
@@ -686,6 +709,7 @@ func sessionMetaFromResult(result taskrun.Result) state.SessionMeta {
 		Provider:  result.ProviderName,
 		Profile:   result.Profile,
 		Reasoning: result.Reasoning,
+		CWD:       result.CWD,
 	}
 }
 
@@ -702,30 +726,40 @@ func hasPersistableMessage(message runtime.Message) bool {
 	return strings.TrimSpace(message.Text()) != "" || len(message.ToolCalls) > 0 || strings.TrimSpace(message.Refusal) != ""
 }
 
-func parseResumeArgs(args []string) (string, string, bool, error) {
-	var selector string
+type resumeInput struct {
+	Selector   string
+	Prompt     string
+	JSONOutput bool
+	Last       bool
+	ShowAll    bool
+}
+
+func parseResumeArgs(args []string) (resumeInput, error) {
+	var input resumeInput
 	var promptParts []string
-	jsonOutput := false
 
 	for _, arg := range args {
 		switch arg {
 		case "--json":
-			jsonOutput = true
+			input.JSONOutput = true
 		case "--last":
-			selector = ""
+			input.Last = true
+		case "--all":
+			input.ShowAll = true
 		default:
 			if strings.HasPrefix(arg, "--") {
-				return "", "", false, fmt.Errorf("unknown flag %q", arg)
+				return resumeInput{}, fmt.Errorf("unknown flag %q", arg)
 			}
-			if selector == "" && looksLikeSessionTarget(arg) {
-				selector = arg
+			if input.Selector == "" && looksLikeSessionTarget(arg) {
+				input.Selector = arg
 				continue
 			}
 			promptParts = append(promptParts, arg)
 		}
 	}
 
-	return selector, strings.TrimSpace(strings.Join(promptParts, " ")), jsonOutput, nil
+	input.Prompt = strings.TrimSpace(strings.Join(promptParts, " "))
+	return input, nil
 }
 
 func looksLikeSessionTarget(value string) bool {
@@ -742,7 +776,7 @@ func looksLikeSessionTarget(value string) bool {
 	return false
 }
 
-func resolveResumeSession(root string, selector string) (state.SessionEntry, error) {
+func resolveResumeSession(root string, selector string, last bool) (state.SessionEntry, error) {
 	if strings.TrimSpace(selector) != "" {
 		candidate := selector
 		if !filepath.IsAbs(candidate) {
@@ -762,6 +796,7 @@ func resolveResumeSession(root string, selector string) (state.SessionEntry, err
 		return state.SessionEntry{}, os.ErrNotExist
 	}
 
+	_ = last
 	sessions, err := state.LoadSessions(root, 1)
 	if err != nil {
 		return state.SessionEntry{}, err
@@ -770,6 +805,49 @@ func resolveResumeSession(root string, selector string) (state.SessionEntry, err
 		return state.SessionEntry{}, os.ErrNotExist
 	}
 	return sessions[0], nil
+}
+
+func shouldRunInteractiveResume(input resumeInput) bool {
+	return isInteractiveTerminal() && !input.JSONOutput && strings.TrimSpace(input.Prompt) == ""
+}
+
+func runResumeTUI(input resumeInput, fork bool) int {
+	startup := tui.StartupOptions{ShowAll: input.ShowAll}
+	switch {
+	case strings.TrimSpace(input.Selector) != "":
+		entry, err := resolveResumeSession(apphome.SessionsDir(), input.Selector, input.Last)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				fmt.Println("No sessions found.")
+				return 0
+			}
+			label := "resume"
+			if fork {
+				label = "fork"
+			}
+			fmt.Fprintf(os.Stderr, "%s: %v\n", label, err)
+			return 1
+		}
+		startup.SessionPath = entry.Path
+		if fork {
+			startup.Mode = tui.StartupModeForkPath
+		} else {
+			startup.Mode = tui.StartupModeResumePath
+		}
+	case input.Last:
+		if fork {
+			startup.Mode = tui.StartupModeForkLatest
+		} else {
+			startup.Mode = tui.StartupModeResumeLatest
+		}
+	default:
+		if fork {
+			startup.Mode = tui.StartupModeForkPicker
+		} else {
+			startup.Mode = tui.StartupModeResumePicker
+		}
+	}
+	return tui.Run(tui.Options{Startup: startup})
 }
 
 func fallback(value string, fallbackValue string) string {

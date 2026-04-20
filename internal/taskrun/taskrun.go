@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Perdonus/lavilas-code/internal/apphome"
@@ -27,6 +28,7 @@ type Options struct {
 	Profile          string
 	Provider         string
 	ReasoningEffort  string
+	CWD              string
 	ToolPolicy       tooling.ToolPolicy
 	OnProgress       func(ProgressUpdate)
 	OnApproval       ApprovalHandler
@@ -40,6 +42,7 @@ type Result struct {
 	Model            string                    `json:"model"`
 	Reasoning        string                    `json:"reasoning,omitempty"`
 	Profile          string                    `json:"profile,omitempty"`
+	CWD              string                    `json:"cwd,omitempty"`
 	SessionPath      string                    `json:"session_path,omitempty"`
 	Response         *runtime.Response         `json:"response,omitempty"`
 	Events           []runtime.StreamEvent     `json:"events,omitempty"`
@@ -115,6 +118,8 @@ const (
 	maxProviderBackoff  = 30 * time.Second
 )
 
+var workingDirectoryMu sync.Mutex
+
 func (result Result) FullHistory() []runtime.Message {
 	if len(result.History) > 0 {
 		return cloneMessages(result.History)
@@ -165,8 +170,14 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		Model:           resolved.Model,
 		Reasoning:       resolved.ReasoningEffort,
 		Profile:         resolved.ProfileName,
+		CWD:             resolved.CWD,
 		RequestMessages: cloneMessages(resolved.Messages),
 	}
+	restoreCWD, err := enterWorkingDirectory(resolved.CWD)
+	if err != nil {
+		return Result{}, err
+	}
+	defer restoreCWD()
 	preferStreaming := !options.JSON && !options.DisableStreaming
 	reporter.Emit(ProgressUpdate{
 		Kind:         ProgressKindTurnStarted,
@@ -744,6 +755,7 @@ type resolvedRequest struct {
 	Model           string
 	ReasoningEffort string
 	ProfileName     string
+	CWD             string
 	Messages        []runtime.Message
 }
 
@@ -793,6 +805,12 @@ func resolveRequest(config state.Config, options Options) (resolvedRequest, erro
 	if err != nil {
 		return resolvedRequest{}, err
 	}
+	cwd := strings.TrimSpace(options.CWD)
+	if cwd == "" {
+		if currentCWD, cwdErr := os.Getwd(); cwdErr == nil {
+			cwd = currentCWD
+		}
+	}
 
 	messages := cloneMessages(options.History)
 	if len(messages) == 0 {
@@ -808,7 +826,29 @@ func resolveRequest(config state.Config, options Options) (resolvedRequest, erro
 		Model:           model,
 		ReasoningEffort: reasoning,
 		ProfileName:     profileName,
+		CWD:             cwd,
 		Messages:        messages,
+	}, nil
+}
+
+func enterWorkingDirectory(target string) (func(), error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return func() {}, nil
+	}
+	workingDirectoryMu.Lock()
+	previous, err := os.Getwd()
+	if err != nil {
+		workingDirectoryMu.Unlock()
+		return nil, err
+	}
+	if err := os.Chdir(target); err != nil {
+		workingDirectoryMu.Unlock()
+		return nil, err
+	}
+	return func() {
+		_ = os.Chdir(previous)
+		workingDirectoryMu.Unlock()
 	}, nil
 }
 

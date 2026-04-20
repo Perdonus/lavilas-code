@@ -105,6 +105,10 @@ func catalogCommandRun(name string) (func(args []string) int, bool) {
 func catalogDisplayNames(items []CatalogListItem) []string {
 	names := make([]string, 0, len(items))
 	for _, item := range items {
+		if strings.TrimSpace(item.DisplayName) != "" {
+			names = append(names, item.DisplayName)
+			continue
+		}
 		names = append(names, item.Name)
 	}
 	return names
@@ -113,6 +117,12 @@ func catalogDisplayNames(items []CatalogListItem) []string {
 func catalogLookupAliases(item CatalogListItem) []string {
 	aliases := append([]string{}, item.Aliases...)
 	aliases = append(aliases, item.MirrorAliases...)
+	if value := strings.TrimSpace(item.InsertName); value != "" {
+		aliases = append(aliases, value)
+	}
+	if value := strings.TrimSpace(item.MirrorName); value != "" {
+		aliases = append(aliases, value)
+	}
 	return uniqueCatalogAliases(aliases)
 }
 

@@ -12,6 +12,29 @@ import (
 type Options struct {
 	TaskOptions    taskrun.Options
 	PaletteCatalog PaletteCommandCatalog
+	Startup        StartupOptions
+}
+
+type StartupMode string
+
+const (
+	StartupModeNone         StartupMode = ""
+	StartupModeResumePicker StartupMode = "resume_picker"
+	StartupModeForkPicker   StartupMode = "fork_picker"
+	StartupModeResumeLatest StartupMode = "resume_latest"
+	StartupModeForkLatest   StartupMode = "fork_latest"
+	StartupModeResumePath   StartupMode = "resume_path"
+	StartupModeForkPath     StartupMode = "fork_path"
+	StartupModeModel        StartupMode = "model"
+	StartupModeProfiles     StartupMode = "profiles"
+	StartupModeProviders    StartupMode = "providers"
+	StartupModeSettings     StartupMode = "settings"
+)
+
+type StartupOptions struct {
+	Mode        StartupMode
+	SessionPath string
+	ShowAll     bool
 }
 
 func Run(options Options) int {
