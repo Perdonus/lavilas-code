@@ -3,11 +3,15 @@ package taskrun
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Perdonus/lavilas-code/internal/provider"
 	"github.com/Perdonus/lavilas-code/internal/runtime"
+	"github.com/Perdonus/lavilas-code/internal/tooling"
 )
 
 func TestProviderEndpoint_DefaultRoot(t *testing.T) {
@@ -126,7 +130,7 @@ func TestCollectStreamTurn_GroupsToolCallsByID(t *testing.T) {
 		},
 	}
 
-	response, _, assistant, err := collectStreamTurn(context.Background(), client, runtime.Request{Model: "alpha-model"})
+	response, _, assistant, err := collectStreamTurn(context.Background(), client, runtime.Request{Model: "alpha-model"}, 1, progressReporter{})
 	if err != nil {
 		t.Fatalf("collectStreamTurn: %v", err)
 	}
@@ -201,7 +205,7 @@ func TestRunWithToolLoop_PreservesToolTraceInHistory(t *testing.T) {
 		}},
 	}
 
-	history, requestMessages, _, assistant, _, err := runWithToolLoop(context.Background(), client, request, true)
+	history, requestMessages, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), progressReporter{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -222,6 +226,213 @@ func TestRunWithToolLoop_PreservesToolTraceInHistory(t *testing.T) {
 	}
 	if history[4].Role != runtime.RoleAssistant || history[4].Text() != "done" {
 		t.Fatalf("final assistant missing from history: %+v", history[4])
+	}
+	if len(reports) != 1 || reports[0].Summary.SucceededCount != 1 {
+		t.Fatalf("tool reports missing success summary: %+v", reports)
+	}
+}
+
+func TestRunWithToolLoop_RequireApprovalBlocksMutatingTool(t *testing.T) {
+	tempDir := t.TempDir()
+	targetPath := filepath.Join(tempDir, "blocked.txt")
+	client := fakeProviderClient{
+		name: "approval-tool-loop",
+		caps: provider.Capabilities{Streaming: true, Tools: true},
+		streamFn: func(_ context.Context, request runtime.Request) (runtime.Stream, error) {
+			if len(request.Messages) == 2 {
+				return &fakeStream{events: []runtime.StreamEvent{
+					{
+						Type: runtime.StreamEventTypeDelta,
+						Delta: runtime.MessageDelta{
+							Role: runtime.RoleAssistant,
+							ToolCalls: []runtime.ToolCallDelta{
+								{
+									ID:             "call_write",
+									Type:           runtime.ToolTypeFunction,
+									NameDelta:      "write_file",
+									ArgumentsDelta: `{"path":"` + targetPath + `","content":"denied"}`,
+								},
+							},
+						},
+					},
+					{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonToolCalls},
+					{Type: runtime.StreamEventTypeDone},
+				}}, nil
+			}
+
+			return &fakeStream{events: []runtime.StreamEvent{
+				{
+					Type: runtime.StreamEventTypeDelta,
+					Delta: runtime.MessageDelta{
+						Role: runtime.RoleAssistant,
+						Content: []runtime.ContentPartDelta{
+							{Type: runtime.ContentPartTypeText, Text: "approval noted"},
+						},
+					},
+				},
+				{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonStop},
+				{Type: runtime.StreamEventTypeDone},
+			}}, nil
+		},
+	}
+
+	request := runtime.Request{
+		Model: "tool-model",
+		Messages: []runtime.Message{
+			runtime.TextMessage(runtime.RoleSystem, "system"),
+			runtime.TextMessage(runtime.RoleUser, "write"),
+		},
+		Tools: []runtime.ToolDefinition{{
+			Type: runtime.ToolTypeFunction,
+			Function: runtime.FunctionDefinition{
+				Name: "write_file",
+			},
+		}},
+	}
+
+	policy := tooling.DefaultToolPolicy()
+	policy.ApprovalMode = tooling.ToolApprovalModeRequire
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, progressReporter{})
+	if err != nil {
+		t.Fatalf("runWithToolLoop: %v", err)
+	}
+	if assistant.Text() != "approval noted" {
+		t.Fatalf("assistant text = %q, want approval noted", assistant.Text())
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("mutating tool should not execute, stat err = %v", err)
+	}
+	if len(history) != 5 || history[3].Role != runtime.RoleTool {
+		t.Fatalf("unexpected history after blocked tool: %+v", history)
+	}
+	if got := history[3].Text(); got == "" || !strings.Contains(got, `"status": "approval_required"`) {
+		t.Fatalf("tool message missing approval payload: %s", got)
+	}
+	if len(reports) != 1 || reports[0].Summary.ApprovalRequiredCount != 1 {
+		t.Fatalf("tool reports missing approval summary: %+v", reports)
+	}
+}
+
+func TestCollectStreamTurn_EmitsAssistantSnapshots(t *testing.T) {
+	updates := make([]ProgressUpdate, 0, 4)
+	client := fakeProviderClient{
+		name: "stream-progress",
+		caps: provider.Capabilities{Streaming: true},
+		streamFn: func(context.Context, runtime.Request) (runtime.Stream, error) {
+			return &fakeStream{events: []runtime.StreamEvent{
+				{
+					Type: runtime.StreamEventTypeDelta,
+					Delta: runtime.MessageDelta{
+						Role: runtime.RoleAssistant,
+						Content: []runtime.ContentPartDelta{
+							{Type: runtime.ContentPartTypeText, Text: "hello"},
+						},
+					},
+				},
+				{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonStop},
+				{Type: runtime.StreamEventTypeDone},
+			}}, nil
+		},
+	}
+
+	_, _, assistant, err := collectStreamTurn(context.Background(), client, runtime.Request{Model: "alpha-model"}, 2, progressReporter{
+		fn: func(update ProgressUpdate) {
+			updates = append(updates, update)
+		},
+	})
+	if err != nil {
+		t.Fatalf("collectStreamTurn: %v", err)
+	}
+	if assistant.Text() != "hello" {
+		t.Fatalf("assistant text = %q, want hello", assistant.Text())
+	}
+	if len(updates) == 0 {
+		t.Fatal("expected progress updates")
+	}
+	found := false
+	for _, update := range updates {
+		if update.Kind == ProgressKindAssistantSnapshot && update.Round == 2 && update.Snapshot.Text == "hello" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("assistant snapshot for round 2 not found: %+v", updates)
+	}
+}
+
+func TestRunWithToolLoop_EmitsToolPlanningProgress(t *testing.T) {
+	updates := make([]ProgressUpdate, 0, 8)
+	client := fakeProviderClient{
+		name: "tool-progress",
+		caps: provider.Capabilities{Streaming: true, Tools: true},
+		streamFn: func(_ context.Context, request runtime.Request) (runtime.Stream, error) {
+			if len(request.Messages) == 2 {
+				return &fakeStream{events: []runtime.StreamEvent{
+					{
+						Type: runtime.StreamEventTypeDelta,
+						Delta: runtime.MessageDelta{
+							Role: runtime.RoleAssistant,
+							ToolCalls: []runtime.ToolCallDelta{{
+								ID:             "call_read",
+								Type:           runtime.ToolTypeFunction,
+								NameDelta:      "read_file",
+								ArgumentsDelta: `{"path":"go.mod"}`,
+							}},
+						},
+					},
+					{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonToolCalls},
+					{Type: runtime.StreamEventTypeDone},
+				}}, nil
+			}
+			return &fakeStream{events: []runtime.StreamEvent{
+				{
+					Type: runtime.StreamEventTypeDelta,
+					Delta: runtime.MessageDelta{
+						Role:    runtime.RoleAssistant,
+						Content: []runtime.ContentPartDelta{{Type: runtime.ContentPartTypeText, Text: "done"}},
+					},
+				},
+				{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonStop},
+				{Type: runtime.StreamEventTypeDone},
+			}}, nil
+		},
+	}
+	request := runtime.Request{
+		Model: "tool-model",
+		Messages: []runtime.Message{
+			runtime.TextMessage(runtime.RoleSystem, "system"),
+			runtime.TextMessage(runtime.RoleUser, "inspect"),
+		},
+		Tools: []runtime.ToolDefinition{{
+			Type:     runtime.ToolTypeFunction,
+			Function: runtime.FunctionDefinition{Name: "read_file"},
+		}},
+	}
+
+	_, _, _, _, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), progressReporter{
+		fn: func(update ProgressUpdate) {
+			updates = append(updates, update)
+		},
+	})
+	if err != nil {
+		t.Fatalf("runWithToolLoop: %v", err)
+	}
+	if len(reports) != 1 || reports[0].Summary.CallCount != 1 {
+		t.Fatalf("unexpected tool reports: %+v", reports)
+	}
+	var sawPlan bool
+	var sawResult bool
+	for _, update := range updates {
+		if update.Kind == ProgressKindToolPlanned && update.ToolPlan != nil && update.ToolPlan.Summary.CallCount == 1 {
+			sawPlan = true
+		}
+		if update.Kind == ProgressKindToolResult && update.ToolResult != nil && update.ToolResult.Name == "read_file" {
+			sawResult = true
+		}
+	}
+	if !sawPlan || !sawResult {
+		t.Fatalf("missing planning progress: sawPlan=%t sawResult=%t updates=%+v", sawPlan, sawResult, updates)
 	}
 }
 
@@ -250,7 +461,7 @@ func TestRunSingleTurn_RetriesRetryableCreateErrors(t *testing.T) {
 		},
 	}
 
-	response, _, assistant, err := runSingleTurn(context.Background(), client, runtime.Request{Model: "alpha-model"}, false)
+	response, _, assistant, err := runSingleTurn(context.Background(), client, runtime.Request{Model: "alpha-model"}, false, 1, progressReporter{})
 	if err != nil {
 		t.Fatalf("runSingleTurn: %v", err)
 	}
@@ -294,7 +505,7 @@ func TestCollectStreamTurn_RetriesRetryableStreamOpen(t *testing.T) {
 		},
 	}
 
-	response, _, assistant, err := collectStreamTurn(context.Background(), client, runtime.Request{Model: "alpha-model"})
+	response, _, assistant, err := collectStreamTurn(context.Background(), client, runtime.Request{Model: "alpha-model"}, 1, progressReporter{})
 	if err != nil {
 		t.Fatalf("collectStreamTurn: %v", err)
 	}

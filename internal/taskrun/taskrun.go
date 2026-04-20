@@ -27,23 +27,75 @@ type Options struct {
 	Profile          string
 	Provider         string
 	ReasoningEffort  string
+	ToolPolicy       tooling.ToolPolicy
+	OnProgress       func(ProgressUpdate)
 	JSON             bool
 	DisableStreaming bool
 	History          []runtime.Message
 }
 
 type Result struct {
-	ProviderName     string                `json:"provider_name"`
-	Model            string                `json:"model"`
-	Reasoning        string                `json:"reasoning,omitempty"`
-	Profile          string                `json:"profile,omitempty"`
-	SessionPath      string                `json:"session_path,omitempty"`
-	Response         *runtime.Response     `json:"response,omitempty"`
-	Events           []runtime.StreamEvent `json:"events,omitempty"`
-	Text             string                `json:"text,omitempty"`
-	History          []runtime.Message     `json:"-"`
-	RequestMessages  []runtime.Message     `json:"-"`
-	AssistantMessage runtime.Message       `json:"-"`
+	ProviderName     string                    `json:"provider_name"`
+	Model            string                    `json:"model"`
+	Reasoning        string                    `json:"reasoning,omitempty"`
+	Profile          string                    `json:"profile,omitempty"`
+	SessionPath      string                    `json:"session_path,omitempty"`
+	Response         *runtime.Response         `json:"response,omitempty"`
+	Events           []runtime.StreamEvent     `json:"events,omitempty"`
+	ToolReports      []tooling.ExecutionReport `json:"tool_reports,omitempty"`
+	Text             string                    `json:"text,omitempty"`
+	History          []runtime.Message         `json:"-"`
+	RequestMessages  []runtime.Message         `json:"-"`
+	AssistantMessage runtime.Message           `json:"-"`
+}
+
+type ProgressKind string
+
+const (
+	ProgressKindTurnStarted       ProgressKind = "turn_started"
+	ProgressKindAssistantSnapshot ProgressKind = "assistant_snapshot"
+	ProgressKindToolPlanned       ProgressKind = "tool_planned"
+	ProgressKindToolResult        ProgressKind = "tool_result"
+	ProgressKindApprovalRequired  ProgressKind = "approval_required"
+	ProgressKindRetryScheduled    ProgressKind = "retry_scheduled"
+	ProgressKindTurnDone          ProgressKind = "turn_done"
+	ProgressKindTurnFailed        ProgressKind = "turn_failed"
+)
+
+type PartialAssistantSnapshot struct {
+	ResponseID   string               `json:"response_id,omitempty"`
+	Model        string               `json:"model,omitempty"`
+	Text         string               `json:"text,omitempty"`
+	ToolCalls    []runtime.ToolCall   `json:"tool_calls,omitempty"`
+	Usage        runtime.Usage        `json:"usage,omitempty"`
+	FinishReason runtime.FinishReason `json:"finish_reason,omitempty"`
+}
+
+type ProgressUpdate struct {
+	Kind            ProgressKind                `json:"kind"`
+	Round           int                         `json:"round,omitempty"`
+	Prompt          string                      `json:"prompt,omitempty"`
+	ProviderName    string                      `json:"provider_name,omitempty"`
+	Model           string                      `json:"model,omitempty"`
+	Profile         string                      `json:"profile,omitempty"`
+	Reasoning       string                      `json:"reasoning,omitempty"`
+	Snapshot        PartialAssistantSnapshot    `json:"snapshot,omitempty"`
+	ToolPlan        *tooling.ExecutionPlan      `json:"tool_plan,omitempty"`
+	ToolResult      *tooling.ToolResultEnvelope `json:"tool_result,omitempty"`
+	ApprovalRequest *tooling.ApprovalRequest    `json:"approval_request,omitempty"`
+	RetryAfter      time.Duration               `json:"retry_after,omitempty"`
+	Err             error                       `json:"-"`
+}
+
+type progressReporter struct {
+	fn func(ProgressUpdate)
+}
+
+func (r progressReporter) Emit(update ProgressUpdate) {
+	if r.fn == nil {
+		return
+	}
+	r.fn(update)
 }
 
 const (
@@ -86,11 +138,15 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		ReasoningEffort: resolved.ReasoningEffort,
 		Messages:        resolved.Messages,
 	}
+	toolPolicy := tooling.NormalizeToolPolicy(options.ToolPolicy)
+	reporter := progressReporter{fn: options.OnProgress}
 	if resolved.Client.Capabilities().Tools {
-		request.Tools = tooling.Definitions()
-		request.ToolChoice = runtime.ToolChoice{Mode: runtime.ToolChoiceModeAuto}
-		parallel := true
-		request.ParallelToolCalls = &parallel
+		request.Tools = tooling.DefinitionsWithPolicy(toolPolicy)
+		if len(request.Tools) > 0 {
+			request.ToolChoice = runtime.ToolChoice{Mode: runtime.ToolChoiceModeAuto}
+			parallel := true
+			request.ParallelToolCalls = &parallel
+		}
 	}
 
 	result := Result{
@@ -101,27 +157,48 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		RequestMessages: cloneMessages(resolved.Messages),
 	}
 	preferStreaming := !options.JSON && !options.DisableStreaming
+	reporter.Emit(ProgressUpdate{
+		Kind:         ProgressKindTurnStarted,
+		Round:        1,
+		Prompt:       options.Prompt,
+		ProviderName: resolved.ProviderName,
+		Model:        resolved.Model,
+		Profile:      resolved.ProfileName,
+		Reasoning:    resolved.ReasoningEffort,
+	})
 
 	if len(request.Tools) > 0 {
-		history, requestMessages, response, assistantMessage, events, err := runWithToolLoop(ctx, resolved.Client, request, preferStreaming)
+		history, requestMessages, response, assistantMessage, events, toolReports, err := runWithToolLoop(ctx, resolved.Client, request, preferStreaming, toolPolicy, reporter)
 		if err != nil {
+			reporter.Emit(ProgressUpdate{Kind: ProgressKindTurnFailed, Err: err})
 			return Result{}, err
 		}
 		result.History = cloneMessages(history)
 		result.RequestMessages = cloneMessages(requestMessages)
 		result.Response = response
 		result.Events = append(result.Events, events...)
+		result.ToolReports = append(result.ToolReports, toolReports...)
 		result.Text = strings.TrimSpace(assistantMessage.Text())
 		if result.Text == "" {
 			result.Text = responseText(response)
 		}
 		result.AssistantMessage = assistantMessage
+		reporter.Emit(ProgressUpdate{
+			Kind:         ProgressKindTurnDone,
+			Round:        1,
+			ProviderName: result.ProviderName,
+			Model:        result.Model,
+			Profile:      result.Profile,
+			Reasoning:    result.Reasoning,
+			Snapshot:     snapshotFromMessage(response, assistantMessage),
+		})
 		return result, nil
 	}
 
 	if !preferStreaming {
-		response, err := resolved.Client.Create(ctx, request)
+		response, err := createWithRetry(ctx, resolved.Client, request, 1, reporter)
 		if err != nil {
+			reporter.Emit(ProgressUpdate{Kind: ProgressKindTurnFailed, Err: err})
 			return Result{}, err
 		}
 		result.Response = response
@@ -132,11 +209,21 @@ func Run(ctx context.Context, options Options) (Result, error) {
 			result.AssistantMessage = runtime.TextMessage(runtime.RoleAssistant, result.Text)
 		}
 		result.History = append(cloneMessages(request.Messages), result.AssistantMessage)
+		reporter.Emit(ProgressUpdate{
+			Kind:         ProgressKindTurnDone,
+			Round:        1,
+			ProviderName: result.ProviderName,
+			Model:        result.Model,
+			Profile:      result.Profile,
+			Reasoning:    result.Reasoning,
+			Snapshot:     snapshotFromMessage(result.Response, result.AssistantMessage),
+		})
 		return result, nil
 	}
 
-	response, events, assistantMessage, err := runSingleTurn(ctx, resolved.Client, request, true)
+	response, events, assistantMessage, err := runSingleTurn(ctx, resolved.Client, request, true, 1, reporter)
 	if err != nil {
+		reporter.Emit(ProgressUpdate{Kind: ProgressKindTurnFailed, Err: err})
 		return Result{}, err
 	}
 	result.Response = response
@@ -147,23 +234,40 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		result.Text = responseText(response)
 	}
 	result.History = append(cloneMessages(request.Messages), assistantMessage)
+	reporter.Emit(ProgressUpdate{
+		Kind:         ProgressKindTurnDone,
+		Round:        1,
+		ProviderName: result.ProviderName,
+		Model:        result.Model,
+		Profile:      result.Profile,
+		Reasoning:    result.Reasoning,
+		Snapshot:     snapshotFromMessage(result.Response, result.AssistantMessage),
+	})
 	return result, nil
 }
 
-func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, error) {
+func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, toolPolicy tooling.ToolPolicy, reporter progressReporter) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, []tooling.ExecutionReport, error) {
 	const maxRounds = 8
 
 	messages := cloneMessages(request.Messages)
 	baseRequest := request
 	var events []runtime.StreamEvent
+	var toolReports []tooling.ExecutionReport
 
 	for round := 0; round < maxRounds; round++ {
 		currentRequest := baseRequest
 		currentRequest.Messages = cloneMessages(messages)
+		if round > 0 {
+			reporter.Emit(ProgressUpdate{
+				Kind:  ProgressKindTurnStarted,
+				Round: round + 1,
+				Model: currentRequest.Model,
+			})
+		}
 
-		response, roundEvents, assistantMessage, err := runSingleTurn(ctx, client, currentRequest, preferStreaming)
+		response, roundEvents, assistantMessage, err := runSingleTurn(ctx, client, currentRequest, preferStreaming, round+1, reporter)
 		if err != nil {
-			return nil, nil, nil, runtime.Message{}, nil, err
+			return nil, nil, nil, runtime.Message{}, nil, nil, err
 		}
 		events = append(events, roundEvents...)
 		if len(assistantMessage.ToolCalls) == 0 {
@@ -171,22 +275,52 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 			if hasPersistableMessage(assistantMessage) {
 				fullHistory = append(fullHistory, assistantMessage)
 			}
-			return fullHistory, currentRequest.Messages, response, assistantMessage, events, nil
+			return fullHistory, currentRequest.Messages, response, assistantMessage, events, toolReports, nil
 		}
 
 		messages = append(messages, assistantMessage)
-		messages = append(messages, tooling.ExecuteCalls(ctx, assistantMessage.ToolCalls)...)
+		plan := tooling.BuildExecutionPlanWithToolPolicy(assistantMessage.ToolCalls, toolPolicy)
+		reporter.Emit(ProgressUpdate{
+			Kind:         ProgressKindToolPlanned,
+			Round:        round + 1,
+			ProviderName: client.Name(),
+			Model:        currentRequest.Model,
+			ToolPlan:     &plan,
+		})
+		report := tooling.ExecutePlan(ctx, plan)
+		toolReports = append(toolReports, report)
+		for _, approval := range report.ApprovalRequests {
+			copy := approval
+			reporter.Emit(ProgressUpdate{
+				Kind:            ProgressKindApprovalRequired,
+				Round:           round + 1,
+				ProviderName:    client.Name(),
+				Model:           currentRequest.Model,
+				ApprovalRequest: &copy,
+			})
+		}
+		for _, toolResult := range report.Results {
+			copy := toolResult
+			reporter.Emit(ProgressUpdate{
+				Kind:         ProgressKindToolResult,
+				Round:        round + 1,
+				ProviderName: client.Name(),
+				Model:        currentRequest.Model,
+				ToolResult:   &copy,
+			})
+		}
+		messages = append(messages, report.Messages()...)
 	}
 
-	return nil, nil, nil, runtime.Message{}, nil, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+	return nil, nil, nil, runtime.Message{}, nil, nil, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
 }
 
-func runSingleTurn(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
+func runSingleTurn(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, round int, reporter progressReporter) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
 	if preferStreaming && client.Capabilities().Streaming {
-		return collectStreamTurn(ctx, client, request)
+		return collectStreamTurn(ctx, client, request, round, reporter)
 	}
 
-	response, err := createWithRetry(ctx, client, request)
+	response, err := createWithRetry(ctx, client, request, round, reporter)
 	if err != nil {
 		return nil, nil, runtime.Message{}, err
 	}
@@ -196,16 +330,16 @@ func runSingleTurn(ctx context.Context, client provider.Client, request runtime.
 	return response, nil, response.Choices[0].Message, nil
 }
 
-func collectStreamTurn(ctx context.Context, client provider.Client, request runtime.Request) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
-	stream, err := streamWithRetry(ctx, client, request)
+func collectStreamTurn(ctx context.Context, client provider.Client, request runtime.Request, round int, reporter progressReporter) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
+	stream, err := streamWithRetry(ctx, client, request, round, reporter)
 	if err != nil {
 		return nil, nil, runtime.Message{}, err
 	}
 	defer stream.Close()
-	return collectStreamResponse(stream, client.Name(), request.Model)
+	return collectStreamResponse(stream, client.Name(), request.Model, round, reporter)
 }
 
-func collectStreamResponse(stream runtime.Stream, providerName string, fallbackModel string) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
+func collectStreamResponse(stream runtime.Stream, providerName string, fallbackModel string, round int, reporter progressReporter) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
 	events := make([]runtime.StreamEvent, 0, 16)
 	accumulator := newTurnAccumulator(providerName, fallbackModel)
 	for {
@@ -218,6 +352,15 @@ func collectStreamResponse(stream runtime.Stream, providerName string, fallbackM
 		}
 		events = append(events, event)
 		accumulator.Apply(event)
+		if event.Type != runtime.StreamEventTypeDone {
+			reporter.Emit(ProgressUpdate{
+				Kind:         ProgressKindAssistantSnapshot,
+				Round:        round,
+				ProviderName: providerName,
+				Model:        fallbackModel,
+				Snapshot:     accumulator.Snapshot(),
+			})
+		}
 		if event.Type == runtime.StreamEventTypeDone {
 			break
 		}
@@ -230,7 +373,7 @@ func collectStreamResponse(stream runtime.Stream, providerName string, fallbackM
 	return response, events, response.Choices[0].Message, nil
 }
 
-func createWithRetry(ctx context.Context, client provider.Client, request runtime.Request) (*runtime.Response, error) {
+func createWithRetry(ctx context.Context, client provider.Client, request runtime.Request, round int, reporter progressReporter) (*runtime.Response, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
 		response, err := client.Create(ctx, request)
@@ -242,6 +385,14 @@ func createWithRetry(ctx context.Context, client provider.Client, request runtim
 		if !ok {
 			return nil, err
 		}
+		reporter.Emit(ProgressUpdate{
+			Kind:         ProgressKindRetryScheduled,
+			Round:        round,
+			ProviderName: client.Name(),
+			Model:        request.Model,
+			RetryAfter:   delay,
+			Err:          err,
+		})
 		if err := sleepWithContext(ctx, delay); err != nil {
 			return nil, err
 		}
@@ -249,7 +400,7 @@ func createWithRetry(ctx context.Context, client provider.Client, request runtim
 	return nil, lastErr
 }
 
-func streamWithRetry(ctx context.Context, client provider.Client, request runtime.Request) (runtime.Stream, error) {
+func streamWithRetry(ctx context.Context, client provider.Client, request runtime.Request, round int, reporter progressReporter) (runtime.Stream, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
 		stream, err := client.Stream(ctx, request)
@@ -261,6 +412,14 @@ func streamWithRetry(ctx context.Context, client provider.Client, request runtim
 		if !ok {
 			return nil, err
 		}
+		reporter.Emit(ProgressUpdate{
+			Kind:         ProgressKindRetryScheduled,
+			Round:        round,
+			ProviderName: client.Name(),
+			Model:        request.Model,
+			RetryAfter:   delay,
+			Err:          err,
+		})
 		if err := sleepWithContext(ctx, delay); err != nil {
 			return nil, err
 		}
@@ -404,6 +563,33 @@ func (a *turnAccumulator) Response() *runtime.Response {
 			FinishReason: finishReason,
 		}},
 		Usage: a.usage,
+	}
+}
+
+func (a *turnAccumulator) Snapshot() PartialAssistantSnapshot {
+	message := runtime.Message{
+		Role:    runtime.RoleAssistant,
+		Content: cloneContentParts(a.message.Content),
+	}
+	if len(a.toolOrder) > 0 {
+		message.ToolCalls = make([]runtime.ToolCall, 0, len(a.toolOrder))
+		for _, key := range a.toolOrder {
+			if current, ok := a.toolCalls[key]; ok {
+				message.ToolCalls = append(message.ToolCalls, cloneToolCall(*current))
+			}
+		}
+	}
+	model := strings.TrimSpace(a.model)
+	if model == "" {
+		model = a.fallbackModel
+	}
+	return PartialAssistantSnapshot{
+		ResponseID:   a.responseID,
+		Model:        model,
+		Text:         message.Text(),
+		ToolCalls:    cloneToolCalls(message.ToolCalls),
+		Usage:        a.usage,
+		FinishReason: a.finishReason,
 	}
 }
 
@@ -704,4 +890,55 @@ func responseText(response *runtime.Response) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func snapshotFromMessage(response *runtime.Response, message runtime.Message) PartialAssistantSnapshot {
+	snapshot := PartialAssistantSnapshot{
+		Text:      message.Text(),
+		ToolCalls: cloneToolCalls(message.ToolCalls),
+	}
+	if response != nil {
+		snapshot.ResponseID = response.ID
+		snapshot.Model = response.Model
+		snapshot.Usage = response.Usage
+		if len(response.Choices) > 0 {
+			snapshot.FinishReason = response.Choices[0].FinishReason
+		}
+	}
+	return snapshot
+}
+
+func cloneToolCalls(calls []runtime.ToolCall) []runtime.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	cloned := make([]runtime.ToolCall, len(calls))
+	for index, call := range calls {
+		cloned[index] = cloneToolCall(call)
+	}
+	return cloned
+}
+
+func cloneToolCall(call runtime.ToolCall) runtime.ToolCall {
+	cloned := call
+	cloned.Function.Arguments = cloneRawMessage(call.Function.Arguments)
+	return cloned
+}
+
+func cloneContentParts(parts []runtime.ContentPart) []runtime.ContentPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	cloned := make([]runtime.ContentPart, len(parts))
+	copy(cloned, parts)
+	return cloned
+}
+
+func cloneRawMessage(value json.RawMessage) json.RawMessage {
+	if len(value) == 0 {
+		return nil
+	}
+	cloned := make([]byte, len(value))
+	copy(cloned, value)
+	return json.RawMessage(cloned)
 }

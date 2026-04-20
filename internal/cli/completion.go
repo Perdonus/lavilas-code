@@ -46,7 +46,7 @@ func runCompletion(args []string) int {
 }
 
 func renderBashCompletion(commands []Command) string {
-	items := append([]string{"help", "version", "--help", "--version", "-h", "-v"}, commandAndAliasNames(commands)...)
+	items := append([]string{"help", "помощь", "version", "версия", "--help", "--version", "-h", "-v"}, commandAndAliasNames(commands)...)
 	return fmt.Sprintf(`_lvls_complete() {
     local cur
     cur="${COMP_WORDS[COMP_CWORD]}"
@@ -59,6 +59,7 @@ complete -F _lvls_complete lvls
 func renderZshCompletion(commands []Command) string {
 	entries := make([]string, 0, len(commands)+2)
 	entries = append(entries, "'help:Show help'", "'version:Show version'")
+	entries = append(entries, "'помощь:Показать помощь'", "'версия:Показать версию'")
 	for _, command := range commands {
 		entries = append(entries, fmt.Sprintf("'%s:%s'", command.Name, escapeZshDescription(command.Description)))
 		for _, alias := range command.Aliases {
@@ -83,7 +84,9 @@ func renderFishCompletion(commands []Command) string {
 	var builder strings.Builder
 	builder.WriteString("complete -c lvls -f\n")
 	builder.WriteString("complete -c lvls -n '__fish_use_subcommand' -a help -d 'Show help'\n")
+	builder.WriteString("complete -c lvls -n '__fish_use_subcommand' -a помощь -d 'Показать помощь'\n")
 	builder.WriteString("complete -c lvls -n '__fish_use_subcommand' -a version -d 'Show version'\n")
+	builder.WriteString("complete -c lvls -n '__fish_use_subcommand' -a версия -d 'Показать версию'\n")
 	for _, command := range commands {
 		builder.WriteString(fmt.Sprintf("complete -c lvls -n '__fish_use_subcommand' -a %s -d %q\n", command.Name, command.Description))
 		for _, alias := range command.Aliases {
@@ -94,7 +97,7 @@ func renderFishCompletion(commands []Command) string {
 }
 
 func renderPowerShellCompletion(commands []Command) string {
-	items := append([]string{"help", "version"}, commandAndAliasNames(commands)...)
+	items := append([]string{"help", "помощь", "version", "версия"}, commandAndAliasNames(commands)...)
 	quoted := make([]string, 0, len(items))
 	for _, item := range items {
 		quoted = append(quoted, fmt.Sprintf("'%s'", strings.ReplaceAll(item, "'", "''")))

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -16,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Perdonus/lavilas-code/internal/apphome"
+	"github.com/Perdonus/lavilas-code/internal/commandcatalog"
 	runtimeapi "github.com/Perdonus/lavilas-code/internal/runtime"
 	appstate "github.com/Perdonus/lavilas-code/internal/state"
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
@@ -36,6 +39,15 @@ type taskFinishedMsg struct {
 	SessionPath string
 	Warn        error
 	Err         error
+}
+
+type taskProgressMsg struct {
+	Update taskrun.ProgressUpdate
+}
+
+type taskEventMsg struct {
+	Inner tea.Msg
+	Next  <-chan tea.Msg
 }
 
 type sessionLoadedMsg struct {
@@ -70,6 +82,7 @@ type Model struct {
 	options      taskrun.Options
 	history      []runtimeapi.Message
 	catalog      PaletteCommandCatalog
+	language     commandcatalog.CatalogLanguage
 }
 
 func New() *Model {
@@ -82,26 +95,28 @@ func New() *Model {
 }
 
 func NewModel(state State) *Model {
+	clonedState := state.clone()
+	language := normalizeTUILanguage(clonedState.Language)
 	styles := newStyles()
 
 	input := textinput.New()
 	input.Prompt = "> "
-	input.Placeholder = "Send a message to the Go alpha session"
+	input.Placeholder = localizedTextTUI(language, "Send a message to the Go alpha session", "Введите сообщение в Go Lavilas alpha")
 	input.TextStyle = styles.value
 	input.PlaceholderStyle = styles.muted
 	input.PromptStyle = styles.sectionTitle
 	input.Cursor.Style = styles.paneTitle
-	input.SetValue(state.InputDraft)
+	input.SetValue(clonedState.InputDraft)
 
 	paletteInput := textinput.New()
-	paletteInput.Placeholder = "Type to filter items"
+	paletteInput.Placeholder = localizedTextTUI(language, "Type to filter items", "Введите запрос для фильтрации")
 	paletteInput.TextStyle = styles.value
 	paletteInput.PlaceholderStyle = styles.muted
 	paletteInput.Cursor.Style = styles.paneTitle
-	paletteInput.SetValue(state.Palette.Query)
+	paletteInput.SetValue(clonedState.Palette.Query)
 
 	model := &Model{
-		state:        state.clone(),
+		state:        clonedState,
 		keys:         DefaultKeyMap(),
 		styles:       styles,
 		viewport:     viewport.New(0, 0),
@@ -109,7 +124,10 @@ func NewModel(state State) *Model {
 		paletteInput: paletteInput,
 		layout:       apphome.DefaultLayout(),
 		catalog:      defaultPaletteCatalog(),
+		language:     language,
 	}
+	model.state.Language = string(language)
+	model.state.Palette.Context = normalizePaletteContextForLanguage(model.state.Palette.Context, language)
 	if len(model.state.Palette.Items) == 0 {
 		model.state.Palette.Items = model.rootPaletteItems()
 	}
@@ -121,9 +139,10 @@ func newModel(options Options) (*Model, error) {
 	layout := apphome.DefaultLayout()
 	config, _ := loadConfigOptional(layout.ConfigPath())
 	settings, _ := loadSettingsOptional(layout.SettingsPath())
-	state := DefaultState()
+	language := normalizeTUILanguage(settings.Language)
+	state := defaultStateForLanguage(language)
 	state.Title = fmt.Sprintf("Go Lavilas %s", version.Version)
-	state.Footer = buildFooter(settings)
+	state.Footer = buildFooter(settings, language)
 	state.Model = fallback(options.TaskOptions.Model, config.EffectiveModel())
 	state.Provider = fallback(options.TaskOptions.Provider, config.EffectiveProviderName())
 	state.Profile = fallback(options.TaskOptions.Profile, config.ActiveProfileName())
@@ -132,6 +151,7 @@ func newModel(options Options) (*Model, error) {
 	model := NewModel(state)
 	model.layout = layout
 	model.options = options.TaskOptions
+	model.language = language
 	if options.PaletteCatalog != nil {
 		model.catalog = options.PaletteCatalog
 	}
@@ -157,13 +177,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taskFinishedMsg:
 		m.state.Busy = false
+		m.state.LiveTurn = nil
 		if msg.Err != nil {
-			m.appendTranscript("system", fmt.Sprintf("run failed: %v", msg.Err))
-			m.state.Footer = fmt.Sprintf("Last error: %v", msg.Err)
+			m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), msg.Err))
+			m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), msg.Err)
 			m.updateStatus()
 			return m, nil
 		}
 		m.applyTaskResult(msg)
+		return m, nil
+	case taskEventMsg:
+		switch inner := msg.Inner.(type) {
+		case taskProgressMsg:
+			m.applyTaskProgress(inner.Update)
+		case taskFinishedMsg:
+			m.state.Busy = false
+			m.state.LiveTurn = nil
+			if inner.Err != nil {
+				m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), inner.Err))
+				m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), inner.Err)
+			} else {
+				m.applyTaskResult(inner)
+			}
+			m.updateStatus()
+		}
+		if msg.Next != nil {
+			return m, waitTaskEventCmd(msg.Next)
+		}
 		return m, nil
 	case sessionLoadedMsg:
 		if msg.Err != nil {
@@ -225,8 +265,8 @@ func (m *Model) View() string {
 			m.styles.pane.Width(60).Render(
 				lipgloss.JoinVertical(
 					lipgloss.Left,
-					m.styles.paneTitle.Render("Go Lavilas"),
-					m.styles.muted.Render("Waiting for the first window size event..."),
+					m.styles.paneTitle.Render(m.state.Title),
+					m.styles.muted.Render(m.localize("Waiting for the first window size event...", "Ожидание первого события размера окна...")),
 				),
 			),
 		)
@@ -252,8 +292,16 @@ func (m *Model) State() State {
 
 func (m *Model) SetState(state State) {
 	m.state = state.clone()
+	m.language = normalizeTUILanguage(m.state.Language)
+	m.state.Language = string(m.language)
+	m.state.Palette.Context = normalizePaletteContextForLanguage(m.state.Palette.Context, m.language)
+	m.input.Placeholder = localizedTextTUI(m.language, "Send a message to the Go alpha session", "Введите сообщение в Go Lavilas alpha")
+	m.paletteInput.Placeholder = localizedTextTUI(m.language, "Type to filter items", "Введите запрос для фильтрации")
 	m.input.SetValue(m.state.InputDraft)
 	m.paletteInput.SetValue(m.state.Palette.Query)
+	if len(m.state.Palette.Items) == 0 {
+		m.state.Palette.Items = defaultPaletteItemsForLanguage(m.language)
+	}
 	m.applyFocusState()
 	m.resize()
 	m.refreshViewport()
@@ -298,21 +346,21 @@ func (m *Model) renderStatusPane() string {
 	pane := applyPaneFocus(m.styles.pane, m.styles.paneActive, m.state.Focus == FocusStatus).Width(m.statusWidth)
 	content := []string{
 		m.styles.paneTitle.Render(m.state.Title),
-		m.styles.muted.Render("Standalone alpha runtime"),
+		m.styles.muted.Render(m.localize("Standalone alpha runtime", "Независимый alpha-контур")),
 		"",
-		m.styles.sectionTitle.Render("Status"),
+		m.styles.sectionTitle.Render(m.localize("Status", "Статус")),
 		m.renderStatusItems(),
 		"",
-		m.styles.sectionTitle.Render("Focus"),
+		m.styles.sectionTitle.Render(m.localize("Focus", "Фокус")),
 		m.styles.value.Render(m.focusLabel()),
-		m.styles.label.Render("messages") + " " + m.styles.value.Render(fmt.Sprintf("%d", len(m.state.Transcript))),
+		m.styles.label.Render(m.localize("messages", "сообщения")) + " " + m.styles.value.Render(fmt.Sprintf("%d", len(m.state.Transcript))),
 	}
 	if m.state.Busy {
-		content = append(content, m.styles.label.Render("turn")+" "+m.styles.busy.Render("running"))
+		content = append(content, m.styles.label.Render(m.localize("turn", "ход"))+" "+m.styles.busy.Render(m.localize("running", "выполняется")))
 	}
 	content = append(content,
 		"",
-		m.styles.sectionTitle.Render("Keys"),
+		m.styles.sectionTitle.Render(m.localize("Keys", "Клавиши")),
 		m.renderBindings(m.keys.ShortHelp()),
 	)
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, content...))
@@ -320,10 +368,10 @@ func (m *Model) renderStatusPane() string {
 
 func (m *Model) renderTranscriptPane() string {
 	pane := applyPaneFocus(m.styles.pane, m.styles.paneActive, m.state.Focus == FocusTranscript).Width(m.mainWidth)
-	header := m.styles.paneTitle.Render("Transcript") + " " + m.styles.muted.Render(fmt.Sprintf("%d entries", len(m.state.Transcript)))
+	header := m.styles.paneTitle.Render(m.localize("Transcript", "Диалог")) + " " + m.styles.muted.Render(fmt.Sprintf(m.localize("%d entries", "%d записей"), len(m.state.Transcript)))
 	body := m.viewport.View()
 	if strings.TrimSpace(body) == "" {
-		body = m.styles.muted.Render("Transcript viewport is empty.")
+		body = m.styles.muted.Render(m.localize("Transcript viewport is empty.", "Диалог пока пуст."))
 	}
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
 }
@@ -332,13 +380,13 @@ func (m *Model) renderInputPane() string {
 	pane := applyPaneFocus(m.styles.pane, m.styles.paneActive, m.state.Focus == FocusInput).Width(m.mainWidth)
 	footer := m.state.Footer
 	if strings.TrimSpace(footer) == "" {
-		footer = "Enter submit · Ctrl+P palette"
+		footer = m.localize("Enter submit · Ctrl+P palette", "Enter отправить · Ctrl+P палитра")
 	}
 	if m.state.Busy {
-		footer = "Running turn..."
+		footer = m.localize("Running turn...", "Выполняется ход...")
 	}
 	content := []string{
-		m.styles.paneTitle.Render("Input"),
+		m.styles.paneTitle.Render(m.localize("Input", "Ввод")),
 		m.input.View(),
 		m.styles.muted.Render(footer),
 	}
@@ -353,7 +401,7 @@ func (m *Model) renderPalettePane() string {
 		m.paletteInput.View(),
 	}
 	if len(items) == 0 {
-		content = append(content, m.styles.muted.Render("No items match the current filter."))
+		content = append(content, m.styles.muted.Render(m.localize("No items match the current filter.", "Ничего не найдено по текущему фильтру.")))
 	} else {
 		entryWidth := maxInt(1, innerWidth(m.styles.pane, m.mainWidth))
 		selected := clampInt(m.state.Palette.Selected, 0, maxInt(0, len(items)-1))
@@ -389,13 +437,13 @@ func (m *Model) renderPaletteEntry(item PaletteItem, width int, selected bool) s
 
 func (m *Model) renderStatusItems() string {
 	if len(m.state.Status) == 0 {
-		return m.styles.muted.Render("No status items yet.")
+		return m.styles.muted.Render(m.localize("No status items yet.", "Пока нет элементов статуса."))
 	}
 	lines := make([]string, 0, len(m.state.Status))
 	for _, item := range m.state.Status {
 		label := item.Label
 		if strings.TrimSpace(label) == "" {
-			label = "Item"
+			label = m.localize("Item", "Элемент")
 		}
 		lines = append(lines, m.styles.label.Render(strings.ToLower(label))+" "+m.styles.value.Render(item.Value))
 	}
@@ -412,17 +460,17 @@ func (m *Model) renderBindings(bindings []key.Binding) string {
 		lines = append(lines, m.styles.helpKey.Render(help.Key)+" "+m.styles.helpDesc.Render(help.Desc))
 	}
 	if len(lines) == 0 {
-		return m.styles.muted.Render("No key bindings exposed yet.")
+		return m.styles.muted.Render(m.localize("No key bindings exposed yet.", "Пока нет доступных клавиш."))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func (m *Model) renderTranscriptContent(width int) string {
-	if len(m.state.Transcript) == 0 {
-		return m.styles.muted.Render("Transcript is empty.")
+	if len(m.state.Transcript) == 0 && m.state.LiveTurn == nil {
+		return m.styles.muted.Render(m.localize("Transcript is empty.", "Диалог пуст."))
 	}
 	bodyStyle := m.styles.body.Width(maxInt(1, width))
-	blocks := make([]string, 0, len(m.state.Transcript))
+	blocks := make([]string, 0, len(m.state.Transcript)+1)
 	for _, entry := range m.state.Transcript {
 		role := strings.TrimSpace(entry.Role)
 		if role == "" {
@@ -434,9 +482,42 @@ func (m *Model) renderTranscriptContent(width int) string {
 		}
 		blocks = append(blocks, lipgloss.JoinVertical(
 			lipgloss.Left,
-			m.roleStyle(role).Render(strings.ToUpper(role)),
+			m.roleStyle(role).Render(strings.ToUpper(m.displayRole(role))),
 			bodyStyle.Render(body),
 		))
+	}
+	if m.state.LiveTurn != nil {
+		live := m.state.LiveTurn
+		notes := make([]string, 0, len(live.Notes)+1)
+		if strings.TrimSpace(live.Prompt) != "" {
+			blocks = append(blocks, lipgloss.JoinVertical(
+				lipgloss.Left,
+				m.roleStyle("user").Render(strings.ToUpper(m.localize("user", "пользователь"))),
+				bodyStyle.Render(strings.TrimSpace(live.Prompt)),
+			))
+		}
+		if strings.TrimSpace(live.AssistantText) != "" {
+			blocks = append(blocks, lipgloss.JoinVertical(
+				lipgloss.Left,
+				m.roleStyle("assistant").Render(strings.ToUpper(m.localize("assistant", "ассистент"))),
+				bodyStyle.Render(strings.TrimSpace(live.AssistantText)),
+			))
+		}
+		for _, call := range live.ToolCalls {
+			line := fmt.Sprintf("%s %s", fallback(call.ID, "<id>"), call.Function.Name)
+			if args := strings.TrimSpace(call.Function.ArgumentsString()); args != "" {
+				line += "\n" + args
+			}
+			notes = append(notes, line)
+		}
+		notes = append(notes, live.Notes...)
+		if len(notes) > 0 {
+			blocks = append(blocks, lipgloss.JoinVertical(
+				lipgloss.Left,
+				m.roleStyle("tool").Render(strings.ToUpper(m.localize("tool", "инструмент"))),
+				bodyStyle.Render(strings.Join(notes, "\n\n")),
+			))
+		}
 	}
 	return strings.Join(blocks, "\n\n")
 }
@@ -451,6 +532,21 @@ func (m *Model) roleStyle(role string) lipgloss.Style {
 		return m.styles.roleSystem
 	default:
 		return m.styles.roleTool
+	}
+}
+
+func (m *Model) displayRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "user":
+		return m.localize("user", "пользователь")
+	case "assistant":
+		return m.localize("assistant", "ассистент")
+	case "system":
+		return m.localize("system", "система")
+	case "tool":
+		return m.localize("tool", "инструмент")
+	default:
+		return fallback(strings.TrimSpace(role), m.localize("event", "событие"))
 	}
 }
 
@@ -477,15 +573,16 @@ func (m *Model) submitInput() tea.Cmd {
 	m.input.Reset()
 	m.state.InputDraft = ""
 
-	if strings.HasPrefix(draft, "/") {
-		return m.dispatchSlash(draft)
+	prefix := commandPrefix(m.layout.SettingsPath())
+	if strings.HasPrefix(draft, prefix) {
+		return m.dispatchSlash(draft, prefix)
 	}
 
 	m.state.Busy = true
-	m.appendTranscript("user", draft)
-	m.appendTranscript("system", "Running turn...")
-	m.state.Footer = "Running turn..."
+	m.state.LiveTurn = &LiveTurnState{Prompt: draft}
+	m.state.Footer = m.localize("Running turn...", "Выполняется ход...")
 	m.updateStatus()
+	m.refreshViewport()
 	return m.runPromptCmd(draft)
 }
 
@@ -497,25 +594,29 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 	existingSessionPath := m.state.SessionPath
 	layout := m.layout
 
-	return func() tea.Msg {
+	return startTaskCmd(func(eventCh chan<- tea.Msg) {
+		progress := newTaskProgressBridge(eventCh)
+		defer progress.Close()
+		options.OnProgress = progress.Handle
 		result, err := taskrun.Run(context.Background(), options)
 		if err != nil {
-			return taskFinishedMsg{Prompt: prompt, Err: err}
+			eventCh <- taskFinishedMsg{Prompt: prompt, Err: err}
+			return
 		}
 		sessionPath, warn := persistTurn(layout, existingSessionPath, result)
-		return taskFinishedMsg{Prompt: prompt, Result: result, SessionPath: sessionPath, Warn: warn}
-	}
+		eventCh <- taskFinishedMsg{Prompt: prompt, Result: result, SessionPath: sessionPath, Warn: warn}
+	})
 }
 
-func (m *Model) dispatchSlash(line string) tea.Cmd {
-	fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, "/")))
+func (m *Model) dispatchSlash(line string, prefix string) tea.Cmd {
+	fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, prefix)))
 	if len(fields) == 0 {
-		m.appendTranscript("system", "Empty slash command.")
+		m.appendTranscript("system", m.localize("Empty slash command.", "Пустая слэш-команда."))
 		return nil
 	}
-	command, ok := m.catalog.LookupBySlash(fields[0])
+	command, ok := m.resolveSlashCommand(fields[0])
 	if !ok {
-		m.appendTranscript("system", fmt.Sprintf("Unknown slash command: /%s", fields[0]))
+		m.appendTranscript("system", fmt.Sprintf("%s: %s%s", m.localize("Unknown slash command", "Неизвестная слэш-команда"), prefix, fields[0]))
 		return nil
 	}
 	return m.executePaletteCommand(command)
@@ -524,15 +625,16 @@ func (m *Model) dispatchSlash(line string) tea.Cmd {
 func (m *Model) applyTaskResult(msg taskFinishedMsg) {
 	history := cloneRuntimeMessages(msg.Result.FullHistory())
 	m.history = history
-	m.state.Transcript = transcriptFromMessages(history)
+	m.state.LiveTurn = nil
+	m.state.Transcript = transcriptFromMessages(history, m.language)
 	m.state.SessionPath = msg.SessionPath
 	m.state.Model = fallback(msg.Result.Model, m.state.Model)
 	m.state.Provider = fallback(msg.Result.ProviderName, m.state.Provider)
 	m.state.Profile = fallback(msg.Result.Profile, m.state.Profile)
 	m.state.Reasoning = fallback(msg.Result.Reasoning, m.state.Reasoning)
-	m.state.Footer = "Turn complete"
+	m.state.Footer = m.localize("Turn complete", "Ход завершён")
 	if msg.Warn != nil {
-		m.state.Footer = fmt.Sprintf("Turn complete with warning: %v", msg.Warn)
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Turn complete with warning", "Ход завершён с предупреждением"), msg.Warn)
 	}
 	m.updateStatus()
 	m.refreshViewport()
@@ -540,18 +642,27 @@ func (m *Model) applyTaskResult(msg taskFinishedMsg) {
 
 func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 	m.history = cloneRuntimeMessages(msg.Messages)
-	m.state.Transcript = transcriptFromMessages(msg.Messages)
+	m.state.LiveTurn = nil
+	m.state.Transcript = transcriptFromMessages(msg.Messages, m.language)
 	m.state.Model = msg.Meta.Model
 	m.state.Provider = msg.Meta.Provider
 	m.state.Profile = msg.Meta.Profile
 	m.state.Reasoning = msg.Meta.Reasoning
 	if msg.Fork {
 		m.state.SessionPath = ""
-		m.state.Footer = fmt.Sprintf("Forked from %s", msg.Entry.RelPath)
+		m.state.Footer = fmt.Sprintf("%s %s", m.localize("Forked from", "Ответвлено от"), msg.Entry.RelPath)
 	} else {
 		m.state.SessionPath = msg.Entry.Path
-		m.state.Footer = fmt.Sprintf("Loaded %s", msg.Entry.RelPath)
+		m.state.Footer = fmt.Sprintf("%s %s", m.localize("Loaded", "Загружено"), msg.Entry.RelPath)
 	}
+	m.state.Palette = PaletteState{
+		Mode:    PaletteModeRoot,
+		Items:   defaultPaletteItemsForLanguage(m.language),
+		Context: defaultPaletteContextForLanguage(m.language),
+	}
+	m.paletteInput.Reset()
+	m.state.Focus = FocusInput
+	m.applyFocusState()
 	m.updateStatus()
 	m.refreshViewport()
 }
@@ -635,22 +746,22 @@ func (m *Model) settingsPaletteItems() []PaletteItem {
 	settings, _ := loadSettingsOptional(m.layout.SettingsPath())
 	summary := settings.Summary()
 	return []PaletteItem{
-		{Key: "model", Title: "Model", Description: "Inspect active model", Aliases: []string{"/model"}, Keywords: []string{"reasoning", "provider", "profile"}},
-		{Key: "profiles", Title: "Profiles", Description: "Inspect configured profiles", Aliases: []string{"/profiles"}, Keywords: []string{"accounts", "profile", "config"}},
-		{Key: "providers", Title: "Providers", Description: "Inspect configured providers", Aliases: []string{"/providers"}, Keywords: []string{"api", "wire_api", "base_url"}},
-		{Key: "settings.language", Title: "Language", Description: fallback(summary.Language, "<unset>"), Keywords: []string{"locale", "translation"}},
-		{Key: "settings.command_prefix", Title: "Command Prefix", Description: fallback(summary.CommandPrefix, "<unset>"), Keywords: []string{"slash", "prefix", "commands"}},
-		{Key: "settings.hidden_commands", Title: "Hidden Commands", Description: fmt.Sprintf("%d", len(summary.HiddenCommands)), Keywords: []string{"visibility", "commands"}},
+		{Key: "model", Title: m.localize("Model", "Модель"), Description: m.localize("Inspect active model", "Открыть активную модель"), Aliases: []string{"/model", "/модель"}, Keywords: []string{"reasoning", "provider", "profile", "модель", "провайдер"}},
+		{Key: "profiles", Title: m.localize("Profiles", "Профили"), Description: m.localize("Inspect configured profiles", "Открыть профили"), Aliases: []string{"/profiles", "/профили"}, Keywords: []string{"accounts", "profile", "config", "аккаунты", "профиль"}},
+		{Key: "providers", Title: m.localize("Providers", "Провайдеры"), Description: m.localize("Inspect configured providers", "Открыть провайдеры"), Aliases: []string{"/providers", "/провайдеры"}, Keywords: []string{"api", "wire_api", "base_url", "провайдер"}},
+		{Key: "settings.language", Title: m.localize("Language", "Язык"), Description: fallback(summary.Language, localizedUnsetTUI(m.language)), Keywords: []string{"locale", "translation", "язык"}},
+		{Key: "settings.command_prefix", Title: m.localize("Command Prefix", "Префикс команд"), Description: fallback(summary.CommandPrefix, localizedUnsetTUI(m.language)), Keywords: []string{"slash", "prefix", "commands", "префикс"}},
+		{Key: "settings.hidden_commands", Title: m.localize("Hidden Commands", "Скрытые команды"), Description: fmt.Sprintf("%d", len(summary.HiddenCommands)), Keywords: []string{"visibility", "commands", "скрытые"}},
 	}
 }
 
 func (m *Model) modelPaletteItems() []PaletteItem {
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
 	return []PaletteItem{
-		{Key: "model.value", Title: "Model", Description: fallback(m.state.Model, config.EffectiveModel()), Keywords: []string{"active", "slug", "model"}},
-		{Key: "model.provider", Title: "Provider", Description: fallback(m.state.Provider, config.EffectiveProviderName()), Keywords: []string{"api", "provider"}},
-		{Key: "model.profile", Title: "Profile", Description: fallback(m.state.Profile, config.ActiveProfileName()), Keywords: []string{"account", "profile"}},
-		{Key: "model.reasoning", Title: "Reasoning", Description: fallback(m.state.Reasoning, config.EffectiveReasoningEffort()), Keywords: []string{"effort", "thinking", "reasoning"}},
+		{Key: "model.value", Title: m.localize("Model", "Модель"), Description: fallback(m.state.Model, config.EffectiveModel()), Keywords: []string{"active", "slug", "model", "модель"}},
+		{Key: "model.provider", Title: m.localize("Provider", "Провайдер"), Description: fallback(m.state.Provider, config.EffectiveProviderName()), Keywords: []string{"api", "provider", "провайдер"}},
+		{Key: "model.profile", Title: m.localize("Profile", "Профиль"), Description: fallback(m.state.Profile, config.ActiveProfileName()), Keywords: []string{"account", "profile", "профиль"}},
+		{Key: "model.reasoning", Title: m.localize("Reasoning", "Размышления"), Description: fallback(m.state.Reasoning, config.EffectiveReasoningEffort()), Keywords: []string{"effort", "thinking", "reasoning", "размышления"}},
 	}
 }
 
@@ -658,12 +769,19 @@ func (m *Model) profilesPaletteItems() []PaletteItem {
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
 	items := []PaletteItem{}
 	if len(config.Profiles) == 0 {
-		return append(items, PaletteItem{Key: "profiles.empty", Title: "No Profiles", Description: "No configured profiles found"})
+		return append(items, PaletteItem{Key: "profiles.empty", Title: m.localize("No Profiles", "Нет профилей"), Description: m.localize("No configured profiles found", "Профили не настроены")})
 	}
 	for _, profile := range config.Profiles {
-		description := fmt.Sprintf("model=%s provider=%s reasoning=%s", fallback(profile.Model, "<unset>"), fallback(profile.Provider, "<unset>"), fallback(profile.ReasoningEffort, "<unset>"))
+		description := localizedTextTUI(
+			m.language,
+			"model=%s provider=%s reasoning=%s",
+			"модель=%s провайдер=%s размышления=%s",
+			fallback(profile.Model, localizedUnsetTUI(m.language)),
+			fallback(profile.Provider, localizedUnsetTUI(m.language)),
+			fallback(profile.ReasoningEffort, localizedUnsetTUI(m.language)),
+		)
 		if profile.Name == config.ActiveProfileName() {
-			description += " · active"
+			description += m.localize(" · active", " · активен")
 		}
 		items = append(items, PaletteItem{Key: "profiles.entry", Title: profile.Name, Description: description, Keywords: []string{profile.Provider, profile.Model, profile.ReasoningEffort}})
 	}
@@ -674,13 +792,13 @@ func (m *Model) providersPaletteItems() []PaletteItem {
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
 	items := []PaletteItem{}
 	if len(config.ModelProviders) == 0 {
-		return append(items, PaletteItem{Key: "providers.empty", Title: "No Providers", Description: "No configured providers found"})
+		return append(items, PaletteItem{Key: "providers.empty", Title: m.localize("No Providers", "Нет провайдеров"), Description: m.localize("No configured providers found", "Провайдеры не настроены")})
 	}
 	for _, provider := range config.ModelProviders {
 		items = append(items, PaletteItem{
 			Key:         "providers.entry",
 			Title:       provider.Name,
-			Description: fmt.Sprintf("base_url=%s wire_api=%s", fallback(provider.BaseURL, "<unset>"), fallback(provider.WireAPI, "chat_completions")),
+			Description: fmt.Sprintf("base_url=%s wire_api=%s", fallback(provider.BaseURL, localizedUnsetTUI(m.language)), fallback(provider.WireAPI, "chat_completions")),
 			Keywords:    []string{provider.BaseURL, provider.WireAPI},
 		})
 	}
@@ -688,19 +806,19 @@ func (m *Model) providersPaletteItems() []PaletteItem {
 }
 
 func (m *Model) paletteBackItem() PaletteItem {
-	context := normalizePaletteContext(m.state.Palette.Context)
-	return PaletteItem{Key: "__back", Title: context.BackTitle, Description: context.BackDescription, Keywords: []string{"back", "close", "return"}}
+	context := normalizePaletteContextForLanguage(m.state.Palette.Context, m.language)
+	return PaletteItem{Key: "__back", Title: context.BackTitle, Description: context.BackDescription, Keywords: []string{"back", "close", "return", "назад", "закрыть"}}
 }
 
 func (m *Model) paletteHint() string {
-	return normalizePaletteContext(m.state.Palette.Context).BackHint
+	return normalizePaletteContextForLanguage(m.state.Palette.Context, m.language).BackHint
 }
 
 func (m *Model) rootPaletteItems() []PaletteItem {
 	if m.catalog == nil {
 		m.catalog = defaultPaletteCatalog()
 	}
-	return clonePaletteItems(m.catalog.RootItems())
+	return m.catalog.RootItems(m.language, "")
 }
 
 func (m *Model) decoratePaletteItems(mode PaletteMode, items []PaletteItem) []PaletteItem {
@@ -716,9 +834,9 @@ func (m *Model) decoratePaletteItems(mode PaletteMode, items []PaletteItem) []Pa
 }
 
 func (m *Model) nextPaletteContext(mode PaletteMode, pushCurrent bool) PaletteContext {
-	context := defaultPaletteContext()
+	context := defaultPaletteContextForLanguage(m.language)
 	if m.state.Palette.Visible {
-		context.ReturnFocus = normalizePaletteContext(m.state.Palette.Context).ReturnFocus
+		context.ReturnFocus = normalizePaletteContextForLanguage(m.state.Palette.Context, m.language).ReturnFocus
 	} else {
 		context.ReturnFocus = normalizeFocus(m.state.Focus)
 		if context.ReturnFocus == FocusPalette {
@@ -728,29 +846,35 @@ func (m *Model) nextPaletteContext(mode PaletteMode, pushCurrent bool) PaletteCo
 	if !m.state.Palette.Visible || !pushCurrent {
 		return context
 	}
-	context.BackTitle, context.BackDescription = paletteBackCopyForMode(m.state.Palette.Mode)
-	context.BackHint = "Enter select · Esc back"
+	context.BackTitle, context.BackDescription = paletteBackCopyForMode(m.state.Palette.Mode, m.language)
+	context.BackHint = m.localize("Enter select · Esc back", "Enter выбрать · Esc назад")
 	return context
 }
 
-func paletteBackCopyForMode(mode PaletteMode) (string, string) {
+func paletteBackCopyForMode(mode PaletteMode, language commandcatalog.CatalogLanguage) (string, string) {
+	localize := func(english string, russian string) string {
+		if language == commandcatalog.CatalogLanguageRussian {
+			return russian
+		}
+		return english
+	}
 	switch mode {
 	case PaletteModeSettings:
-		return "Back to Settings", "Return to settings"
+		return localize("Back to Settings", "Назад к настройкам"), localize("Return to settings", "Вернуться к настройкам")
 	case PaletteModeRoot:
-		return "Back to Palette", "Return to command palette"
+		return localize("Back to Palette", "Назад к палитре"), localize("Return to command palette", "Вернуться к палитре команд")
 	case PaletteModeModel:
-		return "Back to Model", "Return to model details"
+		return localize("Back to Model", "Назад к модели"), localize("Return to model details", "Вернуться к модели")
 	case PaletteModeProfiles:
-		return "Back to Profiles", "Return to profiles"
+		return localize("Back to Profiles", "Назад к профилям"), localize("Return to profiles", "Вернуться к профилям")
 	case PaletteModeProviders:
-		return "Back to Providers", "Return to providers"
+		return localize("Back to Providers", "Назад к провайдерам"), localize("Return to providers", "Вернуться к провайдерам")
 	case PaletteModeResume:
-		return "Back to Resume", "Return to saved sessions"
+		return localize("Back to Resume", "Назад к продолжению"), localize("Return to saved sessions", "Вернуться к сохранённым сессиям")
 	case PaletteModeFork:
-		return "Back to Fork", "Return to fork browser"
+		return localize("Back to Fork", "Назад к ответвлению"), localize("Return to fork browser", "Вернуться к списку ответвлений")
 	default:
-		return "Back to Chat", "Return to transcript"
+		return localize("Back to Chat", "Назад в чат"), localize("Return to transcript", "Вернуться к диалогу")
 	}
 }
 
@@ -906,7 +1030,7 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec) tea.Cmd {
 		return nil
 	case PaletteActionShowHelp:
 		m.appendTranscript("system", m.helpText())
-		m.state.Footer = "Help opened"
+		m.state.Footer = m.localize("Help opened", "Открыта помощь")
 		if m.state.Palette.Visible {
 			return m.closePalette()
 		}
@@ -928,7 +1052,7 @@ func (m *Model) togglePalette() tea.Cmd {
 }
 
 func (m *Model) closePalette() tea.Cmd {
-	returnFocus := normalizePaletteContext(m.state.Palette.Context).ReturnFocus
+	returnFocus := normalizePaletteContextForLanguage(m.state.Palette.Context, m.language).ReturnFocus
 	if returnFocus == FocusPalette {
 		returnFocus = FocusInput
 	}
@@ -937,7 +1061,7 @@ func (m *Model) closePalette() tea.Cmd {
 	m.state.Palette.Query = ""
 	m.state.Palette.Selected = 0
 	m.state.Palette.Items = m.rootPaletteItems()
-	m.state.Palette.Context = defaultPaletteContext()
+	m.state.Palette.Context = defaultPaletteContextForLanguage(m.language)
 	m.state.Palette.SelectedToken = ""
 	m.state.Palette.Stack = nil
 	m.paletteInput.Reset()
@@ -971,6 +1095,9 @@ func (m *Model) updatePalette(msg tea.Msg) tea.Cmd {
 	previousToken := m.state.Palette.SelectedToken
 	m.paletteInput, cmd = m.paletteInput.Update(msg)
 	m.state.Palette.Query = m.paletteInput.Value()
+	if m.state.Palette.Mode == PaletteModeRoot {
+		m.state.Palette.Items = m.rootPaletteItemsForQuery(m.state.Palette.Query)
+	}
 	m.state.Palette.SelectedToken = previousToken
 	m.syncPaletteSelection()
 	return cmd
@@ -987,6 +1114,14 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 		return m.loadSessionCmd(item.Value, false)
 	case PaletteModeFork:
 		return m.loadSessionCmd(item.Value, true)
+	case PaletteModeSettings:
+		switch item.Key {
+		case "settings.language":
+			return m.toggleSettingsLanguage()
+		case "settings.command_prefix":
+			return m.cycleCommandPrefix()
+		}
+		return nil
 	default:
 		if item.Key != "__back" {
 			if command, ok := m.catalog.LookupByKey(item.Key); ok {
@@ -1014,6 +1149,9 @@ func (m *Model) filteredPaletteItems() []PaletteItem {
 	items := m.state.Palette.Items
 	if len(items) == 0 {
 		items = m.rootPaletteItems()
+	}
+	if m.state.Palette.Mode == PaletteModeRoot {
+		items = m.rootPaletteItemsForQuery(m.state.Palette.Query)
 	}
 	tokens := tokenizePaletteQuery(m.state.Palette.Query)
 	if len(tokens) == 0 {
@@ -1116,32 +1254,32 @@ func (m *Model) applyFocusState() tea.Cmd {
 func (m *Model) focusLabel() string {
 	switch m.state.Focus {
 	case FocusStatus:
-		return "status pane"
+		return m.localize("status pane", "панель статуса")
 	case FocusTranscript:
-		return "transcript viewport"
+		return m.localize("transcript viewport", "область диалога")
 	case FocusPalette:
-		return "command palette"
+		return m.localize("command palette", "палитра команд")
 	default:
-		return "input area"
+		return m.localize("input area", "область ввода")
 	}
 }
 
 func (m *Model) paletteTitle() string {
 	switch m.state.Palette.Mode {
 	case PaletteModeResume:
-		return "Resume Session"
+		return m.localize("Resume Session", "Продолжить сессию")
 	case PaletteModeFork:
-		return "Fork Session"
+		return m.localize("Fork Session", "Ответвить сессию")
 	case PaletteModeModel:
-		return "Model"
+		return m.localize("Model", "Модель")
 	case PaletteModeProfiles:
-		return "Profiles"
+		return m.localize("Profiles", "Профили")
 	case PaletteModeProviders:
-		return "Providers"
+		return m.localize("Providers", "Провайдеры")
 	case PaletteModeSettings:
-		return "Settings"
+		return m.localize("Settings", "Настройки")
 	default:
-		return "Command Palette"
+		return m.localize("Command Palette", "Палитра команд")
 	}
 }
 
@@ -1150,12 +1288,12 @@ func (m *Model) loadLatestSessionCmd(fork bool) tea.Cmd {
 		entries, err := appstate.LoadSessions(m.layout.SessionsDir(), 1)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return sessionLoadedMsg{Err: fmt.Errorf("no saved sessions found")}
+				return sessionLoadedMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
 			}
 			return sessionLoadedMsg{Err: err}
 		}
 		if len(entries) == 0 {
-			return sessionLoadedMsg{Err: fmt.Errorf("no saved sessions found")}
+			return sessionLoadedMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
 		}
 		entry := entries[0]
 		meta, messages, err := appstate.LoadSession(entry.Path)
@@ -1166,7 +1304,7 @@ func (m *Model) loadLatestSessionCmd(fork bool) tea.Cmd {
 func (m *Model) loadSessionCmd(path string, fork bool) tea.Cmd {
 	return func() tea.Msg {
 		if strings.TrimSpace(path) == "" {
-			return sessionLoadedMsg{Err: fmt.Errorf("session path is empty")}
+			return sessionLoadedMsg{Err: errors.New(m.localize("session path is empty", "путь к сессии пуст"))}
 		}
 		entryInfo, err := os.Stat(path)
 		if err != nil {
@@ -1183,12 +1321,12 @@ func (m *Model) openSessionsPalette(fork bool, pushCurrent bool) tea.Cmd {
 		entries, err := appstate.LoadSessions(m.layout.SessionsDir(), 20)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return paletteItemsMsg{Err: fmt.Errorf("no saved sessions found")}
+				return paletteItemsMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
 			}
 			return paletteItemsMsg{Err: err}
 		}
 		if len(entries) == 0 {
-			return paletteItemsMsg{Err: fmt.Errorf("no saved sessions found")}
+			return paletteItemsMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
 		}
 		items := make([]PaletteItem, 0, len(entries))
 		for _, entry := range entries {
@@ -1200,10 +1338,10 @@ func (m *Model) openSessionsPalette(fork bool, pushCurrent bool) tea.Cmd {
 			})
 		}
 		mode := PaletteModeResume
-		footer := "Select a saved session to resume"
+		footer := m.localize("Select a saved session to resume", "Выберите сохранённую сессию для продолжения")
 		if fork {
 			mode = PaletteModeFork
-			footer = "Select a saved session to fork"
+			footer = m.localize("Select a saved session to fork", "Выберите сохранённую сессию для ответвления")
 		}
 		return paletteItemsMsg{Mode: mode, Items: items, Footer: footer, PushCurrent: pushCurrent}
 	}
@@ -1211,9 +1349,10 @@ func (m *Model) openSessionsPalette(fork bool, pushCurrent bool) tea.Cmd {
 
 func (m *Model) resetConversation() {
 	m.history = nil
-	m.state.Transcript = DefaultState().Transcript
+	m.state.LiveTurn = nil
+	m.state.Transcript = defaultStateForLanguage(m.language).Transcript
 	m.state.SessionPath = ""
-	m.state.Footer = "Started a new session"
+	m.state.Footer = m.localize("Started a new session", "Начата новая сессия")
 	m.updateStatus()
 	m.refreshViewport()
 }
@@ -1228,11 +1367,11 @@ func (m *Model) appendTranscript(role string, body string) {
 }
 
 func (m *Model) helpText() string {
-	return m.catalog.HelpText(commandPrefix(m.layout.SettingsPath()))
+	return m.catalog.HelpText(commandPrefix(m.layout.SettingsPath()), m.language, m.state.Palette.Query)
 }
 
 func (m *Model) statusSummary() string {
-	lines := []string{"Runtime status:"}
+	lines := []string{m.localize("Runtime status:", "Состояние рантайма:")}
 	for _, item := range m.state.Status {
 		lines = append(lines, fmt.Sprintf("- %s: %s", item.Label, item.Value))
 	}
@@ -1241,22 +1380,31 @@ func (m *Model) statusSummary() string {
 
 func (m *Model) modelSummary() string {
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
-	lines := []string{"Model summary:", fmt.Sprintf("- model: %s", fallback(m.state.Model, config.EffectiveModel())), fmt.Sprintf("- provider: %s", fallback(m.state.Provider, config.EffectiveProviderName())), fmt.Sprintf("- profile: %s", fallback(m.state.Profile, config.ActiveProfileName())), fmt.Sprintf("- reasoning: %s", fallback(m.state.Reasoning, config.EffectiveReasoningEffort()))}
+	lines := []string{m.localize("Model summary:", "Сводка по модели:"), fmt.Sprintf("- %s: %s", m.localize("model", "модель"), fallback(m.state.Model, config.EffectiveModel())), fmt.Sprintf("- %s: %s", m.localize("provider", "провайдер"), fallback(m.state.Provider, config.EffectiveProviderName())), fmt.Sprintf("- %s: %s", m.localize("profile", "профиль"), fallback(m.state.Profile, config.ActiveProfileName())), fmt.Sprintf("- %s: %s", m.localize("reasoning", "размышления"), fallback(m.state.Reasoning, config.EffectiveReasoningEffort()))}
 	return strings.Join(lines, "\n")
 }
 
 func (m *Model) profilesSummary() string {
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
 	if len(config.Profiles) == 0 {
-		return "Profiles: none"
+		return m.localize("Profiles: none", "Профили: нет")
 	}
-	lines := []string{"Profiles:"}
+	lines := []string{m.localize("Profiles:", "Профили:")}
 	for _, profile := range config.Profiles {
 		suffix := ""
 		if profile.Name == config.ActiveProfileName() {
-			suffix = " (active)"
+			suffix = m.localize(" (active)", " (активен)")
 		}
-		lines = append(lines, fmt.Sprintf("- %s%s model=%s provider=%s reasoning=%s", profile.Name, suffix, fallback(profile.Model, "<unset>"), fallback(profile.Provider, "<unset>"), fallback(profile.ReasoningEffort, "<unset>")))
+		lines = append(lines, localizedTextTUI(
+			m.language,
+			"- %s%s model=%s provider=%s reasoning=%s",
+			"- %s%s модель=%s провайдер=%s размышления=%s",
+			profile.Name,
+			suffix,
+			fallback(profile.Model, localizedUnsetTUI(m.language)),
+			fallback(profile.Provider, localizedUnsetTUI(m.language)),
+			fallback(profile.ReasoningEffort, localizedUnsetTUI(m.language)),
+		))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1264,11 +1412,11 @@ func (m *Model) profilesSummary() string {
 func (m *Model) providersSummary() string {
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
 	if len(config.ModelProviders) == 0 {
-		return "Providers: none"
+		return m.localize("Providers: none", "Провайдеры: нет")
 	}
-	lines := []string{"Providers:"}
+	lines := []string{m.localize("Providers:", "Провайдеры:")}
 	for _, provider := range config.ModelProviders {
-		lines = append(lines, fmt.Sprintf("- %s base_url=%s wire_api=%s", provider.Name, fallback(provider.BaseURL, "<unset>"), fallback(provider.WireAPI, "chat_completions")))
+		lines = append(lines, fmt.Sprintf("- %s base_url=%s wire_api=%s", provider.Name, fallback(provider.BaseURL, localizedUnsetTUI(m.language)), fallback(provider.WireAPI, "chat_completions")))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1276,28 +1424,40 @@ func (m *Model) providersSummary() string {
 func (m *Model) settingsSummary() string {
 	settings, _ := loadSettingsOptional(m.layout.SettingsPath())
 	summary := settings.Summary()
-	lines := []string{"Settings:", fmt.Sprintf("- language: %s", fallback(summary.Language, "<unset>")), fmt.Sprintf("- command_prefix: %s", fallback(summary.CommandPrefix, "<unset>")), fmt.Sprintf("- hidden_commands: %d", len(summary.HiddenCommands))}
+	lines := []string{
+		m.localize("Settings:", "Настройки:"),
+		fmt.Sprintf("- %s: %s", m.localize("language", "язык"), fallback(summary.Language, localizedUnsetTUI(m.language))),
+		fmt.Sprintf("- %s: %s", m.localize("command prefix", "префикс команд"), fallback(summary.CommandPrefix, localizedUnsetTUI(m.language))),
+		fmt.Sprintf("- %s: %d", m.localize("hidden commands", "скрытые команды"), len(summary.HiddenCommands)),
+	}
 	return strings.Join(lines, "\n")
 }
 
 func buildStatusItems(layout apphome.Layout, state State, historyLen int) []StatusItem {
-	sessionValue := "fresh"
+	language := normalizeTUILanguage(state.Language)
+	localize := func(english string, russian string) string {
+		if language == commandcatalog.CatalogLanguageRussian {
+			return russian
+		}
+		return english
+	}
+	sessionValue := localize("fresh", "новая")
 	if strings.TrimSpace(state.SessionPath) != "" {
 		sessionValue = filepath.Base(state.SessionPath)
 	}
 	return []StatusItem{
-		{Label: "Model", Value: fallback(state.Model, "<unset>")},
-		{Label: "Provider", Value: fallback(state.Provider, "<unset>")},
-		{Label: "Profile", Value: fallback(state.Profile, "<unset>")},
-		{Label: "Reasoning", Value: fallback(state.Reasoning, "<unset>")},
-		{Label: "Session", Value: sessionValue},
-		{Label: "History", Value: fmt.Sprintf("%d", historyLen)},
-		{Label: "Home", Value: layout.CodexHome()},
+		{Label: localize("Model", "Модель"), Value: fallback(state.Model, localizedUnsetTUI(language))},
+		{Label: localize("Provider", "Провайдер"), Value: fallback(state.Provider, localizedUnsetTUI(language))},
+		{Label: localize("Profile", "Профиль"), Value: fallback(state.Profile, localizedUnsetTUI(language))},
+		{Label: localize("Reasoning", "Размышления"), Value: fallback(state.Reasoning, localizedUnsetTUI(language))},
+		{Label: localize("Session", "Сессия"), Value: sessionValue},
+		{Label: localize("History", "История"), Value: fmt.Sprintf("%d", historyLen)},
+		{Label: localize("Home", "Каталог"), Value: layout.CodexHome()},
 	}
 }
 
-func buildFooter(settings appstate.Settings) string {
-	return fmt.Sprintf("Enter submit · Ctrl+P palette · %shelp slash help", commandPrefixFromSettings(settings))
+func buildFooter(settings appstate.Settings, language commandcatalog.CatalogLanguage) string {
+	return localizedTextTUI(language, "Enter submit · Ctrl+P palette · %shelp slash help", "Enter отправить · Ctrl+P палитра · %sпомощь слэш-команды", commandPrefixFromSettings(settings))
 }
 
 func commandPrefix(settingsPath string) string {
@@ -1313,7 +1473,7 @@ func commandPrefixFromSettings(settings appstate.Settings) string {
 	return prefix
 }
 
-func transcriptFromMessages(messages []runtimeapi.Message) []TranscriptEntry {
+func transcriptFromMessages(messages []runtimeapi.Message, language commandcatalog.CatalogLanguage) []TranscriptEntry {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -1323,7 +1483,7 @@ func transcriptFromMessages(messages []runtimeapi.Message) []TranscriptEntry {
 			entries = append(entries, TranscriptEntry{Role: string(message.Role), Body: text})
 		}
 		for _, call := range message.ToolCalls {
-			body := fmt.Sprintf("tool call %s %s", fallback(call.ID, "<id>"), call.Function.Name)
+			body := fmt.Sprintf("%s %s %s", localizedTextTUI(language, "tool call", "вызов инструмента"), fallback(call.ID, "<id>"), call.Function.Name)
 			arguments := strings.TrimSpace(call.Function.ArgumentsString())
 			if arguments != "" {
 				body += "\n" + arguments
@@ -1379,6 +1539,261 @@ func fallback(value string, fallbackValue string) string {
 		return fallbackValue
 	}
 	return value
+}
+
+func (m *Model) localize(english string, russian string) string {
+	if m.language == commandcatalog.CatalogLanguageRussian {
+		return russian
+	}
+	return english
+}
+
+func localizedTextTUI(language commandcatalog.CatalogLanguage, english string, russian string, args ...any) string {
+	template := english
+	if language == commandcatalog.CatalogLanguageRussian {
+		template = russian
+	}
+	return fmt.Sprintf(template, args...)
+}
+
+func localizedUnsetTUI(language commandcatalog.CatalogLanguage) string {
+	return localizedTextTUI(language, "<unset>", "<не задано>")
+}
+
+func normalizeTUILanguage(value string) commandcatalog.CatalogLanguage {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "ru", "русский":
+		return commandcatalog.CatalogLanguageRussian
+	case "en", "english":
+		return commandcatalog.CatalogLanguageEnglish
+	default:
+		return commandcatalog.CatalogLanguageEnglish
+	}
+}
+
+func defaultStateForLanguage(language commandcatalog.CatalogLanguage) State {
+	state := DefaultState()
+	state.Language = string(language)
+	state.Title = "Go Lavilas"
+	state.Transcript = []TranscriptEntry{
+		{Role: "system", Body: localizedTextTUI(language, "Go Lavilas alpha TUI loaded.", "Загружен Go Lavilas alpha TUI.")},
+		{Role: "assistant", Body: localizedTextTUI(language, "Type a prompt and press Enter. Ctrl+P opens the command palette.", "Введите запрос и нажмите Enter. Ctrl+P открывает палитру команд.")},
+	}
+	state.Palette.Items = defaultPaletteItemsForLanguage(language)
+	state.Palette.Context = defaultPaletteContextForLanguage(language)
+	state.Footer = localizedTextTUI(language, "Enter submit · Ctrl+P palette · Tab focus · Esc close", "Enter отправить · Ctrl+P палитра · Tab фокус · Esc закрыть")
+	return state
+}
+
+func startTaskCmd(run func(chan<- tea.Msg)) tea.Cmd {
+	eventCh := make(chan tea.Msg, 128)
+	go func() {
+		defer close(eventCh)
+		run(eventCh)
+	}()
+	return waitTaskEventCmd(eventCh)
+}
+
+const taskProgressSnapshotThrottle = 40 * time.Millisecond
+
+type taskProgressBridge struct {
+	eventCh chan<- tea.Msg
+	done    chan struct{}
+	wg      sync.WaitGroup
+	mu      sync.Mutex
+	latest  *taskrun.ProgressUpdate
+}
+
+func newTaskProgressBridge(eventCh chan<- tea.Msg) *taskProgressBridge {
+	bridge := &taskProgressBridge{
+		eventCh: eventCh,
+		done:    make(chan struct{}),
+	}
+	bridge.wg.Add(1)
+	go bridge.loop()
+	return bridge
+}
+
+func (b *taskProgressBridge) Handle(update taskrun.ProgressUpdate) {
+	if update.Kind != taskrun.ProgressKindAssistantSnapshot {
+		b.eventCh <- taskProgressMsg{Update: update}
+		return
+	}
+	copy := update
+	b.mu.Lock()
+	b.latest = &copy
+	b.mu.Unlock()
+}
+
+func (b *taskProgressBridge) Close() {
+	close(b.done)
+	b.wg.Wait()
+}
+
+func (b *taskProgressBridge) loop() {
+	defer b.wg.Done()
+	ticker := time.NewTicker(taskProgressSnapshotThrottle)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			b.flush()
+		case <-b.done:
+			b.flush()
+			return
+		}
+	}
+}
+
+func (b *taskProgressBridge) flush() {
+	b.mu.Lock()
+	latest := b.latest
+	b.latest = nil
+	b.mu.Unlock()
+	if latest == nil {
+		return
+	}
+	b.eventCh <- taskProgressMsg{Update: *latest}
+}
+
+func waitTaskEventCmd(eventCh <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		message, ok := <-eventCh
+		if !ok {
+			return nil
+		}
+		return taskEventMsg{Inner: message, Next: eventCh}
+	}
+}
+
+func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) {
+	if m.state.LiveTurn == nil {
+		m.state.LiveTurn = &LiveTurnState{}
+	}
+	live := m.state.LiveTurn
+	if update.Round > 0 {
+		live.Round = update.Round
+	}
+	if strings.TrimSpace(update.Prompt) != "" {
+		live.Prompt = update.Prompt
+	}
+	switch update.Kind {
+	case taskrun.ProgressKindTurnStarted:
+		if update.Round <= 1 && strings.TrimSpace(update.Prompt) != "" {
+			live.Prompt = update.Prompt
+		}
+		m.state.Footer = m.localize("Running turn...", "Выполняется ход...")
+	case taskrun.ProgressKindAssistantSnapshot:
+		live.AssistantText = update.Snapshot.Text
+		live.ToolCalls = cloneRuntimeToolCalls(update.Snapshot.ToolCalls)
+	case taskrun.ProgressKindToolPlanned:
+		if update.ToolPlan != nil {
+			live.Notes = append(live.Notes, fmt.Sprintf("%s %d / %d", m.localize("Tool batches:", "Пакеты инструментов:"), update.ToolPlan.Summary.BatchCount, update.ToolPlan.Summary.CallCount))
+		}
+	case taskrun.ProgressKindApprovalRequired:
+		if update.ApprovalRequest != nil {
+			live.Notes = append(live.Notes, fmt.Sprintf("%s %s (%s)", m.localize("Approval status for", "Статус подтверждения для"), update.ApprovalRequest.Name, localizedToolStatusTUI(m.language, string(update.ApprovalRequest.Status))))
+		}
+	case taskrun.ProgressKindToolResult:
+		if update.ToolResult != nil {
+			live.Notes = append(live.Notes, fmt.Sprintf("%s %s -> %s", m.localize("Tool", "Инструмент"), update.ToolResult.Name, localizedToolStatusTUI(m.language, string(update.ToolResult.Status))))
+		}
+	case taskrun.ProgressKindRetryScheduled:
+		if update.RetryAfter > 0 {
+			live.Notes = append(live.Notes, fmt.Sprintf("%s %s", m.localize("Retry after", "Повтор через"), update.RetryAfter))
+		}
+	}
+	m.state.LiveTurn = live
+	m.updateStatus()
+	m.refreshViewport()
+}
+
+func localizedToolStatusTUI(language commandcatalog.CatalogLanguage, status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "succeeded":
+		return localizedTextTUI(language, "succeeded", "успешно")
+	case "failed":
+		return localizedTextTUI(language, "failed", "ошибка")
+	case "approval_required":
+		return localizedTextTUI(language, "approval required", "нужно подтверждение")
+	case "denied":
+		return localizedTextTUI(language, "denied", "запрещено")
+	default:
+		return fallback(strings.TrimSpace(status), localizedTextTUI(language, "unknown", "неизвестно"))
+	}
+}
+
+func (m *Model) toggleSettingsLanguage() tea.Cmd {
+	settingsPath := m.layout.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
+		return nil
+	}
+	next := "ru"
+	if normalizeTUILanguage(settings.Language) == commandcatalog.CatalogLanguageRussian {
+		next = "en"
+	}
+	settings.SetLanguage(next)
+	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
+		return nil
+	}
+	m.language = normalizeTUILanguage(next)
+	m.state.Language = string(m.language)
+	m.state.Title = "Go Lavilas"
+	m.input.Placeholder = localizedTextTUI(m.language, "Send a message to the Go alpha session", "Введите сообщение в Go Lavilas alpha")
+	m.paletteInput.Placeholder = localizedTextTUI(m.language, "Type to filter items", "Введите запрос для фильтрации")
+	m.state.Palette.Items = m.settingsPaletteItems()
+	m.state.Palette.Context = normalizePaletteContextForLanguage(m.state.Palette.Context, m.language)
+	m.state.Footer = localizedTextTUI(m.language, "Language updated", "Язык обновлён")
+	m.syncPaletteSelection()
+	m.updateStatus()
+	m.refreshViewport()
+	return nil
+}
+
+func (m *Model) cycleCommandPrefix() tea.Cmd {
+	settingsPath := m.layout.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
+		return nil
+	}
+	current := commandPrefixFromSettings(settings)
+	next := "."
+	if current == "." {
+		next = "/"
+	}
+	settings.SetCommandPrefix(next)
+	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
+		return nil
+	}
+	m.state.Palette.Items = m.settingsPaletteItems()
+	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Command prefix updated", "Префикс команд обновлён"), next)
+	m.syncPaletteSelection()
+	m.updateStatus()
+	m.refreshViewport()
+	return nil
+}
+
+func (m *Model) rootPaletteItemsForQuery(query string) []PaletteItem {
+	if m.catalog == nil {
+		m.catalog = defaultPaletteCatalog()
+	}
+	return m.catalog.RootItems(m.language, query)
+}
+
+func (m *Model) resolveSlashCommand(name string) (PaletteCommandSpec, bool) {
+	needle := strings.TrimSpace(name)
+	if needle == "" {
+		return PaletteCommandSpec{}, false
+	}
+	if m.catalog == nil {
+		m.catalog = defaultPaletteCatalog()
+	}
+	return m.catalog.LookupBySlash(needle)
 }
 
 func buildSessionEntry(root string, path string, info os.FileInfo) appstate.SessionEntry {

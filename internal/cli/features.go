@@ -15,13 +15,14 @@ type alphaFeature struct {
 }
 
 func runFeatures(args []string) int {
+	language := currentCatalogLanguage()
 	jsonOutput := false
 	for _, arg := range args {
 		switch arg {
 		case "--json":
 			jsonOutput = true
 		default:
-			fmt.Fprintf(os.Stderr, "features: unknown flag %q\n", arg)
+			fmt.Fprintf(os.Stderr, "%s: %s %q\n", localizedText(language, "features", "фичи"), localizedText(language, "unknown flag", "неизвестный флаг"), arg)
 			return 2
 		}
 	}
@@ -33,7 +34,7 @@ func runFeatures(args []string) int {
 	}{
 		Version:  version.Version,
 		Channel:  version.Channel,
-		Features: alphaFeatures(),
+		Features: alphaFeatures(language),
 	}
 
 	if jsonOutput {
@@ -41,75 +42,81 @@ func runFeatures(args []string) int {
 	}
 
 	fmt.Printf("Go Lavilas %s (%s)\n", payload.Version, payload.Channel)
-	fmt.Println("Alpha feature matrix:")
-	fmt.Printf("%-20s %-10s %-28s %s\n", "feature", "status", "command", "summary")
+	fmt.Println(localizedText(language, "Alpha feature matrix:", "Матрица alpha-функций:"))
+	fmt.Printf("%-20s %-10s %-28s %s\n",
+		localizedText(language, "feature", "функция"),
+		localizedText(language, "status", "статус"),
+		localizedText(language, "command", "команда"),
+		localizedText(language, "summary", "сводка"),
+	)
 	for _, feature := range payload.Features {
 		fmt.Printf("%-20s %-10s %-28s %s\n", feature.Name, feature.Status, feature.Command, feature.Summary)
 	}
 	return 0
 }
 
-func alphaFeatures() []alphaFeature {
+func alphaFeatures(language CatalogLanguage) []alphaFeature {
+	available := localizedText(language, "available", "доступно")
 	return []alphaFeature{
 		{
 			Name:    "interactive_chat",
-			Status:  "available",
+			Status:  available,
 			Command: "chat",
-			Summary: "Bubble Tea TUI chat session with palette and session loading.",
+			Summary: localizedText(language, "Bubble Tea TUI chat session with palette and session loading.", "TUI-чат на Bubble Tea с палитрой команд и загрузкой сессий."),
 		},
 		{
 			Name:    "one_shot_tasks",
-			Status:  "available",
+			Status:  available,
 			Command: "run",
-			Summary: "Single prompt execution without entering chat.",
+			Summary: localizedText(language, "Single prompt execution without entering chat.", "Разовый запуск запроса без входа в чат."),
 		},
 		{
 			Name:    "session_resume",
-			Status:  "available",
+			Status:  available,
 			Command: "resume, fork",
-			Summary: "Resume or branch from stored sessions.",
+			Summary: localizedText(language, "Resume or branch from stored sessions.", "Продолжение и ответвление сохранённых сессий."),
 		},
 		{
 			Name:    "review_apply",
-			Status:  "available",
+			Status:  available,
 			Command: "review, apply",
-			Summary: "Review diffs and apply patches from stdin or file.",
+			Summary: localizedText(language, "Review diffs and apply patches from stdin or file.", "Ревью diff и применение патчей из stdin или файла."),
 		},
 		{
 			Name:    "tool_runtime",
-			Status:  "available",
+			Status:  available,
 			Command: "chat, run, resume, fork",
-			Summary: "Built-in shell, file, search, write, and patch tools.",
+			Summary: localizedText(language, "Built-in shell, file, search, write, and patch tools.", "Встроенные инструменты shell, чтения, поиска, записи и патчей."),
 		},
 		{
 			Name:    "account_state",
-			Status:  "available",
+			Status:  available,
 			Command: "login, logout, status",
-			Summary: "Manage provider credentials and inspect active state.",
+			Summary: localizedText(language, "Manage provider credentials and inspect active state.", "Управление токенами провайдера и просмотр активного состояния."),
 		},
 		{
 			Name:    "config_profiles",
-			Status:  "available",
+			Status:  available,
 			Command: "model, profiles, providers, settings",
-			Summary: "Manage model defaults, profiles, providers, and UI settings.",
+			Summary: localizedText(language, "Manage model defaults, profiles, providers, and UI settings.", "Управление моделями, профилями, провайдерами и UI-настройками."),
 		},
 		{
 			Name:    "runtime_checks",
-			Status:  "available",
+			Status:  available,
 			Command: "doctor",
-			Summary: "Inspect local environment and runtime health.",
+			Summary: localizedText(language, "Inspect local environment and runtime health.", "Проверка окружения и состояния рантайма."),
 		},
 		{
 			Name:    "shell_completion",
-			Status:  "available",
+			Status:  available,
 			Command: "completion",
-			Summary: "Generate bash, zsh, fish, and PowerShell scripts.",
+			Summary: localizedText(language, "Generate bash, zsh, fish, and PowerShell scripts.", "Генерация скриптов автодополнения для bash, zsh, fish и PowerShell."),
 		},
 		{
 			Name:    "feature_matrix",
-			Status:  "available",
+			Status:  available,
 			Command: "features",
-			Summary: "Show this alpha capability summary in text or JSON.",
+			Summary: localizedText(language, "Show this alpha capability summary in text or JSON.", "Показ этой alpha-сводки в тексте или JSON."),
 		},
 	}
 }

@@ -73,6 +73,14 @@ func runReview(args []string) int {
 	runOptions := taskrun.Options{}
 
 	for index := 0; index < len(args); index++ {
+		if next, handled, err := consumeToolPolicyFlag(&runOptions, args, index); handled {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "review: %v\n", err)
+				return 2
+			}
+			index = next
+			continue
+		}
 		switch args[index] {
 		case "--json":
 			runOptions.JSON = true

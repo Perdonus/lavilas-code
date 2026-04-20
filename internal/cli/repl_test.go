@@ -31,6 +31,39 @@ func TestParseChatOptions(t *testing.T) {
 	}
 }
 
+func TestParseChatOptionsAcceptsToolPolicyFlags(t *testing.T) {
+	options, err := parseChatOptions([]string{
+		"--tool-approval", "require",
+		"--allow-tool", "read_file",
+		"--deny-tool", "run_shell_command",
+		"--block-mutating-tools",
+		"--block-shell-tools",
+		"--no-parallel-tools",
+		"--tool-parallelism", "2",
+	})
+	if err != nil {
+		t.Fatalf("parseChatOptions() error = %v", err)
+	}
+	if got, want := options.ToolPolicy.ApprovalMode, "require"; string(got) != want {
+		t.Fatalf("ApprovalMode = %q, want %q", got, want)
+	}
+	if len(options.ToolPolicy.AllowedTools) != 1 || options.ToolPolicy.AllowedTools[0] != "read_file" {
+		t.Fatalf("AllowedTools = %#v", options.ToolPolicy.AllowedTools)
+	}
+	if len(options.ToolPolicy.BlockedTools) != 1 || options.ToolPolicy.BlockedTools[0] != "run_shell_command" {
+		t.Fatalf("BlockedTools = %#v", options.ToolPolicy.BlockedTools)
+	}
+	if !options.ToolPolicy.BlockMutatingTools || !options.ToolPolicy.BlockShellCommands {
+		t.Fatalf("block flags were not preserved: %+v", options.ToolPolicy)
+	}
+	if options.ToolPolicy.Planning.AllowParallel {
+		t.Fatalf("AllowParallel = true, want false")
+	}
+	if got, want := options.ToolPolicy.Planning.MaxParallelCalls, 2; got != want {
+		t.Fatalf("MaxParallelCalls = %d, want %d", got, want)
+	}
+}
+
 func TestParseChatOptionsRejectsUnexpectedArgs(t *testing.T) {
 	if _, err := parseChatOptions([]string{"hello"}); err == nil {
 		t.Fatal("parseChatOptions() error = nil, want error")

@@ -48,15 +48,19 @@ func DefaultPlanningPolicy() PlanningPolicy {
 }
 
 type ToolExecutionMetadata struct {
-	SideEffectKind     SideEffectKind `json:"side_effect_kind"`
-	SandboxHint        SandboxHint    `json:"sandbox_hint"`
-	ApprovalRequired   bool           `json:"approval_required"`
-	SupportsParallel   bool           `json:"supports_parallel"`
-	MutatesWorkspace   bool           `json:"mutates_workspace"`
-	SpawnsSubprocess   bool           `json:"spawns_subprocess"`
-	ResourceKeys       []string       `json:"resource_keys,omitempty"`
-	WorkingDirectory   string         `json:"working_directory,omitempty"`
-	ArgumentParseError string         `json:"argument_parse_error,omitempty"`
+	SideEffectKind     SideEffectKind    `json:"side_effect_kind"`
+	SandboxHint        SandboxHint       `json:"sandbox_hint"`
+	ApprovalRequired   bool              `json:"approval_required"`
+	Permission         ToolPermission    `json:"permission"`
+	ApprovalState      ToolApprovalState `json:"approval_state"`
+	ToolEnabled        bool              `json:"tool_enabled"`
+	PolicyReason       string            `json:"policy_reason,omitempty"`
+	SupportsParallel   bool              `json:"supports_parallel"`
+	MutatesWorkspace   bool              `json:"mutates_workspace"`
+	SpawnsSubprocess   bool              `json:"spawns_subprocess"`
+	ResourceKeys       []string          `json:"resource_keys,omitempty"`
+	WorkingDirectory   string            `json:"working_directory,omitempty"`
+	ArgumentParseError string            `json:"argument_parse_error,omitempty"`
 }
 
 type ToolCallPlan struct {
@@ -85,17 +89,20 @@ type ExecutionPlanSummary struct {
 }
 
 type ExecutionPlan struct {
-	Policy    PlanningPolicy
-	CreatedAt time.Time
-	Batches   []ExecutionBatch
-	Summary   ExecutionPlanSummary
+	Policy     PlanningPolicy
+	ToolPolicy ToolPolicy
+	CreatedAt  time.Time
+	Batches    []ExecutionBatch
+	Summary    ExecutionPlanSummary
 }
 
 type ResultStatus string
 
 const (
-	ResultStatusSucceeded ResultStatus = "succeeded"
-	ResultStatusFailed    ResultStatus = "failed"
+	ResultStatusSucceeded        ResultStatus = "succeeded"
+	ResultStatusFailed           ResultStatus = "failed"
+	ResultStatusApprovalRequired ResultStatus = "approval_required"
+	ResultStatusDenied           ResultStatus = "denied"
 )
 
 type ToolResultEnvelope struct {
@@ -123,22 +130,31 @@ type BatchResultEnvelope struct {
 }
 
 type ExecutionReport struct {
-	Plan       ExecutionPlan
-	StartedAt  time.Time
-	FinishedAt time.Time
-	Batches    []BatchResultEnvelope
-	Results    []ToolResultEnvelope
+	Plan             ExecutionPlan
+	StartedAt        time.Time
+	FinishedAt       time.Time
+	Batches          []BatchResultEnvelope
+	Results          []ToolResultEnvelope
+	Summary          ExecutionReportSummary
+	ApprovalRequests []ApprovalRequest
 }
 
 func BuildExecutionPlan(calls []toolruntime.ToolCall) ExecutionPlan {
-	return BuildExecutionPlanWithPolicy(calls, DefaultPlanningPolicy())
+	return BuildExecutionPlanWithToolPolicy(calls, DefaultToolPolicy())
 }
 
 func BuildExecutionPlanWithPolicy(calls []toolruntime.ToolCall, policy PlanningPolicy) ExecutionPlan {
-	policy = normalizePlanningPolicy(policy)
+	toolPolicy := DefaultToolPolicy()
+	toolPolicy.Planning = policy
+	return BuildExecutionPlanWithToolPolicy(calls, toolPolicy)
+}
+
+func BuildExecutionPlanWithToolPolicy(calls []toolruntime.ToolCall, policy ToolPolicy) ExecutionPlan {
+	policy = NormalizeToolPolicy(policy)
 	plan := ExecutionPlan{
-		Policy:    policy,
-		CreatedAt: time.Now().UTC(),
+		Policy:     policy.Planning,
+		ToolPolicy: policy,
+		CreatedAt:  time.Now().UTC(),
 	}
 	if len(calls) == 0 {
 		return plan
@@ -146,7 +162,7 @@ func BuildExecutionPlanWithPolicy(calls []toolruntime.ToolCall, policy PlanningP
 
 	plannedCalls := make([]ToolCallPlan, 0, len(calls))
 	for index, call := range calls {
-		plannedCalls = append(plannedCalls, buildCallPlan(index, call))
+		plannedCalls = append(plannedCalls, buildCallPlan(index, call, policy))
 	}
 
 	var currentCalls []ToolCallPlan
@@ -170,7 +186,7 @@ func BuildExecutionPlanWithPolicy(calls []toolruntime.ToolCall, policy PlanningP
 	}
 
 	for _, call := range plannedCalls {
-		desiredMode := desiredExecutionMode(call, policy)
+		desiredMode := desiredExecutionMode(call, policy.Planning)
 		if len(currentCalls) == 0 {
 			currentMode = desiredMode
 			currentCalls = append(currentCalls, call)
@@ -182,7 +198,7 @@ func BuildExecutionPlanWithPolicy(calls []toolruntime.ToolCall, policy PlanningP
 			currentCalls = append(currentCalls, call)
 			continue
 		}
-		if currentMode == ExecutionModeParallel && len(currentCalls) >= policy.MaxParallelCalls {
+		if currentMode == ExecutionModeParallel && len(currentCalls) >= policy.Planning.MaxParallelCalls {
 			flush()
 			currentMode = desiredMode
 		}
@@ -214,6 +230,8 @@ func ExecutePlan(ctx context.Context, plan ExecutionPlan) ExecutionReport {
 	report.Batches = batches
 	report.Results = results
 	report.FinishedAt = time.Now().UTC()
+	report.Summary = summarizeExecutionResults(results)
+	report.ApprovalRequests = collectApprovalRequests(results)
 	return report
 }
 
@@ -250,20 +268,22 @@ func normalizePlanningPolicy(policy PlanningPolicy) PlanningPolicy {
 	return policy
 }
 
-func buildCallPlan(index int, call toolruntime.ToolCall) ToolCallPlan {
+func buildCallPlan(index int, call toolruntime.ToolCall, policy ToolPolicy) ToolCallPlan {
 	name := strings.TrimSpace(call.Function.Name)
 	callID := strings.TrimSpace(call.ID)
 	if callID == "" {
 		callID = name
 	}
 	arguments := cloneRawMessage(call.Function.Arguments)
+	metadata := inspectToolCall(name, arguments)
+	metadata = applyToolPolicy(name, metadata, policy)
 	return ToolCallPlan{
 		Index:     index,
 		Call:      call,
 		CallID:    callID,
 		Name:      name,
 		Arguments: arguments,
-		Metadata:  inspectToolCall(name, arguments),
+		Metadata:  metadata,
 	}
 }
 
@@ -345,6 +365,42 @@ func executeBatch(ctx context.Context, batch ExecutionBatch) BatchResultEnvelope
 
 func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode, call ToolCallPlan) ToolResultEnvelope {
 	startedAt := time.Now().UTC()
+	if call.Metadata.Permission == ToolPermissionDenied {
+		output := marshalPolicyResult(call, ResultStatusDenied)
+		finishedAt := time.Now().UTC()
+		return ToolResultEnvelope{
+			Index:      call.Index,
+			BatchIndex: batchIndex,
+			Mode:       mode,
+			CallID:     call.CallID,
+			Name:       call.Name,
+			Metadata:   call.Metadata,
+			Status:     ResultStatusDenied,
+			StartedAt:  startedAt,
+			FinishedAt: finishedAt,
+			Duration:   finishedAt.Sub(startedAt),
+			OutputText: output,
+			OutputJSON: rawJSON(output),
+		}
+	}
+	if call.Metadata.Permission == ToolPermissionApprovalRequired {
+		output := marshalPolicyResult(call, ResultStatusApprovalRequired)
+		finishedAt := time.Now().UTC()
+		return ToolResultEnvelope{
+			Index:      call.Index,
+			BatchIndex: batchIndex,
+			Mode:       mode,
+			CallID:     call.CallID,
+			Name:       call.Name,
+			Metadata:   call.Metadata,
+			Status:     ResultStatusApprovalRequired,
+			StartedAt:  startedAt,
+			FinishedAt: finishedAt,
+			Duration:   finishedAt.Sub(startedAt),
+			OutputText: output,
+			OutputJSON: rawJSON(output),
+		}
+	}
 	output := dispatch(ctx, call.Name, call.Arguments)
 	finishedAt := time.Now().UTC()
 	return ToolResultEnvelope{
@@ -364,18 +420,10 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 }
 
 func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetadata {
-	metadata := ToolExecutionMetadata{
-		SideEffectKind:   SideEffectKindUnknown,
-		SandboxHint:      SandboxHintInherited,
-		ApprovalRequired: true,
-	}
+	metadata := baseToolMetadata(name)
 
 	switch strings.TrimSpace(name) {
 	case "run_shell_command":
-		metadata.SideEffectKind = SideEffectKindShell
-		metadata.SandboxHint = SandboxHintDangerous
-		metadata.MutatesWorkspace = true
-		metadata.SpawnsSubprocess = true
 		var args shellArgs
 		if err := decodeArgs(arguments, &args); err != nil {
 			metadata.ArgumentParseError = err.Error()
@@ -385,10 +433,6 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 		metadata.ResourceKeys = []string{"cwd:" + metadata.WorkingDirectory}
 		return metadata
 	case "list_directory":
-		metadata.SideEffectKind = SideEffectKindReadOnly
-		metadata.SandboxHint = SandboxHintInherited
-		metadata.ApprovalRequired = false
-		metadata.SupportsParallel = true
 		var args listArgs
 		if err := decodeArgs(arguments, &args); err != nil {
 			metadata.ArgumentParseError = err.Error()
@@ -398,10 +442,6 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 		metadata.ResourceKeys = []string{"dir:" + resource}
 		return metadata
 	case "read_file":
-		metadata.SideEffectKind = SideEffectKindReadOnly
-		metadata.SandboxHint = SandboxHintInherited
-		metadata.ApprovalRequired = false
-		metadata.SupportsParallel = true
 		var args readArgs
 		if err := decodeArgs(arguments, &args); err != nil {
 			metadata.ArgumentParseError = err.Error()
@@ -411,10 +451,6 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 		metadata.ResourceKeys = []string{"file:" + resource}
 		return metadata
 	case "search_text":
-		metadata.SideEffectKind = SideEffectKindReadOnly
-		metadata.SandboxHint = SandboxHintInherited
-		metadata.ApprovalRequired = false
-		metadata.SupportsParallel = true
 		var args searchArgs
 		if err := decodeArgs(arguments, &args); err != nil {
 			metadata.ArgumentParseError = err.Error()
@@ -424,9 +460,6 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 		metadata.ResourceKeys = []string{"tree:" + resource}
 		return metadata
 	case "write_file":
-		metadata.SideEffectKind = SideEffectKindWorkspaceWrite
-		metadata.SandboxHint = SandboxHintWorkspaceWrite
-		metadata.MutatesWorkspace = true
 		var args writeArgs
 		if err := decodeArgs(arguments, &args); err != nil {
 			metadata.ArgumentParseError = err.Error()
@@ -436,9 +469,6 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 		metadata.ResourceKeys = []string{"file:" + resource}
 		return metadata
 	case "apply_patch":
-		metadata.SideEffectKind = SideEffectKindWorkspaceWrite
-		metadata.SandboxHint = SandboxHintWorkspaceWrite
-		metadata.MutatesWorkspace = true
 		metadata.ResourceKeys = []string{"workspace"}
 		var args patchArgs
 		if err := decodeArgs(arguments, &args); err != nil {
@@ -449,6 +479,29 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 		metadata.ResourceKeys = []string{"tool:" + strings.TrimSpace(name)}
 		return metadata
 	}
+}
+
+func marshalPolicyResult(call ToolCallPlan, status ResultStatus) string {
+	errorMessage := call.Metadata.PolicyReason
+	if strings.TrimSpace(errorMessage) == "" {
+		errorMessage = "tool call blocked by execution policy"
+	}
+	return marshalResult(map[string]any{
+		"ok":     false,
+		"tool":   call.Name,
+		"status": status,
+		"error":  errorMessage,
+		"policy": map[string]any{
+			"permission":        call.Metadata.Permission,
+			"approval_state":    call.Metadata.ApprovalState,
+			"approval_required": call.Metadata.ApprovalRequired,
+			"tool_enabled":      call.Metadata.ToolEnabled,
+			"side_effect_kind":  call.Metadata.SideEffectKind,
+			"sandbox_hint":      call.Metadata.SandboxHint,
+			"resource_keys":     call.Metadata.ResourceKeys,
+			"working_directory": call.Metadata.WorkingDirectory,
+		},
+	})
 }
 
 func normalizeResourcePath(path string, fallback string) string {
@@ -487,13 +540,55 @@ func detectResultStatus(output string) ResultStatus {
 		return ResultStatusFailed
 	}
 	var parsed struct {
-		OK *bool `json:"ok"`
+		OK     *bool        `json:"ok"`
+		Status ResultStatus `json:"status"`
 	}
 	if err := json.Unmarshal(payload, &parsed); err != nil {
 		return ResultStatusFailed
+	}
+	if parsed.Status == ResultStatusApprovalRequired || parsed.Status == ResultStatusDenied {
+		return parsed.Status
 	}
 	if parsed.OK != nil && *parsed.OK {
 		return ResultStatusSucceeded
 	}
 	return ResultStatusFailed
+}
+
+func summarizeExecutionResults(results []ToolResultEnvelope) ExecutionReportSummary {
+	summary := ExecutionReportSummary{CallCount: len(results)}
+	for _, result := range results {
+		switch result.Status {
+		case ResultStatusSucceeded:
+			summary.ExecutedCount++
+			summary.SucceededCount++
+		case ResultStatusFailed:
+			summary.ExecutedCount++
+			summary.FailedCount++
+		case ResultStatusApprovalRequired:
+			summary.ApprovalRequiredCount++
+		case ResultStatusDenied:
+			summary.DeniedCount++
+		}
+	}
+	return summary
+}
+
+func collectApprovalRequests(results []ToolResultEnvelope) []ApprovalRequest {
+	requests := make([]ApprovalRequest, 0)
+	for _, result := range results {
+		if result.Status != ResultStatusApprovalRequired && result.Status != ResultStatusDenied {
+			continue
+		}
+		requests = append(requests, ApprovalRequest{
+			Index:    result.Index,
+			Batch:    result.BatchIndex,
+			CallID:   result.CallID,
+			Name:     result.Name,
+			Status:   result.Status,
+			Reason:   result.Metadata.PolicyReason,
+			Metadata: result.Metadata,
+		})
+	}
+	return requests
 }

@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Perdonus/lavilas-code/internal/apphome"
+	"github.com/Perdonus/lavilas-code/internal/commandcatalog"
 	"github.com/Perdonus/lavilas-code/internal/version"
 )
 
@@ -31,10 +33,10 @@ func Run(argv []string) int {
 	}
 
 	switch argv[0] {
-	case "--version", "-v", "version":
+	case "--version", "-v", "version", "версия":
 		fmt.Printf("Go Lavilas %s (%s)\n", version.Version, version.Channel)
 		return 0
-	case "help", "--help", "-h":
+	case "help", "помощь", "--help", "-h":
 		printBanner()
 		printCommands(commands)
 		return 0
@@ -60,7 +62,8 @@ func runCommand(commands []Command, lookup map[string]Command, argv []string, al
 		if allowPromptFallback && !strings.HasPrefix(argv[0], "-") {
 			return runTask(argv)
 		}
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", argv[0])
+		language := currentCatalogLanguage()
+		fmt.Fprintf(os.Stderr, "%s\n\n", localizedText(language, fmt.Sprintf("Unknown command: %s", argv[0]), fmt.Sprintf("Неизвестная команда: %s", argv[0])))
 		printCommands(commands)
 		return 2
 	}
@@ -68,12 +71,15 @@ func runCommand(commands []Command, lookup map[string]Command, argv []string, al
 }
 
 func printBanner() {
+	language := currentCatalogLanguage()
 	fmt.Printf("Go Lavilas %s (%s)\n", version.Version, version.Channel)
-	fmt.Println("Независимый go-контур для NV alpha.")
+	fmt.Println(localizedText(language, "Standalone Go runtime for NV alpha.", "Независимый go-контур для NV alpha."))
 	fmt.Println()
 }
 
 func printCommands(commands []Command) {
+	_ = commands
+	language := currentCatalogLanguage()
 	categoryOrder := []string{
 		"interactive",
 		"account",
@@ -82,38 +88,67 @@ func printCommands(commands []Command) {
 		"runtime",
 		"debug",
 	}
-	labels := map[string]string{
-		"interactive": "Interactive",
-		"account":     "Account",
-		"config":      "Config",
-		"automation":  "Automation",
-		"runtime":     "Runtime",
-		"debug":       "Debug",
+	byCategory := map[string][]CatalogListItem{}
+	for _, item := range Catalog().List(CatalogListOptions{Language: language}) {
+		byCategory[item.Category] = append(byCategory[item.Category], item)
 	}
 
-	byCategory := map[string][]Command{}
-	for _, cmd := range commands {
-		byCategory[cmd.Category] = append(byCategory[cmd.Category], cmd)
-	}
-
-	fmt.Println("Commands:")
+	fmt.Println(localizedText(language, "Commands:", "Команды:"))
 	for _, category := range categoryOrder {
 		items := byCategory[category]
 		if len(items) == 0 {
 			continue
 		}
 		sort.Slice(items, func(i, j int) bool {
-			return items[i].Name < items[j].Name
+			return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
 		})
-		fmt.Printf("  %s:\n", labels[category])
-		for _, cmd := range items {
+		fmt.Printf("  %s:\n", CatalogCategoryLabel(category, language))
+		for _, item := range items {
 			aliases := ""
-			if len(cmd.Aliases) > 0 {
-				aliases = fmt.Sprintf(" [%s]", strings.Join(cmd.Aliases, ", "))
+			if len(item.Aliases) > 0 {
+				aliases = fmt.Sprintf(" [%s]", strings.Join(item.Aliases, ", "))
 			}
-			fmt.Printf("    %-14s%s %s\n", cmd.Name, aliases, cmd.Description)
+			fmt.Printf("    %-14s%s %s\n", item.Name, aliases, item.Description)
 		}
 	}
+}
+
+func currentCatalogLanguage() CatalogLanguage {
+	settings, err := loadSettingsOptional(apphome.SettingsPath())
+	if err != nil {
+		return CatalogLanguageEnglish
+	}
+	switch strings.ToLower(strings.TrimSpace(settings.Language)) {
+	case string(commandcatalog.CatalogLanguageRussian):
+		return CatalogLanguageRussian
+	case string(commandcatalog.CatalogLanguageEnglish):
+		return CatalogLanguageEnglish
+	default:
+		return CatalogLanguageEnglish
+	}
+}
+
+func localizedText(language CatalogLanguage, english string, russian string) string {
+	if language == CatalogLanguageRussian {
+		return russian
+	}
+	return english
+}
+
+func localizedUnset(language CatalogLanguage) string {
+	return localizedText(language, "<unset>", "<не задано>")
+}
+
+func currentCommandPrefix() string {
+	settings, err := loadSettingsOptional(apphome.SettingsPath())
+	if err != nil {
+		return "/"
+	}
+	prefix := strings.TrimSpace(settings.CommandPrefix)
+	if prefix == "" {
+		return "/"
+	}
+	return prefix
 }
 
 func isInteractiveTerminal() bool {

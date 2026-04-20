@@ -140,15 +140,23 @@ func Definitions() []toolruntime.ToolDefinition {
 }
 
 func ExecuteCalls(ctx context.Context, calls []toolruntime.ToolCall) []toolruntime.Message {
+	return ExecuteCallsWithPolicy(ctx, calls, DefaultToolPolicy())
+}
+
+func ExecuteCallsWithPolicy(ctx context.Context, calls []toolruntime.ToolCall, policy ToolPolicy) []toolruntime.Message {
 	if len(calls) == 0 {
 		return nil
 	}
-	report := ExecutePlan(ctx, BuildExecutionPlan(calls))
+	report := ExecutePlan(ctx, BuildExecutionPlanWithToolPolicy(calls, policy))
 	return report.Messages()
 }
 
 func ExecuteCall(ctx context.Context, call toolruntime.ToolCall) toolruntime.Message {
-	report := ExecutePlan(ctx, BuildExecutionPlan([]toolruntime.ToolCall{call}))
+	return ExecuteCallWithPolicy(ctx, call, DefaultToolPolicy())
+}
+
+func ExecuteCallWithPolicy(ctx context.Context, call toolruntime.ToolCall, policy ToolPolicy) toolruntime.Message {
+	report := ExecutePlan(ctx, BuildExecutionPlanWithToolPolicy([]toolruntime.ToolCall{call}, policy))
 	if len(report.Results) == 0 {
 		callID := strings.TrimSpace(call.ID)
 		if callID == "" {

@@ -1,6 +1,11 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/Perdonus/lavilas-code/internal/commandcatalog"
+	runtimeapi "github.com/Perdonus/lavilas-code/internal/runtime"
+)
 
 type PaneFocus string
 
@@ -24,9 +29,11 @@ const (
 )
 
 type State struct {
+	Language    string
 	Title       string
 	Status      []StatusItem
 	Transcript  []TranscriptEntry
+	LiveTurn    *LiveTurnState
 	InputDraft  string
 	Palette     PaletteState
 	Focus       PaneFocus
@@ -47,6 +54,14 @@ type StatusItem struct {
 type TranscriptEntry struct {
 	Role string
 	Body string
+}
+
+type LiveTurnState struct {
+	Prompt        string
+	Round         int
+	AssistantText string
+	ToolCalls     []runtimeapi.ToolCall
+	Notes         []string
 }
 
 type PaletteState struct {
@@ -87,8 +102,10 @@ type PaletteItem struct {
 }
 
 func DefaultState() State {
+	language := commandcatalog.CatalogLanguageEnglish
 	return State{
-		Title: "Go Lavilas",
+		Language: "en",
+		Title:    "Go Lavilas",
 		Status: []StatusItem{
 			{Label: "Mode", Value: "alpha"},
 			{Label: "Session", Value: "fresh"},
@@ -99,8 +116,8 @@ func DefaultState() State {
 		},
 		Palette: PaletteState{
 			Mode:    PaletteModeRoot,
-			Items:   defaultPaletteItems(),
-			Context: defaultPaletteContext(),
+			Items:   defaultPaletteItemsForLanguage(language),
+			Context: defaultPaletteContextForLanguage(language),
 		},
 		Focus:  FocusInput,
 		Footer: "Enter submit · Ctrl+P palette · Tab focus · Esc close",
@@ -108,14 +125,21 @@ func DefaultState() State {
 }
 
 func defaultPaletteItems() []PaletteItem {
-	return defaultPaletteCatalog().RootItems()
+	return defaultPaletteItemsForLanguage(commandcatalog.CatalogLanguageEnglish)
+}
+
+func defaultPaletteItemsForLanguage(language commandcatalog.CatalogLanguage) []PaletteItem {
+	return defaultPaletteCatalog().RootItems(language, "")
 }
 
 func (s State) clone() State {
+	language := normalizeTUILanguage(s.Language)
 	cloned := State{
+		Language:    strings.TrimSpace(s.Language),
 		Title:       strings.TrimSpace(s.Title),
 		Status:      cloneStatusItems(s.Status),
 		Transcript:  cloneTranscriptEntries(s.Transcript),
+		LiveTurn:    cloneLiveTurnState(s.LiveTurn),
 		InputDraft:  s.InputDraft,
 		Focus:       normalizeFocus(s.Focus),
 		Footer:      s.Footer,
@@ -131,7 +155,7 @@ func (s State) clone() State {
 			Query:         s.Palette.Query,
 			Items:         clonePaletteItems(s.Palette.Items),
 			Selected:      s.Palette.Selected,
-			Context:       normalizePaletteContext(s.Palette.Context),
+			Context:       normalizePaletteContextForLanguage(s.Palette.Context, language),
 			SelectedToken: s.Palette.SelectedToken,
 			Stack:         clonePaletteViews(s.Palette.Stack),
 		},
@@ -140,17 +164,31 @@ func (s State) clone() State {
 	if cloned.Title == "" {
 		cloned.Title = DefaultState().Title
 	}
+	if cloned.Language == "" {
+		cloned.Language = DefaultState().Language
+	}
+	language = normalizeTUILanguage(cloned.Language)
 	if len(cloned.Palette.Items) == 0 {
-		cloned.Palette.Items = defaultPaletteItems()
+		cloned.Palette.Items = defaultPaletteItemsForLanguage(language)
 	}
 	return cloned
 }
 
 func defaultPaletteContext() PaletteContext {
+	return defaultPaletteContextForLanguage(commandcatalog.CatalogLanguageEnglish)
+}
+
+func defaultPaletteContextForLanguage(language commandcatalog.CatalogLanguage) PaletteContext {
+	localize := func(english string, russian string) string {
+		if normalizeTUILanguage(string(language)) == commandcatalog.CatalogLanguageRussian {
+			return russian
+		}
+		return english
+	}
 	return PaletteContext{
-		BackTitle:       "Back to Chat",
-		BackDescription: "Return to transcript",
-		BackHint:        "Enter select · Esc close",
+		BackTitle:       localize("Back to Chat", "Назад в чат"),
+		BackDescription: localize("Return to transcript", "Вернуться к диалогу"),
+		BackHint:        localize("Enter select · Esc close", "Enter выбрать · Esc закрыть"),
 		ReturnFocus:     FocusInput,
 	}
 }
@@ -174,6 +212,11 @@ func normalizePaletteMode(value PaletteMode) PaletteMode {
 }
 
 func normalizePaletteContext(value PaletteContext) PaletteContext {
+	return normalizePaletteContextForLanguage(value, commandcatalog.CatalogLanguageEnglish)
+}
+
+func normalizePaletteContextForLanguage(value PaletteContext, language commandcatalog.CatalogLanguage) PaletteContext {
+	defaults := defaultPaletteContextForLanguage(language)
 	normalized := PaletteContext{
 		BackTitle:       strings.TrimSpace(value.BackTitle),
 		BackDescription: strings.TrimSpace(value.BackDescription),
@@ -181,13 +224,13 @@ func normalizePaletteContext(value PaletteContext) PaletteContext {
 		ReturnFocus:     normalizeFocus(value.ReturnFocus),
 	}
 	if normalized.BackTitle == "" {
-		normalized.BackTitle = "Back to Chat"
+		normalized.BackTitle = defaults.BackTitle
 	}
 	if normalized.BackDescription == "" {
-		normalized.BackDescription = "Return to transcript"
+		normalized.BackDescription = defaults.BackDescription
 	}
 	if normalized.BackHint == "" {
-		normalized.BackHint = "Enter select · Esc close"
+		normalized.BackHint = defaults.BackHint
 	}
 	if normalized.ReturnFocus == FocusPalette {
 		normalized.ReturnFocus = FocusInput
@@ -245,6 +288,36 @@ func clonePaletteViews(items []PaletteView) []PaletteView {
 			Context:       normalizePaletteContext(item.Context),
 			SelectedToken: item.SelectedToken,
 			Footer:        item.Footer,
+		}
+	}
+	return cloned
+}
+
+func cloneLiveTurnState(value *LiveTurnState) *LiveTurnState {
+	if value == nil {
+		return nil
+	}
+	cloned := &LiveTurnState{
+		Prompt:        value.Prompt,
+		Round:         value.Round,
+		AssistantText: value.AssistantText,
+		ToolCalls:     cloneRuntimeToolCalls(value.ToolCalls),
+		Notes:         cloneStrings(value.Notes),
+	}
+	return cloned
+}
+
+func cloneRuntimeToolCalls(calls []runtimeapi.ToolCall) []runtimeapi.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	cloned := make([]runtimeapi.ToolCall, len(calls))
+	for index, call := range calls {
+		cloned[index] = call
+		if len(call.Function.Arguments) > 0 {
+			args := make([]byte, len(call.Function.Arguments))
+			copy(args, call.Function.Arguments)
+			cloned[index].Function.Arguments = args
 		}
 	}
 	return cloned

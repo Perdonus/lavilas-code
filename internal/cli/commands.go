@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Perdonus/lavilas-code/internal/apphome"
@@ -15,6 +16,7 @@ import (
 	"github.com/Perdonus/lavilas-code/internal/runtime"
 	"github.com/Perdonus/lavilas-code/internal/state"
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
+	"github.com/Perdonus/lavilas-code/internal/tooling"
 )
 
 func runDoctor(args []string) int {
@@ -70,8 +72,12 @@ func runModel(args []string) int {
 		return 1
 	}
 
+	action := ""
+	if len(args) > 0 {
+		action = normalizeModelSubcommand(args[0])
+	}
 	switch {
-	case len(args) > 0 && args[0] == "set":
+	case action == "set":
 		input, err := parseModelSetArgs(args[1:])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "model: %v\n", err)
@@ -117,7 +123,7 @@ func runModel(args []string) int {
 		fmt.Printf("provider: %s\n", fallback(providerName, "<unset>"))
 		fmt.Printf("matched_catalog: %t\n", matched)
 		return 0
-	case len(args) > 0 && args[0] == "list":
+	case action == "list":
 		options, err := parseRuntimeTargetArgs(args[1:])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "model: %v\n", err)
@@ -134,7 +140,7 @@ func runModel(args []string) int {
 		}
 		printModelPayload(payload)
 		return 0
-	case len(args) > 0 && args[0] == "preset":
+	case action == "preset":
 		return runModelPreset(config, settings, configPath, args[1:])
 	}
 
@@ -160,7 +166,7 @@ func runProfiles(args []string) int {
 	}
 
 	if len(args) > 0 {
-		switch args[0] {
+		switch normalizeProfilesSubcommand(args[0]) {
 		case "set":
 			settings, err := loadSettingsOptional(apphome.SettingsPath())
 			if err != nil {
@@ -321,7 +327,7 @@ func runProviders(args []string) int {
 	}
 
 	if len(args) > 0 {
-		switch args[0] {
+		switch normalizeProvidersSubcommand(args[0]) {
 		case "set":
 			providerConfig, err := parseProviderSetArgs(config, args[1:])
 			if err != nil {
@@ -445,7 +451,7 @@ func runSettings(args []string) int {
 	}
 
 	if len(args) > 0 {
-		switch args[0] {
+		switch normalizeSettingsSubcommand(args[0]) {
 		case "presets":
 			return runSettingsPresets(settings, settingsPath, args[1:])
 		case "language":
@@ -813,6 +819,13 @@ func parseRunOptions(args []string) (taskrun.Options, error) {
 
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
+		if next, handled, err := consumeToolPolicyFlag(&options, args, index); handled {
+			if err != nil {
+				return taskrun.Options{}, err
+			}
+			index = next
+			continue
+		}
 		switch arg {
 		case "--json":
 			options.JSON = true
@@ -868,6 +881,129 @@ func parseRunOptions(args []string) (taskrun.Options, error) {
 		return taskrun.Options{}, fmt.Errorf("prompt is required")
 	}
 	return options, nil
+}
+
+func consumeToolPolicyFlag(options *taskrun.Options, args []string, index int) (int, bool, error) {
+	switch args[index] {
+	case "--tool-approval":
+		value, next, err := takeFlagValue(args, index, "--tool-approval")
+		if err != nil {
+			return index, true, err
+		}
+		mode := tooling.ToolApprovalMode(strings.TrimSpace(strings.ToLower(value)))
+		switch mode {
+		case tooling.ToolApprovalModeAuto, tooling.ToolApprovalModeRequire, tooling.ToolApprovalModeDeny:
+			options.ToolPolicy.ApprovalMode = mode
+			return next, true, nil
+		default:
+			return index, true, fmt.Errorf("--tool-approval must be one of auto, require, deny")
+		}
+	case "--allow-tool":
+		value, next, err := takeFlagValue(args, index, "--allow-tool")
+		if err != nil {
+			return index, true, err
+		}
+		options.ToolPolicy.AllowedTools = append(options.ToolPolicy.AllowedTools, value)
+		return next, true, nil
+	case "--deny-tool":
+		value, next, err := takeFlagValue(args, index, "--deny-tool")
+		if err != nil {
+			return index, true, err
+		}
+		options.ToolPolicy.BlockedTools = append(options.ToolPolicy.BlockedTools, value)
+		return next, true, nil
+	case "--block-mutating-tools":
+		options.ToolPolicy.BlockMutatingTools = true
+		return index, true, nil
+	case "--block-shell-tools":
+		options.ToolPolicy.BlockShellCommands = true
+		return index, true, nil
+	case "--no-parallel-tools":
+		options.ToolPolicy.Planning.AllowParallel = false
+		return index, true, nil
+	case "--tool-parallelism":
+		value, next, err := takeFlagValue(args, index, "--tool-parallelism")
+		if err != nil {
+			return index, true, err
+		}
+		parallelism, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || parallelism < 1 {
+			return index, true, fmt.Errorf("--tool-parallelism requires a positive integer")
+		}
+		options.ToolPolicy.Planning.MaxParallelCalls = parallelism
+		return next, true, nil
+	default:
+		return index, false, nil
+	}
+}
+
+func normalizeModelSubcommand(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "set", "установить":
+		return "set"
+	case "list", "список":
+		return "list"
+	case "preset", "presets", "пресет", "пресеты":
+		return "preset"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func normalizeProfilesSubcommand(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "set", "установить":
+		return "set"
+	case "activate", "active", "активировать":
+		return "activate"
+	case "delete", "remove", "удалить":
+		return "delete"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func normalizeProvidersSubcommand(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "set", "установить":
+		return "set"
+	case "delete", "remove", "удалить":
+		return "delete"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func normalizeSettingsSubcommand(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "presets", "preset", "пресеты", "пресет":
+		return "presets"
+	case "language", "lang", "язык":
+		return "language"
+	case "prefix", "префикс":
+		return "prefix"
+	case "hide-command", "скрыть-команду":
+		return "hide-command"
+	case "show-command", "показать-команду":
+		return "show-command"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func normalizeSettingsPresetAction(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "enable", "включить":
+		return "enable"
+	case "disable", "выключить":
+		return "disable"
+	case "set", "установить":
+		return "set"
+	case "delete", "remove", "удалить":
+		return "delete"
+	default:
+		return strings.TrimSpace(value)
+	}
 }
 
 func takeFlagValue(args []string, index int, flag string) (string, int, error) {
@@ -1155,7 +1291,7 @@ func parseModelPresetArgs(args []string) (modelPresetInput, error) {
 			}
 			input.Provider = value
 			index = next
-		case "apply":
+		case "apply", "применить":
 			input.Action = "apply"
 			next := index + 1
 			if next >= len(args) {
@@ -1179,9 +1315,9 @@ func parseSettingsPresetArgs(args []string) (settingsPresetInput, error) {
 	if len(args) == 0 {
 		return input, nil
 	}
-	switch strings.TrimSpace(args[0]) {
+	switch normalizeSettingsPresetAction(args[0]) {
 	case "enable", "disable":
-		input.Action = strings.TrimSpace(args[0])
+		input.Action = normalizeSettingsPresetAction(args[0])
 		args = args[1:]
 	case "set":
 		input.Action = "set"
