@@ -45,6 +45,9 @@ func Run(argv []string) int {
 
 	cmd, ok := lookup[argv[0]]
 	if !ok {
+		if !strings.HasPrefix(argv[0], "-") {
+			return runTask(argv)
+		}
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\\n\\n", argv[0])
 		printCommands(commands)
 		return 2

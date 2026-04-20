@@ -3,13 +3,15 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/Perdonus/lavilas-code/internal/apphome"
 	"github.com/Perdonus/lavilas-code/internal/doctor"
+	"github.com/Perdonus/lavilas-code/internal/runtime"
 	"github.com/Perdonus/lavilas-code/internal/state"
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
 )
@@ -23,15 +25,16 @@ func registry() []Command {
 	}
 
 	return []Command{
-		{Name: "resume", Aliases: []string{"r", "continue", "продолжить"}, Description: "Show recent sessions from ~/.codex", Category: "interactive", Run: runResume},
-		{Name: "fork", Aliases: []string{"branch-chat", "форк"}, Description: "Fork a previous session", Category: "interactive", Run: stub("fork")},
+		{Name: "resume", Aliases: []string{"r", "continue", "продолжить"}, Description: "Resume or inspect stored sessions", Category: "interactive", Run: runResume},
+		{Name: "fork", Aliases: []string{"branch-chat", "форк"}, Description: "Fork a previous session", Category: "interactive", Run: runFork},
 		{Name: "run", Aliases: []string{"exec", "ask", "запуск"}, Description: "Execute a one-shot task", Category: "interactive", Run: runTask},
-		{Name: "review", Aliases: []string{"rev", "ревью"}, Description: "Run non-interactive review", Category: "interactive", Run: stub("review")},
-		{Name: "apply", Aliases: []string{"patch", "применить"}, Description: "Apply latest agent patch", Category: "interactive", Run: stub("apply")},
+		{Name: "review", Aliases: []string{"rev", "ревью"}, Description: "Run non-interactive review", Category: "interactive", Run: runReview},
+		{Name: "apply", Aliases: []string{"patch", "применить"}, Description: "Apply patch from stdin or file", Category: "interactive", Run: runApply},
 
 		{Name: "login", Aliases: []string{"auth", "вход"}, Description: "Configure account access", Category: "account", Run: stub("login")},
 		{Name: "logout", Aliases: []string{"unauth", "выход"}, Description: "Remove saved account access", Category: "account", Run: stub("logout")},
-		{Name: "profiles", Aliases: []string{"accounts", "prof", "профили", "аккаунты"}, Description: "List saved profiles from config", Category: "account", Run: runProfiles},
+		{Name: "profiles", Aliases: []string{"accounts", "prof", "профили", "аккаунты"}, Description: "Manage saved profiles", Category: "account", Run: runProfiles},
+		{Name: "providers", Aliases: []string{"provider", "prov", "провайдеры", "провайдер"}, Description: "Manage model providers", Category: "account", Run: runProviders},
 
 		{Name: "model", Aliases: []string{"models", "модель", "модели"}, Description: "Show active model and reasoning", Category: "config", Run: runModel},
 		{Name: "settings", Aliases: []string{"prefs", "config", "настройки"}, Description: "Show saved UI settings", Category: "config", Run: runSettings},
@@ -67,6 +70,12 @@ func runTask(args []string) int {
 		return 1
 	}
 
+	if entry, err := persistNewSession(result); err == nil {
+		result.SessionPath = entry.Path
+	} else {
+		fmt.Fprintf(os.Stderr, "run: warning: failed to save session: %v\n", err)
+	}
+
 	if options.JSON {
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
@@ -86,7 +95,7 @@ func runTask(args []string) int {
 
 func runModel(args []string) int {
 	configPath := apphome.ConfigPath()
-	config, err := state.LoadConfig(configPath)
+	config, err := loadConfigOptional(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read config: %v\n", err)
 		return 1
@@ -116,6 +125,14 @@ func runModel(args []string) int {
 					return 2
 				}
 				config.SetActiveProfile(value)
+				index = next
+			case "--provider":
+				value, next, err := takeFlagValue(args, index, "--provider")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "model: %v\n", err)
+					return 2
+				}
+				config.SetModelProvider(value)
 				index = next
 			default:
 				fmt.Fprintf(os.Stderr, "model: unknown flag %q\n", args[index])
@@ -153,7 +170,7 @@ func runModel(args []string) int {
 
 func runProfiles(args []string) int {
 	configPath := apphome.ConfigPath()
-	config, err := state.LoadConfig(configPath)
+	config, err := loadConfigOptional(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read config: %v\n", err)
 		return 1
@@ -161,6 +178,22 @@ func runProfiles(args []string) int {
 
 	if len(args) > 0 {
 		switch args[0] {
+		case "set":
+			profile, activate, err := parseProfileSetArgs(config, args[1:])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "profiles: %v\n", err)
+				return 2
+			}
+			config.UpsertProfile(profile)
+			if activate {
+				config.SetActiveProfile(profile.Name)
+			}
+			if err := state.SaveConfig(configPath, config); err != nil {
+				fmt.Fprintf(os.Stderr, "profiles: failed to save config: %v\n", err)
+				return 1
+			}
+			fmt.Printf("profile updated: %s\n", profile.Name)
+			return 0
 		case "activate":
 			if len(args) < 2 {
 				fmt.Fprintln(os.Stderr, "profiles: activate requires a profile name")
@@ -261,9 +294,97 @@ func runProfiles(args []string) int {
 	return 0
 }
 
+func runProviders(args []string) int {
+	configPath := apphome.ConfigPath()
+	config, err := loadConfigOptional(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read config: %v\n", err)
+		return 1
+	}
+
+	if len(args) > 0 {
+		switch args[0] {
+		case "set":
+			providerConfig, err := parseProviderSetArgs(config, args[1:])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "providers: %v\n", err)
+				return 2
+			}
+			config.UpsertProvider(providerConfig)
+			if err := state.SaveConfig(configPath, config); err != nil {
+				fmt.Fprintf(os.Stderr, "providers: failed to save config: %v\n", err)
+				return 1
+			}
+			fmt.Printf("provider updated: %s\n", providerConfig.Name)
+			return 0
+		case "delete":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "providers: delete requires a provider name")
+				return 2
+			}
+			if !config.DeleteProvider(args[1]) {
+				fmt.Fprintf(os.Stderr, "providers: provider %q not found\n", args[1])
+				return 1
+			}
+			if err := state.SaveConfig(configPath, config); err != nil {
+				fmt.Fprintf(os.Stderr, "providers: failed to save config: %v\n", err)
+				return 1
+			}
+			fmt.Printf("deleted provider: %s\n", args[1])
+			return 0
+		}
+	}
+
+	if hasFlag(args, "--json") {
+		type providerView struct {
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name,omitempty"`
+			BaseURL     string `json:"base_url,omitempty"`
+			WireAPI     string `json:"wire_api,omitempty"`
+			APIKeyEnv   string `json:"api_key_env,omitempty"`
+			HasToken    bool   `json:"has_token"`
+		}
+		providers := make([]providerView, 0, len(config.ModelProviders))
+		for _, current := range config.ModelProviders {
+			providers = append(providers, providerView{
+				Name:        current.Name,
+				DisplayName: current.DisplayName(),
+				BaseURL:     current.BaseURL,
+				WireAPI:     current.WireAPI,
+				APIKeyEnv:   current.APIKeyEnv,
+				HasToken:    strings.TrimSpace(current.BearerToken()) != "",
+			})
+		}
+		return printJSON(map[string]any{"providers": providers})
+	}
+
+	if len(config.ModelProviders) == 0 {
+		fmt.Println("No stored providers found in config.")
+		return 0
+	}
+
+	fmt.Println("Providers:")
+	for _, current := range config.ModelProviders {
+		tokenState := "no-token"
+		if strings.TrimSpace(current.BearerToken()) != "" {
+			tokenState = "token"
+		}
+		fmt.Printf(
+			"  - %s  name=%s base_url=%s wire_api=%s env_key=%s %s\n",
+			current.Name,
+			fallback(current.DisplayName(), "<unset>"),
+			fallback(current.BaseURL, "<unset>"),
+			fallback(current.WireAPI, "chat_completions"),
+			fallback(current.APIKeyEnv, "<unset>"),
+			tokenState,
+		)
+	}
+	return 0
+}
+
 func runSettings(args []string) int {
 	settingsPath := apphome.SettingsPath()
-	settings, err := state.LoadSettings(settingsPath)
+	settings, err := loadSettingsOptional(settingsPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read settings: %v\n", err)
 		return 1
@@ -343,43 +464,242 @@ func runSettings(args []string) int {
 }
 
 func runResume(args []string) int {
-	sessions, err := state.LoadSessions(apphome.SessionsDir(), 10)
+	target, prompt, jsonOutput, err := parseResumeArgs(args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read sessions: %v\n", err)
+		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
+		return 2
+	}
+
+	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), target)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("No sessions found.")
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
 		return 1
 	}
 
-	if len(sessions) == 0 {
-		fmt.Println("No sessions found.")
+	meta, messages, err := state.LoadSession(sessionEntry.Path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resume: failed to load session: %v\n", err)
+		return 1
+	}
+
+	if strings.TrimSpace(prompt) == "" {
+		if jsonOutput {
+			return printJSON(map[string]any{
+				"session":  sessionEntry,
+				"meta":     meta,
+				"messages": messages,
+			})
+		}
+		fmt.Printf("session: %s\n", sessionEntry.Path)
+		for _, message := range messages {
+			text := strings.TrimSpace(message.Text())
+			if text == "" && len(message.ToolCalls) == 0 {
+				continue
+			}
+			if text != "" {
+				fmt.Printf("[%s] %s\n", message.Role, text)
+				continue
+			}
+			for _, call := range message.ToolCalls {
+				fmt.Printf("[%s] tool_call %s %s %s\n", message.Role, call.ID, call.Function.Name, call.Function.ArgumentsString())
+			}
+		}
 		return 0
 	}
 
-	lastOnly := false
+	result, err := taskrun.Run(contextBackground(), taskrun.Options{
+		Prompt:          prompt,
+		Model:           meta.Model,
+		Profile:         meta.Profile,
+		Provider:        meta.Provider,
+		ReasoningEffort: meta.Reasoning,
+		History:         messages,
+		JSON:            jsonOutput,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
+		return 1
+	}
+
+	if err := appendSessionTurn(sessionEntry.Path, prompt, result.AssistantMessage); err != nil {
+		fmt.Fprintf(os.Stderr, "resume: warning: failed to append session: %v\n", err)
+	}
+	result.SessionPath = sessionEntry.Path
+
+	if jsonOutput {
+		return printJSON(result)
+	}
+	if err := taskrun.Print(result); err != nil {
+		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runFork(args []string) int {
+	target, prompt, jsonOutput, err := parseResumeArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
+		return 2
+	}
+	if strings.TrimSpace(prompt) == "" {
+		fmt.Fprintln(os.Stderr, "fork: prompt is required")
+		return 2
+	}
+
+	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), target)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("No sessions found.")
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
+		return 1
+	}
+
+	meta, messages, err := state.LoadSession(sessionEntry.Path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fork: failed to load session: %v\n", err)
+		return 1
+	}
+
+	result, err := taskrun.Run(contextBackground(), taskrun.Options{
+		Prompt:          prompt,
+		Model:           meta.Model,
+		Profile:         meta.Profile,
+		Provider:        meta.Provider,
+		ReasoningEffort: meta.Reasoning,
+		History:         messages,
+		JSON:            jsonOutput,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
+		return 1
+	}
+
+	entry, err := persistNewSession(result)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fork: warning: failed to save forked session: %v\n", err)
+	} else {
+		result.SessionPath = entry.Path
+	}
+
+	if jsonOutput {
+		return printJSON(result)
+	}
+	if err := taskrun.Print(result); err != nil {
+		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func persistNewSession(result taskrun.Result) (state.SessionEntry, error) {
+	messages := clonePersistedMessages(result.RequestMessages)
+	if hasPersistableMessage(result.AssistantMessage) {
+		messages = append(messages, result.AssistantMessage)
+	}
+	return state.CreateSession(apphome.SessionsDir(), state.SessionMeta{
+		Model:     result.Model,
+		Provider:  result.ProviderName,
+		Profile:   result.Profile,
+		Reasoning: result.Reasoning,
+	}, messages)
+}
+
+func appendSessionTurn(path string, prompt string, assistant runtime.Message) error {
+	messages := []runtime.Message{runtime.TextMessage(runtime.RoleUser, prompt)}
+	if hasPersistableMessage(assistant) {
+		messages = append(messages, assistant)
+	}
+	return state.AppendSession(path, messages...)
+}
+
+func clonePersistedMessages(messages []runtime.Message) []runtime.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	result := make([]runtime.Message, len(messages))
+	copy(result, messages)
+	return result
+}
+
+func hasPersistableMessage(message runtime.Message) bool {
+	return strings.TrimSpace(message.Text()) != "" || len(message.ToolCalls) > 0 || strings.TrimSpace(message.Refusal) != ""
+}
+
+func parseResumeArgs(args []string) (string, string, bool, error) {
+	var selector string
+	var promptParts []string
+	jsonOutput := false
+
 	for _, arg := range args {
-		if arg == "--last" {
-			lastOnly = true
+		switch arg {
+		case "--json":
+			jsonOutput = true
+		case "--last":
+			selector = ""
+		default:
+			if strings.HasPrefix(arg, "--") {
+				return "", "", false, fmt.Errorf("unknown flag %q", arg)
+			}
+			if selector == "" && looksLikeSessionTarget(arg) {
+				selector = arg
+				continue
+			}
+			promptParts = append(promptParts, arg)
 		}
 	}
 
-	if hasFlag(args, "--json") {
-		return printJSON(sessions)
+	return selector, strings.TrimSpace(strings.Join(promptParts, " ")), jsonOutput, nil
+}
+
+func looksLikeSessionTarget(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if strings.HasSuffix(value, ".jsonl") {
+		return true
+	}
+	if strings.ContainsRune(value, os.PathSeparator) {
+		return true
+	}
+	return false
+}
+
+func resolveResumeSession(root string, selector string) (state.SessionEntry, error) {
+	if strings.TrimSpace(selector) != "" {
+		candidate := selector
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(root, candidate)
+		}
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return state.SessionEntry{
+				ID:      strings.TrimSuffix(filepath.Base(candidate), filepath.Ext(candidate)),
+				Name:    filepath.Base(candidate),
+				Path:    candidate,
+				RelPath: selector,
+				ModTime: info.ModTime(),
+				Size:    info.Size(),
+			}, nil
+		}
+		return state.SessionEntry{}, os.ErrNotExist
 	}
 
-	if lastOnly {
-		fmt.Println(sessions[0].Path)
-		return 0
+	sessions, err := state.LoadSessions(root, 1)
+	if err != nil {
+		return state.SessionEntry{}, err
 	}
-
-	fmt.Println("Recent sessions:")
-	for _, session := range sessions {
-		fmt.Printf(
-			"  - %s  %s  %s\n",
-			session.ModTime.Format(time.RFC3339),
-			humanSize(session.Size),
-			session.RelPath,
-		)
+	if len(sessions) == 0 {
+		return state.SessionEntry{}, os.ErrNotExist
 	}
-	return 0
+	return sessions[0], nil
 }
 
 func fallback(value string, fallbackValue string) string {
@@ -494,6 +814,143 @@ func takeFlagValue(args []string, index int, flag string) (string, int, error) {
 	return args[next], next, nil
 }
 
+func parseProfileSetArgs(config state.Config, args []string) (state.ProfileConfig, bool, error) {
+	if len(args) == 0 {
+		return state.ProfileConfig{}, false, fmt.Errorf("set requires a profile name")
+	}
+
+	name := strings.TrimSpace(args[0])
+	if name == "" {
+		return state.ProfileConfig{}, false, fmt.Errorf("profile name is required")
+	}
+
+	profile, ok := config.Profile(name)
+	if !ok {
+		profile = state.ProfileConfig{Name: name}
+	}
+
+	activate := false
+	for index := 1; index < len(args); index++ {
+		switch args[index] {
+		case "--model":
+			value, next, err := takeFlagValue(args, index, "--model")
+			if err != nil {
+				return state.ProfileConfig{}, false, err
+			}
+			profile.Model = value
+			index = next
+		case "--provider":
+			value, next, err := takeFlagValue(args, index, "--provider")
+			if err != nil {
+				return state.ProfileConfig{}, false, err
+			}
+			profile.Provider = value
+			index = next
+		case "--reasoning":
+			value, next, err := takeFlagValue(args, index, "--reasoning")
+			if err != nil {
+				return state.ProfileConfig{}, false, err
+			}
+			profile.ReasoningEffort = value
+			index = next
+		case "--activate":
+			activate = true
+		default:
+			return state.ProfileConfig{}, false, fmt.Errorf("unknown flag %q", args[index])
+		}
+	}
+
+	return profile, activate, nil
+}
+
+func parseProviderSetArgs(config state.Config, args []string) (state.ProviderConfig, error) {
+	if len(args) == 0 {
+		return state.ProviderConfig{}, fmt.Errorf("set requires a provider name")
+	}
+
+	name := strings.TrimSpace(args[0])
+	if name == "" {
+		return state.ProviderConfig{}, fmt.Errorf("provider name is required")
+	}
+
+	providerConfig, ok := config.Provider(name)
+	if !ok {
+		providerConfig = state.ProviderConfig{Name: name}
+	}
+
+	for index := 1; index < len(args); index++ {
+		switch args[index] {
+		case "--display-name", "--name":
+			value, next, err := takeFlagValue(args, index, args[index])
+			if err != nil {
+				return state.ProviderConfig{}, err
+			}
+			providerConfig.Fields.Set("name", state.StringConfigValue(value))
+			index = next
+		case "--base-url":
+			value, next, err := takeFlagValue(args, index, "--base-url")
+			if err != nil {
+				return state.ProviderConfig{}, err
+			}
+			providerConfig.BaseURL = value
+			index = next
+		case "--env-key":
+			value, next, err := takeFlagValue(args, index, "--env-key")
+			if err != nil {
+				return state.ProviderConfig{}, err
+			}
+			providerConfig.APIKeyEnv = value
+			index = next
+		case "--wire-api":
+			value, next, err := takeFlagValue(args, index, "--wire-api")
+			if err != nil {
+				return state.ProviderConfig{}, err
+			}
+			value = strings.TrimSpace(value)
+			switch value {
+			case "", "chat_completions", "responses":
+				providerConfig.WireAPI = value
+			default:
+				return state.ProviderConfig{}, fmt.Errorf("unsupported wire api %q", value)
+			}
+			index = next
+		case "--token":
+			value, next, err := takeFlagValue(args, index, "--token")
+			if err != nil {
+				return state.ProviderConfig{}, err
+			}
+			providerConfig.Fields.Set("experimental_bearer_token", state.StringConfigValue(value))
+			index = next
+		default:
+			return state.ProviderConfig{}, fmt.Errorf("unknown flag %q", args[index])
+		}
+	}
+
+	return providerConfig, nil
+}
+
 func contextBackground() context.Context {
 	return context.Background()
+}
+
+func loadConfigOptional(path string) (state.Config, error) {
+	config, err := state.LoadConfig(path)
+	if err == nil {
+		return config, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return state.Config{}, nil
+	}
+	return state.Config{}, err
+}
+
+func loadSettingsOptional(path string) (state.Settings, error) {
+	settings, err := state.LoadSettings(path)
+	if err == nil {
+		return settings, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return state.Settings{}, nil
+	}
+	return state.Settings{}, err
 }

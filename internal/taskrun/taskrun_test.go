@@ -47,3 +47,42 @@ func TestProviderEndpoint_RejectsResponsesEndpoint(t *testing.T) {
 		t.Fatalf("expected error")
 	}
 }
+
+func TestResponsesEndpoint_DefaultRoot(t *testing.T) {
+	base, path, err := responsesEndpoint("https://api.openai.com")
+	if err != nil {
+		t.Fatalf("responsesEndpoint: %v", err)
+	}
+	if base != "https://api.openai.com" {
+		t.Fatalf("unexpected base: %s", base)
+	}
+	if path != "/v1/responses" {
+		t.Fatalf("unexpected path: %s", path)
+	}
+}
+
+func TestResponsesEndpoint_VersionedBase(t *testing.T) {
+	base, path, err := responsesEndpoint("https://api.openai.com/v1")
+	if err != nil {
+		t.Fatalf("responsesEndpoint: %v", err)
+	}
+	if base != "https://api.openai.com/v1" {
+		t.Fatalf("unexpected base: %s", base)
+	}
+	if path != "/responses" {
+		t.Fatalf("unexpected path: %s", path)
+	}
+}
+
+func TestResponsesEndpoint_FullResponsesURL(t *testing.T) {
+	base, path, err := responsesEndpoint("https://example.com/custom/v1/responses")
+	if err != nil {
+		t.Fatalf("responsesEndpoint: %v", err)
+	}
+	if base != "https://example.com/custom/v1" {
+		t.Fatalf("unexpected base: %s", base)
+	}
+	if path != "/responses" {
+		t.Fatalf("unexpected path: %s", path)
+	}
+}

@@ -256,6 +256,17 @@ func (c *Config) SetModel(name string) {
 	c.Model.fieldOrder = appendUnique(c.Model.fieldOrder, "model")
 }
 
+func (c *Config) SetModelProvider(name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		c.Model.Fields.Delete("model_provider")
+		c.Model.fieldOrder = removeKey(c.Model.fieldOrder, "model_provider")
+		return
+	}
+	c.Model.Fields.Set("model_provider", StringConfigValue(name))
+	c.Model.fieldOrder = appendUnique(c.Model.fieldOrder, "model_provider")
+}
+
 func (c *Config) SetReasoningEffort(value string) {
 	c.Model.ReasoningEffort = strings.TrimSpace(value)
 	c.Model.fieldOrder = appendUnique(c.Model.fieldOrder, "model_reasoning_effort")
