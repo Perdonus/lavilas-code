@@ -536,6 +536,45 @@ func applyPatch(ctx context.Context, args patchArgs) string {
 	return marshalResult(payload)
 }
 
+func patchTouchedPaths(patchText string) []string {
+	lines := strings.Split(patchText, "\n")
+	dedupe := make(map[string]struct{})
+	paths := make([]string, 0, 4)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "/dev/null" {
+			return
+		}
+		value = strings.Trim(value, "\"")
+		if strings.HasPrefix(value, "a/") || strings.HasPrefix(value, "b/") {
+			value = value[2:]
+		}
+		value = normalizeResourcePath(value, ".")
+		if _, ok := dedupe[value]; ok {
+			return
+		}
+		dedupe[value] = struct{}{}
+		paths = append(paths, value)
+	}
+
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "+++ "):
+			add(strings.TrimSpace(strings.TrimPrefix(line, "+++ ")))
+		case strings.HasPrefix(line, "rename to "):
+			add(strings.TrimSpace(strings.TrimPrefix(line, "rename to ")))
+		case strings.HasPrefix(line, "*** Add File: "):
+			add(strings.TrimSpace(strings.TrimPrefix(line, "*** Add File: ")))
+		case strings.HasPrefix(line, "*** Update File: "):
+			add(strings.TrimSpace(strings.TrimPrefix(line, "*** Update File: ")))
+		case strings.HasPrefix(line, "*** Delete File: "):
+			add(strings.TrimSpace(strings.TrimPrefix(line, "*** Delete File: ")))
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 func resolvePath(path string, allowDir bool) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		path = "."

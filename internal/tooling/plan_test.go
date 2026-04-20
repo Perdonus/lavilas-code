@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	toolruntime "github.com/Perdonus/lavilas-code/internal/runtime"
@@ -122,6 +123,66 @@ func TestBuildExecutionPlanMarksShellAsConservative(t *testing.T) {
 	}
 	if call.Metadata.SupportsParallel {
 		t.Fatalf("shell tool should not be marked parallel-safe")
+	}
+}
+
+func TestBuildExecutionPlanAssignsStableApprovalIDForEquivalentCalls(t *testing.T) {
+	first := BuildExecutionPlanWithToolPolicy([]toolruntime.ToolCall{
+		toolCall("write-a", "write_file", jsonArgs(map[string]any{
+			"path":    "a.txt",
+			"content": "hello",
+		})),
+	}, ToolPolicy{ApprovalMode: ToolApprovalModeRequire})
+	second := BuildExecutionPlanWithToolPolicy([]toolruntime.ToolCall{
+		toolCall("write-b", "write_file", jsonArgs(map[string]any{
+			"path":    "a.txt",
+			"content": "updated",
+		})),
+	}, ToolPolicy{ApprovalMode: ToolApprovalModeRequire})
+
+	firstCall := first.Batches[0].Calls[0]
+	secondCall := second.Batches[0].Calls[0]
+	if firstCall.ApprovalID == "" {
+		t.Fatal("expected approval id for first call")
+	}
+	if firstCall.ApprovalID != secondCall.ApprovalID {
+		t.Fatalf("approval ids differ for equivalent write targets: %q vs %q", firstCall.ApprovalID, secondCall.ApprovalID)
+	}
+}
+
+func TestBuildExecutionPlanTracksPatchTargetsPerFile(t *testing.T) {
+	patch := strings.Join([]string{
+		"diff --git a/foo.txt b/foo.txt",
+		"--- a/foo.txt",
+		"+++ b/foo.txt",
+		"@@ -1 +1 @@",
+		"-old",
+		"+new",
+		"diff --git a/sub/bar.txt b/sub/bar.txt",
+		"--- a/sub/bar.txt",
+		"+++ b/sub/bar.txt",
+		"@@ -1 +1 @@",
+		"-alpha",
+		"+beta",
+	}, "\n")
+	plan := BuildExecutionPlanWithToolPolicy([]toolruntime.ToolCall{
+		toolCall("patch-a", "apply_patch", jsonArgs(map[string]any{
+			"patch": patch,
+		})),
+	}, ToolPolicy{ApprovalMode: ToolApprovalModeRequire})
+
+	call := plan.Batches[0].Calls[0]
+	if got, want := len(call.ApprovalKeys), 2; got != want {
+		t.Fatalf("approval key count = %d, want %d (%v)", got, want, call.ApprovalKeys)
+	}
+	if got, want := len(call.Metadata.ResourceKeys), 2; got != want {
+		t.Fatalf("resource key count = %d, want %d (%v)", got, want, call.Metadata.ResourceKeys)
+	}
+	if !strings.Contains(call.Metadata.ResourceKeys[0], "foo.txt") && !strings.Contains(call.Metadata.ResourceKeys[1], "foo.txt") {
+		t.Fatalf("patch targets missing foo.txt: %v", call.Metadata.ResourceKeys)
+	}
+	if !strings.Contains(call.Metadata.ResourceKeys[0], "sub/bar.txt") && !strings.Contains(call.Metadata.ResourceKeys[1], "sub/bar.txt") {
+		t.Fatalf("patch targets missing sub/bar.txt: %v", call.Metadata.ResourceKeys)
 	}
 }
 

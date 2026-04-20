@@ -485,6 +485,98 @@ func TestRunWithToolLoop_ApprovalHandlerDeniesTool(t *testing.T) {
 	}
 }
 
+func TestRunWithToolLoop_ApprovalHandlerApproveForSessionCachesEquivalentCalls(t *testing.T) {
+	tempDir := t.TempDir()
+	targetPath := filepath.Join(tempDir, "session-approved.txt")
+	client := fakeProviderClient{
+		name: "approval-handler-session-cache",
+		caps: provider.Capabilities{Streaming: true, Tools: true},
+		streamFn: func(_ context.Context, request runtime.Request) (runtime.Stream, error) {
+			toolMessages := 0
+			for _, message := range request.Messages {
+				if message.Role == runtime.RoleTool {
+					toolMessages++
+				}
+			}
+			switch toolMessages {
+			case 0, 1:
+				return &fakeStream{events: []runtime.StreamEvent{
+					{
+						Type: runtime.StreamEventTypeDelta,
+						Delta: runtime.MessageDelta{
+							Role: runtime.RoleAssistant,
+							ToolCalls: []runtime.ToolCallDelta{{
+								ID:             "call_write",
+								Type:           runtime.ToolTypeFunction,
+								NameDelta:      "write_file",
+								ArgumentsDelta: `{"path":"` + targetPath + `","content":"approved"}`,
+							}},
+						},
+					},
+					{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonToolCalls},
+					{Type: runtime.StreamEventTypeDone},
+				}}, nil
+			default:
+				return &fakeStream{events: []runtime.StreamEvent{
+					{
+						Type: runtime.StreamEventTypeDelta,
+						Delta: runtime.MessageDelta{
+							Role:    runtime.RoleAssistant,
+							Content: []runtime.ContentPartDelta{{Type: runtime.ContentPartTypeText, Text: "cached approval reused"}},
+						},
+					},
+					{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonStop},
+					{Type: runtime.StreamEventTypeDone},
+				}}, nil
+			}
+		},
+	}
+
+	request := runtime.Request{
+		Model: "tool-model",
+		Messages: []runtime.Message{
+			runtime.TextMessage(runtime.RoleSystem, "system"),
+			runtime.TextMessage(runtime.RoleUser, "write twice"),
+		},
+		Tools: []runtime.ToolDefinition{{
+			Type:     runtime.ToolTypeFunction,
+			Function: runtime.FunctionDefinition{Name: "write_file"},
+		}},
+	}
+
+	policy := tooling.DefaultToolPolicy()
+	policy.ApprovalMode = tooling.ToolApprovalModeRequire
+	handlerCalls := 0
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
+		handlerCalls++
+		if request.ApprovalID == "" {
+			t.Fatalf("expected stable approval id: %+v", request)
+		}
+		return ApprovalDecisionApproveForSession, nil
+	}, progressReporter{})
+	if err != nil {
+		t.Fatalf("runWithToolLoop: %v", err)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("approval handler calls = %d, want 1", handlerCalls)
+	}
+	if assistant.Text() != "cached approval reused" {
+		t.Fatalf("assistant text = %q, want cached approval reused", assistant.Text())
+	}
+	if len(reports) != 2 {
+		t.Fatalf("tool report count = %d, want 2", len(reports))
+	}
+	if reports[0].Results[0].Metadata.ApprovalState != tooling.ToolApprovalStateSessionApproved {
+		t.Fatalf("first call approval state = %s, want %s", reports[0].Results[0].Metadata.ApprovalState, tooling.ToolApprovalStateSessionApproved)
+	}
+	if reports[1].Results[0].Metadata.ApprovalState != tooling.ToolApprovalStateSessionApproved {
+		t.Fatalf("cached call approval state = %s, want %s", reports[1].Results[0].Metadata.ApprovalState, tooling.ToolApprovalStateSessionApproved)
+	}
+	if len(history) < 6 {
+		t.Fatalf("unexpected history length: %d", len(history))
+	}
+}
+
 func TestCollectStreamTurn_EmitsAssistantSnapshots(t *testing.T) {
 	updates := make([]ProgressUpdate, 0, 4)
 	client := fakeProviderClient{

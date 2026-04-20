@@ -273,6 +273,7 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 
 	messages := cloneMessages(request.Messages)
 	baseRequest := request
+	approvalStore := newApprovalSessionStore()
 	var events []runtime.StreamEvent
 	var toolReports []tooling.ExecutionReport
 
@@ -309,7 +310,7 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 			Model:        currentRequest.Model,
 			ToolPlan:     &plan,
 		})
-		resolvedPlan, err := resolveToolApprovals(ctx, plan, approvalHandler, reporter, client.Name(), currentRequest.Model, round+1)
+		resolvedPlan, err := resolveToolApprovals(ctx, plan, approvalStore, approvalHandler, reporter, client.Name(), currentRequest.Model, round+1)
 		if err != nil {
 			return nil, nil, nil, runtime.Message{}, nil, nil, err
 		}
@@ -343,8 +344,8 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 	return nil, nil, nil, runtime.Message{}, nil, nil, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
 }
 
-func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, approvalHandler ApprovalHandler, reporter progressReporter, providerName string, model string, round int) (tooling.ExecutionPlan, error) {
-	if approvalHandler == nil {
+func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, approvalStore *approvalSessionStore, approvalHandler ApprovalHandler, reporter progressReporter, providerName string, model string, round int) (tooling.ExecutionPlan, error) {
+	if approvalStore == nil && approvalHandler == nil {
 		return plan, nil
 	}
 	resolved := plan
@@ -352,6 +353,13 @@ func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, appro
 		for callIndex := range resolved.Batches[batchIndex].Calls {
 			call := resolved.Batches[batchIndex].Calls[callIndex]
 			if call.Metadata.Permission != tooling.ToolPermissionApprovalRequired {
+				continue
+			}
+			if approvalStore != nil && approvalStore.IsApprovedForSession(call) {
+				applyApprovalDecision(&resolved.Batches[batchIndex].Calls[callIndex], ApprovalDecisionApproveForSession)
+				continue
+			}
+			if approvalHandler == nil {
 				continue
 			}
 			request := tooling.ApprovalRequestForCall(resolved.Batches[batchIndex].Index, call)
@@ -367,6 +375,9 @@ func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, appro
 				return plan, err
 			}
 			applyApprovalDecision(&resolved.Batches[batchIndex].Calls[callIndex], decision)
+			if decision == ApprovalDecisionApproveForSession && approvalStore != nil {
+				approvalStore.RememberApproved(resolved.Batches[batchIndex].Calls[callIndex])
+			}
 		}
 	}
 	return resolved, nil

@@ -45,15 +45,16 @@ type ToolPolicy struct {
 }
 
 type ApprovalRequest struct {
-	Index    int                   `json:"index"`
-	Batch    int                   `json:"batch"`
-	CallID   string                `json:"call_id"`
-	Name     string                `json:"name"`
-	Status   ResultStatus          `json:"status"`
-	Summary  string                `json:"summary,omitempty"`
-	Details  string                `json:"details,omitempty"`
-	Reason   string                `json:"reason,omitempty"`
-	Metadata ToolExecutionMetadata `json:"metadata"`
+	Index      int                   `json:"index"`
+	Batch      int                   `json:"batch"`
+	ApprovalID string                `json:"approval_id,omitempty"`
+	CallID     string                `json:"call_id"`
+	Name       string                `json:"name"`
+	Status     ResultStatus          `json:"status"`
+	Summary    string                `json:"summary,omitempty"`
+	Details    string                `json:"details,omitempty"`
+	Reason     string                `json:"reason,omitempty"`
+	Metadata   ToolExecutionMetadata `json:"metadata"`
 }
 
 type ExecutionReportSummary struct {

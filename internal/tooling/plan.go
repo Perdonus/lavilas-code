@@ -65,12 +65,14 @@ type ToolExecutionMetadata struct {
 }
 
 type ToolCallPlan struct {
-	Index     int
-	Call      toolruntime.ToolCall
-	CallID    string
-	Name      string
-	Arguments json.RawMessage
-	Metadata  ToolExecutionMetadata
+	Index        int
+	Call         toolruntime.ToolCall
+	CallID       string
+	ApprovalID   string
+	ApprovalKeys []string
+	Name         string
+	Arguments    json.RawMessage
+	Metadata     ToolExecutionMetadata
 }
 
 type ExecutionBatch struct {
@@ -111,6 +113,7 @@ type ToolResultEnvelope struct {
 	BatchIndex int
 	Mode       ExecutionMode
 	CallID     string
+	ApprovalID string
 	Name       string
 	Summary    string
 	Details    string
@@ -280,13 +283,16 @@ func buildCallPlan(index int, call toolruntime.ToolCall, policy ToolPolicy) Tool
 	arguments := cloneRawMessage(call.Function.Arguments)
 	metadata := inspectToolCall(name, arguments)
 	metadata = applyToolPolicy(name, metadata, policy)
+	approvalKeys := approvalKeysForCall(name, arguments, metadata)
 	return ToolCallPlan{
-		Index:     index,
-		Call:      call,
-		CallID:    callID,
-		Name:      name,
-		Arguments: arguments,
-		Metadata:  metadata,
+		Index:        index,
+		Call:         call,
+		CallID:       callID,
+		ApprovalID:   approvalIDForKeys(approvalKeys),
+		ApprovalKeys: approvalKeys,
+		Name:         name,
+		Arguments:    arguments,
+		Metadata:     metadata,
 	}
 }
 
@@ -377,6 +383,7 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 			BatchIndex: batchIndex,
 			Mode:       mode,
 			CallID:     call.CallID,
+			ApprovalID: call.ApprovalID,
 			Name:       call.Name,
 			Summary:    summary,
 			Details:    details,
@@ -397,6 +404,7 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 			BatchIndex: batchIndex,
 			Mode:       mode,
 			CallID:     call.CallID,
+			ApprovalID: call.ApprovalID,
 			Name:       call.Name,
 			Summary:    summary,
 			Details:    details,
@@ -416,6 +424,7 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 		BatchIndex: batchIndex,
 		Mode:       mode,
 		CallID:     call.CallID,
+		ApprovalID: call.ApprovalID,
 		Name:       call.Name,
 		Summary:    summary,
 		Details:    details,
@@ -432,15 +441,16 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 func ApprovalRequestForCall(batch int, call ToolCallPlan) ApprovalRequest {
 	summary, details := describeApprovalCall(call)
 	return ApprovalRequest{
-		Index:    call.Index,
-		Batch:    batch,
-		CallID:   call.CallID,
-		Name:     call.Name,
-		Status:   ResultStatusApprovalRequired,
-		Summary:  summary,
-		Details:  details,
-		Reason:   call.Metadata.PolicyReason,
-		Metadata: call.Metadata,
+		Index:      call.Index,
+		Batch:      batch,
+		ApprovalID: call.ApprovalID,
+		CallID:     call.CallID,
+		Name:       call.Name,
+		Status:     ResultStatusApprovalRequired,
+		Summary:    summary,
+		Details:    details,
+		Reason:     call.Metadata.PolicyReason,
+		Metadata:   call.Metadata,
 	}
 }
 
@@ -494,11 +504,20 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 		metadata.ResourceKeys = []string{"file:" + resource}
 		return metadata
 	case "apply_patch":
-		metadata.ResourceKeys = []string{"workspace"}
 		var args patchArgs
 		if err := decodeArgs(arguments, &args); err != nil {
 			metadata.ArgumentParseError = err.Error()
+			metadata.ResourceKeys = []string{"workspace"}
+			return metadata
 		}
+		if paths := patchTouchedPaths(args.Patch); len(paths) > 0 {
+			metadata.ResourceKeys = make([]string, 0, len(paths))
+			for _, path := range paths {
+				metadata.ResourceKeys = append(metadata.ResourceKeys, "file:"+path)
+			}
+			return metadata
+		}
+		metadata.ResourceKeys = []string{"workspace"}
 		return metadata
 	default:
 		metadata.ResourceKeys = []string{"tool:" + strings.TrimSpace(name)}
@@ -512,10 +531,11 @@ func marshalPolicyResult(call ToolCallPlan, status ResultStatus) string {
 		errorMessage = "tool call blocked by execution policy"
 	}
 	return marshalResult(map[string]any{
-		"ok":     false,
-		"tool":   call.Name,
-		"status": status,
-		"error":  errorMessage,
+		"ok":          false,
+		"tool":        call.Name,
+		"approval_id": call.ApprovalID,
+		"status":      status,
+		"error":       errorMessage,
 		"policy": map[string]any{
 			"permission":        call.Metadata.Permission,
 			"approval_state":    call.Metadata.ApprovalState,
@@ -606,15 +626,16 @@ func collectApprovalRequests(results []ToolResultEnvelope) []ApprovalRequest {
 			continue
 		}
 		requests = append(requests, ApprovalRequest{
-			Index:    result.Index,
-			Batch:    result.BatchIndex,
-			CallID:   result.CallID,
-			Name:     result.Name,
-			Status:   result.Status,
-			Summary:  result.Summary,
-			Details:  result.Details,
-			Reason:   result.Metadata.PolicyReason,
-			Metadata: result.Metadata,
+			Index:      result.Index,
+			Batch:      result.BatchIndex,
+			ApprovalID: result.ApprovalID,
+			CallID:     result.CallID,
+			Name:       result.Name,
+			Status:     result.Status,
+			Summary:    result.Summary,
+			Details:    result.Details,
+			Reason:     result.Metadata.PolicyReason,
+			Metadata:   result.Metadata,
 		})
 	}
 	return requests
@@ -645,6 +666,10 @@ func describeApprovalCall(call ToolCallPlan) (string, string) {
 			patch := strings.TrimSpace(args.Patch)
 			if patch == "" {
 				return "apply patch", ""
+			}
+			if paths := patchTouchedPaths(args.Patch); len(paths) > 0 {
+				previewCount := minInt(len(paths), 3)
+				return fmt.Sprintf("apply patch to %d file(s)", len(paths)), strings.Join(paths[:previewCount], ", ")
 			}
 			firstLine := strings.SplitN(patch, "\n", 2)[0]
 			return "apply patch", firstLine
