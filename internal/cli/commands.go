@@ -20,15 +20,30 @@ func registry() []Command {
 	}
 
 	return []Command{
-		{Name: "resume", Aliases: []string{"r"}, Description: "Show recent sessions from ~/.codex", Run: runResume},
-		{Name: "run", Aliases: []string{"exec"}, Description: "Execute a one-shot task", Run: stub("run")},
-		{Name: "login", Description: "Configure account access", Run: stub("login")},
-		{Name: "logout", Description: "Remove saved account access", Run: stub("logout")},
-		{Name: "model", Description: "Show active model and reasoning", Run: runModel},
-		{Name: "profiles", Description: "List saved profiles from config", Run: runProfiles},
-		{Name: "settings", Description: "Show saved UI settings", Run: runSettings},
-		{Name: "update", Description: "Check for updates", Run: stub("update")},
-		{Name: "doctor", Description: "Inspect local environment", Run: runDoctor},
+		{Name: "resume", Aliases: []string{"r", "continue", "продолжить"}, Description: "Show recent sessions from ~/.codex", Category: "interactive", Run: runResume},
+		{Name: "fork", Aliases: []string{"branch-chat", "форк"}, Description: "Fork a previous session", Category: "interactive", Run: stub("fork")},
+		{Name: "run", Aliases: []string{"exec", "ask", "запуск"}, Description: "Execute a one-shot task", Category: "interactive", Run: stub("run")},
+		{Name: "review", Aliases: []string{"rev", "ревью"}, Description: "Run non-interactive review", Category: "interactive", Run: stub("review")},
+		{Name: "apply", Aliases: []string{"patch", "применить"}, Description: "Apply latest agent patch", Category: "interactive", Run: stub("apply")},
+
+		{Name: "login", Aliases: []string{"auth", "вход"}, Description: "Configure account access", Category: "account", Run: stub("login")},
+		{Name: "logout", Aliases: []string{"unauth", "выход"}, Description: "Remove saved account access", Category: "account", Run: stub("logout")},
+		{Name: "profiles", Aliases: []string{"accounts", "prof", "профили", "аккаунты"}, Description: "List saved profiles from config", Category: "account", Run: runProfiles},
+
+		{Name: "model", Aliases: []string{"models", "модель", "модели"}, Description: "Show active model and reasoning", Category: "config", Run: runModel},
+		{Name: "settings", Aliases: []string{"prefs", "config", "настройки"}, Description: "Show saved UI settings", Category: "config", Run: runSettings},
+		{Name: "completion", Aliases: []string{"completions", "автодополнение"}, Description: "Generate shell completions", Category: "config", Run: stub("completion")},
+		{Name: "features", Aliases: []string{"flags", "фичи"}, Description: "Inspect feature toggles", Category: "config", Run: stub("features")},
+
+		{Name: "mcp", Aliases: []string{"tools", "инструменты"}, Description: "Manage MCP tools", Category: "automation", Run: stub("mcp")},
+		{Name: "mcp-server", Aliases: []string{"server", "сервер"}, Description: "Run stdio MCP server", Category: "automation", Run: stub("mcp-server")},
+		{Name: "cloud", Aliases: []string{"cloud-tasks", "облако"}, Description: "Inspect remote cloud tasks", Category: "automation", Run: stub("cloud")},
+
+		{Name: "sandbox", Aliases: []string{"isolate", "песочница"}, Description: "Run inside Go Lavilas sandbox", Category: "runtime", Run: stub("sandbox")},
+		{Name: "update", Aliases: []string{"upgrade", "обновить"}, Description: "Check for updates", Category: "runtime", Run: stub("update")},
+		{Name: "doctor", Aliases: []string{"diag", "диагностика"}, Description: "Inspect local environment", Category: "runtime", Run: runDoctor},
+
+		{Name: "debug", Aliases: []string{"dbg", "дебаг"}, Description: "Debug helpers", Category: "debug", Run: stub("debug")},
 	}
 }
 

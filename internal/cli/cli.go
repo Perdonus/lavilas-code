@@ -13,6 +13,7 @@ type Command struct {
 	Name        string
 	Aliases     []string
 	Description string
+	Category    string
 	Run         func(args []string) int
 }
 
@@ -58,15 +59,44 @@ func printBanner() {
 }
 
 func printCommands(commands []Command) {
-	sort.Slice(commands, func(i, j int) bool {
-		return commands[i].Name < commands[j].Name
-	})
-	fmt.Println("Commands:")
+	categoryOrder := []string{
+		"interactive",
+		"account",
+		"config",
+		"automation",
+		"runtime",
+		"debug",
+	}
+	labels := map[string]string{
+		"interactive": "Interactive",
+		"account":     "Account",
+		"config":      "Config",
+		"automation":  "Automation",
+		"runtime":     "Runtime",
+		"debug":       "Debug",
+	}
+
+	byCategory := map[string][]Command{}
 	for _, cmd := range commands {
-		aliases := ""
-		if len(cmd.Aliases) > 0 {
-			aliases = fmt.Sprintf(" [%s]", strings.Join(cmd.Aliases, ", "))
+		byCategory[cmd.Category] = append(byCategory[cmd.Category], cmd)
+	}
+
+	fmt.Println("Commands:")
+	for _, category := range categoryOrder {
+		items := byCategory[category]
+		if len(items) == 0 {
+			continue
 		}
-		fmt.Printf("  %-12s%s %s\\n", cmd.Name, aliases, cmd.Description)
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].Name < items[j].Name
+		})
+		fmt.Printf("  %s:\n", labels[category])
+		for _, cmd := range items {
+			aliases := ""
+			if len(cmd.Aliases) > 0 {
+				aliases = fmt.Sprintf(" [%s]", strings.Join(cmd.Aliases, ", "))
+			}
+			fmt.Printf("    %-14s%s %s\\n", cmd.Name, aliases, cmd.Description)
+		}
 	}
 }
