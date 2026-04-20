@@ -1,10 +1,11 @@
 {
-  "name": "go-lavilas",
+  "name": "lvls",
   "version": "0.1.0-alpha.0",
   "title": "Go Lavilas Alpha",
   "description": "Standalone alpha channel for the Go implementation of Lavilas, packaged for NV.",
   "homepage": "https://github.com/Perdonus/lavilas-code/tree/nv-go-alpha",
   "aliases": [
+    "lvls",
     "lavilas-go",
     "go-lavilas-alpha",
     "lavilas-go-alpha"
@@ -15,32 +16,32 @@
   "readme": "README.md",
   "variants": [
     {
-      "id": "go-lavilas-linux-amd64",
+      "id": "lvls-linux-amd64",
       "label": "Linux amd64",
       "os": "linux",
       "default": true,
-      "artifact": "dist/go-lavilas-linux-amd64.tar.gz",
-      "file_name": "go-lavilas-linux-amd64.tar.gz",
+      "artifact": "dist/lvls-linux-amd64.tar.gz",
+      "file_name": "lvls-linux-amd64.tar.gz",
       "install_strategy": "linux-portable-tar"
     },
     {
-      "id": "go-lavilas-linux-arm64",
+      "id": "lvls-linux-arm64",
       "label": "Linux arm64",
       "os": "linux",
-      "artifact": "dist/go-lavilas-linux-arm64.tar.gz",
-      "file_name": "go-lavilas-linux-arm64.tar.gz",
+      "artifact": "dist/lvls-linux-arm64.tar.gz",
+      "file_name": "lvls-linux-arm64.tar.gz",
       "install_strategy": "linux-portable-tar"
     },
     {
-      "id": "go-lavilas-windows-amd64",
+      "id": "lvls-windows-amd64",
       "label": "Windows amd64",
       "os": "windows",
       "default": true,
-      "artifact": "dist/go-lavilas-windows-amd64.exe",
-      "file_name": "go-lavilas-windows-amd64.exe",
+      "artifact": "dist/lvls-windows-amd64.exe",
+      "file_name": "lvls-windows-amd64.exe",
       "install_strategy": "windows-self-binary",
-      "install_root": "%LOCALAPPDATA%/GoLavilas",
-      "binary_name": "go-lavilas.exe"
+      "install_root": "%LOCALAPPDATA%/Lvls",
+      "binary_name": "lvls.exe"
     }
   ]
 }

@@ -1,9 +1,9 @@
 # Go Lavilas Alpha
 
-`Go Lavilas Alpha` - это отдельный NV-продукт для go-реализации `lavilas`, с отдельным alpha-каналом и своим packaging-контуром.
+`Go Lavilas Alpha` - это отдельный NV-продукт для go-реализации `lavilas`, с отдельным alpha-каналом и своим packaging-контуром. На alpha-ветке внешняя команда и артефакты называются `lvls`, чтобы не конфликтовать с основным `lavilas`.
 
 Текущее состояние:
-- package id в `nv`: `go-lavilas`;
+- package id в `nv`: `lvls`;
 - publish-контур целится в `nv`, не в `npm`;
 - alpha foundation собирает `linux/amd64`, `linux/arm64` и `windows/amd64`;
 - release metadata складывается в `dist/SHA256SUMS` и `dist/release-metadata.json`;
@@ -18,9 +18,9 @@
 ## Локальный запуск
 
 ```bash
-go run ./cmd/lavilas --version
-go run ./cmd/lavilas help
-go run ./cmd/lavilas resume
+go run ./cmd/lvls --version
+go run ./cmd/lvls help
+go run ./cmd/lvls resume
 ```
 
 ## Сборка alpha-артефактов
@@ -31,9 +31,9 @@ LAVILAS_VERSION=0.1.0-alpha.local \
 ```
 
 После сборки в `dist/` будут:
-- `go-lavilas-linux-amd64.tar.gz`
-- `go-lavilas-linux-arm64.tar.gz`
-- `go-lavilas-windows-amd64.exe`
+- `lvls-linux-amd64.tar.gz`
+- `lvls-linux-arm64.tar.gz`
+- `lvls-windows-amd64.exe`
 - `SHA256SUMS`
 - `release-metadata.json`
 
@@ -56,6 +56,7 @@ nv publish --manifest ./dist/nv.package.publish.json --tag alpha
 
 Workflow `.github/workflows/nv-go-alpha.yml`:
 - вычисляет alpha-версию автоматически или принимает manual override;
-- собирает branded alpha artifacts для `go-lavilas`;
+- собирает branded alpha artifacts для `lvls`;
+- кладёт внутрь portable-артефактов бинарь `lvls`;
 - прикладывает checksums и release metadata в общий `dist/` artifact;
 - публикует в NV только через подготовленный publish-manifest.

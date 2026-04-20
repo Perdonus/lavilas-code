@@ -17,39 +17,26 @@ import (
 )
 
 func registry() []Command {
-	stub := func(name string) func([]string) int {
-		return func(args []string) int {
-			fmt.Printf("%s is not implemented in alpha yet.\\n", name)
-			return 2
-		}
-	}
-
 	return []Command{
+		{Name: "chat", Aliases: []string{"interactive", "repl", "чат"}, Description: "Start interactive chat mode", Category: "interactive", Run: runChat},
 		{Name: "resume", Aliases: []string{"r", "continue", "продолжить"}, Description: "Resume or inspect stored sessions", Category: "interactive", Run: runResume},
 		{Name: "fork", Aliases: []string{"branch-chat", "форк"}, Description: "Fork a previous session", Category: "interactive", Run: runFork},
 		{Name: "run", Aliases: []string{"exec", "ask", "запуск"}, Description: "Execute a one-shot task", Category: "interactive", Run: runTask},
 		{Name: "review", Aliases: []string{"rev", "ревью"}, Description: "Run non-interactive review", Category: "interactive", Run: runReview},
 		{Name: "apply", Aliases: []string{"patch", "применить"}, Description: "Apply patch from stdin or file", Category: "interactive", Run: runApply},
 
-		{Name: "login", Aliases: []string{"auth", "вход"}, Description: "Configure account access", Category: "account", Run: stub("login")},
-		{Name: "logout", Aliases: []string{"unauth", "выход"}, Description: "Remove saved account access", Category: "account", Run: stub("logout")},
+		{Name: "login", Aliases: []string{"auth", "вход"}, Description: "Save provider token and profile", Category: "account", Run: runLogin},
+		{Name: "logout", Aliases: []string{"unauth", "выход"}, Description: "Remove saved token/profile", Category: "account", Run: runLogout},
+		{Name: "status", Aliases: []string{"info", "whoami", "статус"}, Description: "Show active runtime/account state", Category: "account", Run: runStatus},
 		{Name: "profiles", Aliases: []string{"accounts", "prof", "профили", "аккаунты"}, Description: "Manage saved profiles", Category: "account", Run: runProfiles},
 		{Name: "providers", Aliases: []string{"provider", "prov", "провайдеры", "провайдер"}, Description: "Manage model providers", Category: "account", Run: runProviders},
 
-		{Name: "model", Aliases: []string{"models", "модель", "модели"}, Description: "Show active model and reasoning", Category: "config", Run: runModel},
+		{Name: "model", Aliases: []string{"models", "модель", "модели"}, Description: "Show or update active model", Category: "config", Run: runModel},
 		{Name: "settings", Aliases: []string{"prefs", "config", "настройки"}, Description: "Show saved UI settings", Category: "config", Run: runSettings},
-		{Name: "completion", Aliases: []string{"completions", "автодополнение"}, Description: "Generate shell completions", Category: "config", Run: stub("completion")},
-		{Name: "features", Aliases: []string{"flags", "фичи"}, Description: "Inspect feature toggles", Category: "config", Run: stub("features")},
+		{Name: "completion", Aliases: []string{"completions", "автодополнение"}, Description: "Generate shell completions", Category: "config", Run: runCompletion},
+		{Name: "features", Aliases: []string{"flags", "фичи"}, Description: "Show alpha feature matrix", Category: "config", Run: runFeatures},
 
-		{Name: "mcp", Aliases: []string{"tools", "инструменты"}, Description: "Manage MCP tools", Category: "automation", Run: stub("mcp")},
-		{Name: "mcp-server", Aliases: []string{"server", "сервер"}, Description: "Run stdio MCP server", Category: "automation", Run: stub("mcp-server")},
-		{Name: "cloud", Aliases: []string{"cloud-tasks", "облако"}, Description: "Inspect remote cloud tasks", Category: "automation", Run: stub("cloud")},
-
-		{Name: "sandbox", Aliases: []string{"isolate", "песочница"}, Description: "Run inside Go Lavilas sandbox", Category: "runtime", Run: stub("sandbox")},
-		{Name: "update", Aliases: []string{"upgrade", "обновить"}, Description: "Check for updates", Category: "runtime", Run: stub("update")},
 		{Name: "doctor", Aliases: []string{"diag", "диагностика"}, Description: "Inspect local environment", Category: "runtime", Run: runDoctor},
-
-		{Name: "debug", Aliases: []string{"dbg", "дебаг"}, Description: "Debug helpers", Category: "debug", Run: stub("debug")},
 	}
 }
 
@@ -149,12 +136,12 @@ func runModel(args []string) int {
 
 	if hasFlag(args, "--json") {
 		payload := map[string]any{
-			"model":            fallback(config.EffectiveModel(), ""),
-			"reasoning":        fallback(config.EffectiveReasoningEffort(), ""),
-			"active_profile":   fallback(config.ActiveProfileName(), ""),
-			"active_provider":  fallback(config.EffectiveProviderName(), ""),
-			"profiles":         config.ProfileNames(),
-			"providers":        config.ModelProviderNames(),
+			"model":           fallback(config.EffectiveModel(), ""),
+			"reasoning":       fallback(config.EffectiveReasoningEffort(), ""),
+			"active_profile":  fallback(config.ActiveProfileName(), ""),
+			"active_provider": fallback(config.EffectiveProviderName(), ""),
+			"profiles":        config.ProfileNames(),
+			"providers":       config.ModelProviderNames(),
 		}
 		return printJSON(payload)
 	}

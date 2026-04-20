@@ -3,9 +3,10 @@ set -euo pipefail
 
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 DIST_DIR="$ROOT_DIR/dist"
-BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/go-lavilas-release.XXXXXX")
-PRODUCT_SLUG=${GO_LAVILAS_PRODUCT_SLUG:-go-lavilas}
+BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/lvls-release.XXXXXX")
+PRODUCT_SLUG=${GO_LAVILAS_PRODUCT_SLUG:-lvls}
 PRODUCT_TITLE=${GO_LAVILAS_PRODUCT_TITLE:-Go Lavilas Alpha}
+PRODUCT_BINARY=${GO_LAVILAS_BINARY_NAME:-lvls}
 RELEASE_CHANNEL=${GO_LAVILAS_CHANNEL:-alpha}
 VERSION=${LAVILAS_VERSION:-0.1.0-alpha.1}
 COMMIT=${LAVILAS_COMMIT:-dev}
@@ -46,8 +47,8 @@ build_linux_tarball() {
 
   mkdir -p "$stage_dir"
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
-    go build -trimpath -ldflags "$LDFLAGS" -o "$stage_dir/$PRODUCT_SLUG" ./cmd/lavilas
-  tar -C "$stage_dir" -czf "$archive_path" "$PRODUCT_SLUG"
+    go build -trimpath -ldflags "$LDFLAGS" -o "$stage_dir/$PRODUCT_BINARY" ./cmd/lvls
+  tar -C "$stage_dir" -czf "$archive_path" "$PRODUCT_BINARY"
 }
 
 build_windows_binary() {
@@ -55,7 +56,7 @@ build_windows_binary() {
   local output_path="$DIST_DIR/${PRODUCT_SLUG}-windows-$arch.exe"
 
   CGO_ENABLED=0 GOOS=windows GOARCH="$arch" \
-    go build -trimpath -ldflags "$LDFLAGS" -o "$output_path" ./cmd/lavilas
+    go build -trimpath -ldflags "$LDFLAGS" -o "$output_path" ./cmd/lvls
 }
 
 write_release_metadata() {
@@ -65,6 +66,7 @@ write_release_metadata() {
 
   PRODUCT_SLUG="$PRODUCT_SLUG" \
   PRODUCT_TITLE="$PRODUCT_TITLE" \
+  PRODUCT_BINARY="$PRODUCT_BINARY" \
   RELEASE_CHANNEL="$RELEASE_CHANNEL" \
   VERSION="$VERSION" \
   COMMIT="$COMMIT" \
@@ -92,6 +94,7 @@ data = {
     "product": {
         "id": os.environ["PRODUCT_SLUG"],
         "title": os.environ["PRODUCT_TITLE"],
+        "binary": os.environ["PRODUCT_BINARY"],
         "channel": os.environ["RELEASE_CHANNEL"],
     },
     "release": {

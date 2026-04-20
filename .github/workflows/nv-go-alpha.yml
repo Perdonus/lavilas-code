@@ -27,8 +27,9 @@ env:
   GO_VERSION: '1.24.2'
   NV_SERVER_URL: https://sosiskibot.ru/nv/api
   RELEASE_CHANNEL: alpha
-  PACKAGE_ID: go-lavilas
+  PACKAGE_ID: lvls
   PACKAGE_TITLE: Go Lavilas Alpha
+  PACKAGE_BINARY: lvls
 
 jobs:
   prepare:
@@ -74,6 +75,7 @@ jobs:
         env:
           GO_LAVILAS_PRODUCT_SLUG: ${{ env.PACKAGE_ID }}
           GO_LAVILAS_PRODUCT_TITLE: ${{ env.PACKAGE_TITLE }}
+          GO_LAVILAS_BINARY_NAME: ${{ env.PACKAGE_BINARY }}
           GO_LAVILAS_CHANNEL: ${{ env.RELEASE_CHANNEL }}
           LAVILAS_VERSION: ${{ needs.prepare.outputs.version }}
           LAVILAS_COMMIT: ${{ github.sha }}
@@ -85,9 +87,10 @@ jobs:
       - name: Publish build summary
         run: |
           {
-            echo "## Go Lavilas alpha build"
+            echo "## LVLS alpha build"
             echo
             printf -- '- Package: `%s`\n' "${PACKAGE_ID}"
+            printf -- '- Binary: `%s`\n' "${PACKAGE_BINARY}"
             printf -- '- Version: `%s`\n' "${{ needs.prepare.outputs.version }}"
             printf -- '- Channel: `%s`\n' "${RELEASE_CHANNEL}"
             printf -- '- Commit: `%s`\n' "${GITHUB_SHA}"

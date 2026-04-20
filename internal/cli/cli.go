@@ -19,15 +19,12 @@ type Command struct {
 
 func Run(argv []string) int {
 	commands := registry()
-	lookup := map[string]Command{}
-	for _, cmd := range commands {
-		lookup[cmd.Name] = cmd
-		for _, alias := range cmd.Aliases {
-			lookup[alias] = cmd
-		}
-	}
+	lookup := buildLookup(commands)
 
 	if len(argv) == 0 {
+		if isInteractiveTerminal() {
+			return runChat(nil)
+		}
 		printBanner()
 		printCommands(commands)
 		return 0
@@ -43,9 +40,24 @@ func Run(argv []string) int {
 		return 0
 	}
 
+	return runCommand(commands, lookup, argv, true)
+}
+
+func buildLookup(commands []Command) map[string]Command {
+	lookup := map[string]Command{}
+	for _, cmd := range commands {
+		lookup[cmd.Name] = cmd
+		for _, alias := range cmd.Aliases {
+			lookup[alias] = cmd
+		}
+	}
+	return lookup
+}
+
+func runCommand(commands []Command, lookup map[string]Command, argv []string, allowPromptFallback bool) int {
 	cmd, ok := lookup[argv[0]]
 	if !ok {
-		if !strings.HasPrefix(argv[0], "-") {
+		if allowPromptFallback && !strings.HasPrefix(argv[0], "-") {
 			return runTask(argv)
 		}
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\\n\\n", argv[0])
@@ -102,4 +114,16 @@ func printCommands(commands []Command) {
 			fmt.Printf("    %-14s%s %s\\n", cmd.Name, aliases, cmd.Description)
 		}
 	}
+}
+
+func isInteractiveTerminal() bool {
+	inputInfo, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	outputInfo, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (inputInfo.Mode()&os.ModeCharDevice) != 0 && (outputInfo.Mode()&os.ModeCharDevice) != 0
 }

@@ -9,21 +9,21 @@ import (
 )
 
 const (
-	DefaultBaseURL          = "https://api.openai.com"
-	DefaultResponsesPath    = "/v1/responses"
-	DefaultTimeout          = 60 * time.Second
-	DefaultUserAgent        = "go-lavilas/provider-responses"
+	DefaultBaseURL       = "https://api.openai.com"
+	DefaultResponsesPath = "/v1/responses"
+	DefaultTimeout       = 60 * time.Second
+	DefaultUserAgent     = "lvls/provider-responses"
 )
 
 type Config struct {
-	Name        string
-	BaseURL     string
+	Name          string
+	BaseURL       string
 	ResponsesPath string
-	APIKey      string
-	Headers     map[string]string
-	HTTPClient  *http.Client
-	Timeout     time.Duration
-	UserAgent   string
+	APIKey        string
+	Headers       map[string]string
+	HTTPClient    *http.Client
+	Timeout       time.Duration
+	UserAgent     string
 }
 
 func (c Config) withDefaults() Config {
