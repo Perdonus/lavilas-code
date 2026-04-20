@@ -55,7 +55,7 @@ func alphaFeatures() []alphaFeature {
 			Name:    "interactive_chat",
 			Status:  "available",
 			Command: "chat",
-			Summary: "Interactive terminal chat session.",
+			Summary: "Bubble Tea TUI chat session with palette and session loading.",
 		},
 		{
 			Name:    "one_shot_tasks",
@@ -74,6 +74,12 @@ func alphaFeatures() []alphaFeature {
 			Status:  "available",
 			Command: "review, apply",
 			Summary: "Review diffs and apply patches from stdin or file.",
+		},
+		{
+			Name:    "tool_runtime",
+			Status:  "available",
+			Command: "chat, run, resume, fork",
+			Summary: "Built-in shell, file, search, write, and patch tools.",
 		},
 		{
 			Name:    "account_state",

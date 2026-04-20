@@ -16,31 +16,32 @@ import (
 	"github.com/Perdonus/lavilas-code/internal/provider/responsesapi"
 	"github.com/Perdonus/lavilas-code/internal/runtime"
 	"github.com/Perdonus/lavilas-code/internal/state"
+	"github.com/Perdonus/lavilas-code/internal/tooling"
 )
 
 type Options struct {
-	Prompt            string
-	SystemPrompt      string
-	Model             string
-	Profile           string
-	Provider          string
-	ReasoningEffort   string
-	JSON              bool
-	DisableStreaming  bool
-	History           []runtime.Message
+	Prompt           string
+	SystemPrompt     string
+	Model            string
+	Profile          string
+	Provider         string
+	ReasoningEffort  string
+	JSON             bool
+	DisableStreaming bool
+	History          []runtime.Message
 }
 
 type Result struct {
-	ProviderName string                `json:"provider_name"`
-	Model        string                `json:"model"`
-	Reasoning    string                `json:"reasoning,omitempty"`
-	Profile      string                `json:"profile,omitempty"`
-	SessionPath  string                `json:"session_path,omitempty"`
-	Response     *runtime.Response     `json:"response,omitempty"`
-	Events       []runtime.StreamEvent `json:"events,omitempty"`
-	Text         string                `json:"text,omitempty"`
-	RequestMessages  []runtime.Message `json:"-"`
-	AssistantMessage runtime.Message   `json:"-"`
+	ProviderName     string                `json:"provider_name"`
+	Model            string                `json:"model"`
+	Reasoning        string                `json:"reasoning,omitempty"`
+	Profile          string                `json:"profile,omitempty"`
+	SessionPath      string                `json:"session_path,omitempty"`
+	Response         *runtime.Response     `json:"response,omitempty"`
+	Events           []runtime.StreamEvent `json:"events,omitempty"`
+	Text             string                `json:"text,omitempty"`
+	RequestMessages  []runtime.Message     `json:"-"`
+	AssistantMessage runtime.Message       `json:"-"`
 }
 
 func Run(ctx context.Context, options Options) (Result, error) {
@@ -66,13 +67,34 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		ReasoningEffort: resolved.ReasoningEffort,
 		Messages:        resolved.Messages,
 	}
+	if resolved.Client.Capabilities().Tools {
+		request.Tools = tooling.Definitions()
+		request.ToolChoice = runtime.ToolChoice{Mode: runtime.ToolChoiceModeAuto}
+		parallel := true
+		request.ParallelToolCalls = &parallel
+	}
 
 	result := Result{
-		ProviderName: resolved.ProviderName,
-		Model:        resolved.Model,
-		Reasoning:    resolved.ReasoningEffort,
-		Profile:      resolved.ProfileName,
+		ProviderName:    resolved.ProviderName,
+		Model:           resolved.Model,
+		Reasoning:       resolved.ReasoningEffort,
+		Profile:         resolved.ProfileName,
 		RequestMessages: cloneMessages(resolved.Messages),
+	}
+
+	if len(request.Tools) > 0 {
+		requestMessages, response, assistantMessage, err := runWithToolLoop(ctx, resolved.Client, request)
+		if err != nil {
+			return Result{}, err
+		}
+		result.RequestMessages = cloneMessages(requestMessages)
+		result.Response = response
+		result.Text = strings.TrimSpace(assistantMessage.Text())
+		if result.Text == "" {
+			result.Text = responseText(response)
+		}
+		result.AssistantMessage = assistantMessage
+		return result, nil
 	}
 
 	if options.JSON || options.DisableStreaming {
@@ -158,6 +180,36 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	return result, nil
 }
 
+func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request) ([]runtime.Message, *runtime.Response, runtime.Message, error) {
+	const maxRounds = 8
+
+	messages := cloneMessages(request.Messages)
+	baseRequest := request
+
+	for round := 0; round < maxRounds; round++ {
+		currentRequest := baseRequest
+		currentRequest.Messages = cloneMessages(messages)
+
+		response, err := client.Create(ctx, currentRequest)
+		if err != nil {
+			return nil, nil, runtime.Message{}, err
+		}
+		if response == nil || len(response.Choices) == 0 {
+			return nil, nil, runtime.Message{}, fmt.Errorf("provider returned no choices")
+		}
+
+		assistantMessage := response.Choices[0].Message
+		if len(assistantMessage.ToolCalls) == 0 {
+			return currentRequest.Messages, response, assistantMessage, nil
+		}
+
+		messages = append(messages, assistantMessage)
+		messages = append(messages, tooling.ExecuteCalls(ctx, assistantMessage.ToolCalls)...)
+	}
+
+	return nil, nil, runtime.Message{}, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+}
+
 func Print(result Result) error {
 	if result.Response != nil {
 		data, err := json.MarshalIndent(result, "", "  ")
@@ -187,12 +239,12 @@ func Print(result Result) error {
 }
 
 type resolvedRequest struct {
-	ProviderName     string
-	Client           provider.Client
-	Model            string
-	ReasoningEffort  string
-	ProfileName      string
-	Messages         []runtime.Message
+	ProviderName    string
+	Client          provider.Client
+	Model           string
+	ReasoningEffort string
+	ProfileName     string
+	Messages        []runtime.Message
 }
 
 func resolveRequest(config state.Config, options Options) (resolvedRequest, error) {

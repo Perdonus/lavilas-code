@@ -6,6 +6,8 @@
 - package id в `nv`: `lvls`;
 - publish-контур целится в `nv`, не в `npm`;
 - alpha foundation собирает `linux/amd64`, `linux/arm64` и `windows/amd64`;
+- основной interactive path теперь идёт через Bubble Tea TUI;
+- built-in runtime умеет shell/file/search/write/apply_patch tools;
 - release metadata складывается в `dist/SHA256SUMS` и `dist/release-metadata.json`;
 - цель ветки - постепенно довести `Go Lavilas` до функционального паритета с основным `lavilas`.
 

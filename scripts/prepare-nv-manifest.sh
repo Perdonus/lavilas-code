@@ -17,6 +17,7 @@ if [[ -z "$VERSION" && -f "$DIST_DIR/release-metadata.json" ]]; then
     python3 - "$DIST_DIR/release-metadata.json" <<'PY'
 import json
 import pathlib
+import shutil
 import sys
 
 data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
@@ -45,7 +46,9 @@ if readme_path:
     resolved_readme = (source_manifest.parent / readme_path).resolve()
     if not resolved_readme.exists():
         missing_paths.append(str(resolved_readme))
-    data["readme"] = str(resolved_readme)
+    staged_readme = output_manifest.parent / resolved_readme.name
+    shutil.copy2(resolved_readme, staged_readme)
+    data["readme"] = str(staged_readme.resolve())
 
 for variant in data.get("variants", []):
     artifact_path = variant.get("artifact")

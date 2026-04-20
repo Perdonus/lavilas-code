@@ -8,6 +8,7 @@ import (
 
 	"github.com/Perdonus/lavilas-code/internal/runtime"
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
+	"github.com/Perdonus/lavilas-code/internal/tui"
 )
 
 const (
@@ -32,7 +33,8 @@ type chatSession struct {
 }
 
 func runChat(args []string) int {
-	options, err := parseChatOptions(args)
+	usePlain, filteredArgs := consumeChatModeFlags(args)
+	options, err := parseChatOptions(filteredArgs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "chat: %v\n", err)
 		return 2
@@ -41,6 +43,10 @@ func runChat(args []string) int {
 	if !isInteractiveTerminal() {
 		fmt.Fprintln(os.Stderr, "chat: interactive terminal required")
 		return 2
+	}
+
+	if !usePlain {
+		return tui.Run(tui.Options{TaskOptions: options})
 	}
 
 	session := chatSession{
@@ -74,6 +80,23 @@ func runChat(args []string) int {
 			return 0
 		}
 	}
+}
+
+func consumeChatModeFlags(args []string) (bool, []string) {
+	if len(args) == 0 {
+		return false, nil
+	}
+	usePlain := false
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		switch arg {
+		case "--plain", "--no-tui":
+			usePlain = true
+		default:
+			filtered = append(filtered, arg)
+		}
+	}
+	return usePlain, filtered
 }
 
 func parseChatOptions(args []string) (taskrun.Options, error) {

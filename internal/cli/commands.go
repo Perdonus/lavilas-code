@@ -18,7 +18,7 @@ import (
 
 func registry() []Command {
 	return []Command{
-		{Name: "chat", Aliases: []string{"interactive", "repl", "чат"}, Description: "Start interactive chat mode", Category: "interactive", Run: runChat},
+		{Name: "chat", Aliases: []string{"interactive", "repl", "чат"}, Description: "Start interactive TUI chat mode", Category: "interactive", Run: runChat},
 		{Name: "resume", Aliases: []string{"r", "continue", "продолжить"}, Description: "Resume or inspect stored sessions", Category: "interactive", Run: runResume},
 		{Name: "fork", Aliases: []string{"branch-chat", "форк"}, Description: "Fork a previous session", Category: "interactive", Run: runFork},
 		{Name: "run", Aliases: []string{"exec", "ask", "запуск"}, Description: "Execute a one-shot task", Category: "interactive", Run: runTask},
