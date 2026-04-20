@@ -22,6 +22,7 @@ import (
 	runtimeapi "github.com/Perdonus/lavilas-code/internal/runtime"
 	appstate "github.com/Perdonus/lavilas-code/internal/state"
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
+	"github.com/Perdonus/lavilas-code/internal/tooling"
 	"github.com/Perdonus/lavilas-code/internal/version"
 )
 
@@ -50,6 +51,11 @@ type taskEventMsg struct {
 	Next  <-chan tea.Msg
 }
 
+type approvalRequestedMsg struct {
+	Request    tooling.ApprovalRequest
+	DecisionCh chan taskrun.ApprovalDecision
+}
+
 type sessionLoadedMsg struct {
 	Entry    appstate.SessionEntry
 	Meta     appstate.SessionMeta
@@ -64,6 +70,11 @@ type paletteItemsMsg struct {
 	Footer      string
 	PushCurrent bool
 	Err         error
+}
+
+type approvalPromptState struct {
+	Request    tooling.ApprovalRequest
+	DecisionCh chan taskrun.ApprovalDecision
 }
 
 type Model struct {
@@ -83,6 +94,7 @@ type Model struct {
 	history      []runtimeapi.Message
 	catalog      PaletteCommandCatalog
 	language     commandcatalog.CatalogLanguage
+	approval     *approvalPromptState
 }
 
 func New() *Model {
@@ -178,6 +190,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskFinishedMsg:
 		m.state.Busy = false
 		m.state.LiveTurn = nil
+		m.approval = nil
 		if msg.Err != nil {
 			m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), msg.Err))
 			m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), msg.Err)
@@ -193,6 +206,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case taskFinishedMsg:
 			m.state.Busy = false
 			m.state.LiveTurn = nil
+			m.approval = nil
 			if inner.Err != nil {
 				m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), inner.Err))
 				m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), inner.Err)
@@ -214,6 +228,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.applyLoadedSession(msg)
 		return m, nil
+	case approvalRequestedMsg:
+		m.approval = &approvalPromptState{Request: msg.Request, DecisionCh: msg.DecisionCh}
+		m.state.Footer = m.localize("Approval required", "Нужно подтверждение")
+		return m, nil
 	case paletteItemsMsg:
 		if msg.Err != nil {
 			m.appendTranscript("system", msg.Err.Error())
@@ -223,6 +241,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.applyPaletteScreen(msg.Mode, msg.Items, msg.Footer, msg.PushCurrent)
 	case tea.KeyMsg:
+		if m.approval != nil {
+			return m, m.updateApproval(msg)
+		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -274,6 +295,9 @@ func (m *Model) View() string {
 
 	statusPane := m.renderStatusPane()
 	mainSections := make([]string, 0, 3)
+	if m.approval != nil {
+		mainSections = append(mainSections, m.renderApprovalPane())
+	}
 	if m.state.Palette.Visible {
 		mainSections = append(mainSections, m.renderPalettePane())
 	}
@@ -390,6 +414,34 @@ func (m *Model) renderInputPane() string {
 		m.input.View(),
 		m.styles.muted.Render(footer),
 	}
+	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, content...))
+}
+
+func (m *Model) renderApprovalPane() string {
+	if m.approval == nil {
+		return ""
+	}
+	request := m.approval.Request
+	pane := m.styles.paneActive.Width(m.mainWidth)
+	content := []string{
+		m.styles.paneTitle.Render(m.localize("Approval Required", "Нужно подтверждение")),
+		m.styles.label.Render(m.localize("tool", "инструмент")) + " " + m.styles.value.Render(request.Name),
+	}
+	if summary := strings.TrimSpace(request.Summary); summary != "" {
+		content = append(content, m.styles.label.Render(m.localize("summary", "сводка"))+" "+m.styles.value.Render(summary))
+	}
+	if details := strings.TrimSpace(request.Details); details != "" {
+		content = append(content, m.styles.label.Render(m.localize("details", "детали"))+" "+m.styles.value.Render(details))
+	}
+	if reason := strings.TrimSpace(request.Reason); reason != "" {
+		content = append(content, m.styles.label.Render(m.localize("reason", "причина"))+" "+m.styles.value.Render(reason))
+	}
+	content = append(content,
+		"",
+		m.styles.helpKey.Render("Y")+" "+m.styles.helpDesc.Render(m.localize("allow once", "разрешить один раз")),
+		m.styles.helpKey.Render("A")+" "+m.styles.helpDesc.Render(m.localize("allow for session", "разрешить на сессию")),
+		m.styles.helpKey.Render("N")+" "+m.styles.helpDesc.Render(m.localize("deny", "запретить")),
+	)
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, content...))
 }
 
@@ -598,6 +650,20 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 		progress := newTaskProgressBridge(eventCh)
 		defer progress.Close()
 		options.OnProgress = progress.Handle
+		options.OnApproval = func(ctx context.Context, request tooling.ApprovalRequest) (taskrun.ApprovalDecision, error) {
+			decisionCh := make(chan taskrun.ApprovalDecision, 1)
+			select {
+			case <-ctx.Done():
+				return taskrun.ApprovalDecisionDeny, ctx.Err()
+			case eventCh <- approvalRequestedMsg{Request: request, DecisionCh: decisionCh}:
+			}
+			select {
+			case <-ctx.Done():
+				return taskrun.ApprovalDecisionDeny, ctx.Err()
+			case decision := <-decisionCh:
+				return decision, nil
+			}
+		}
 		result, err := taskrun.Run(context.Background(), options)
 		if err != nil {
 			eventCh <- taskFinishedMsg{Prompt: prompt, Err: err}
@@ -628,6 +694,7 @@ func (m *Model) applyTaskResult(msg taskFinishedMsg) {
 	m.state.LiveTurn = nil
 	m.state.Transcript = transcriptFromMessages(history, m.language)
 	m.state.SessionPath = msg.SessionPath
+	m.approval = nil
 	m.state.Model = fallback(msg.Result.Model, m.state.Model)
 	m.state.Provider = fallback(msg.Result.ProviderName, m.state.Provider)
 	m.state.Profile = fallback(msg.Result.Profile, m.state.Profile)
@@ -644,6 +711,7 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 	m.history = cloneRuntimeMessages(msg.Messages)
 	m.state.LiveTurn = nil
 	m.state.Transcript = transcriptFromMessages(msg.Messages, m.language)
+	m.approval = nil
 	m.state.Model = msg.Meta.Model
 	m.state.Provider = msg.Meta.Provider
 	m.state.Profile = msg.Meta.Profile
@@ -1706,6 +1774,44 @@ func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) {
 	m.state.LiveTurn = live
 	m.updateStatus()
 	m.refreshViewport()
+}
+
+func (m *Model) updateApproval(keyMsg tea.KeyMsg) tea.Cmd {
+	switch strings.ToLower(strings.TrimSpace(keyMsg.String())) {
+	case "y":
+		return m.resolveApproval(taskrun.ApprovalDecisionApprove)
+	case "a":
+		return m.resolveApproval(taskrun.ApprovalDecisionApproveForSession)
+	case "n":
+		return m.resolveApproval(taskrun.ApprovalDecisionDeny)
+	}
+	if key.Matches(keyMsg, m.keys.Close) {
+		return m.resolveApproval(taskrun.ApprovalDecisionDeny)
+	}
+	return nil
+}
+
+func (m *Model) resolveApproval(decision taskrun.ApprovalDecision) tea.Cmd {
+	if m.approval == nil {
+		return nil
+	}
+	request := m.approval.Request
+	decisionCh := m.approval.DecisionCh
+	m.approval = nil
+	select {
+	case decisionCh <- decision:
+	default:
+	}
+	switch decision {
+	case taskrun.ApprovalDecisionApproveForSession:
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Approved for session", "Разрешено на сессию"), request.Name)
+	case taskrun.ApprovalDecisionApprove:
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Approved", "Разрешено"), request.Name)
+	default:
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Denied", "Запрещено"), request.Name)
+	}
+	m.refreshViewport()
+	return nil
 }
 
 func localizedToolStatusTUI(language commandcatalog.CatalogLanguage, status string) string {

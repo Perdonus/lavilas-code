@@ -3,6 +3,7 @@ package tooling
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -111,6 +112,8 @@ type ToolResultEnvelope struct {
 	Mode       ExecutionMode
 	CallID     string
 	Name       string
+	Summary    string
+	Details    string
 	Metadata   ToolExecutionMetadata
 	Status     ResultStatus
 	StartedAt  time.Time
@@ -365,6 +368,7 @@ func executeBatch(ctx context.Context, batch ExecutionBatch) BatchResultEnvelope
 
 func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode, call ToolCallPlan) ToolResultEnvelope {
 	startedAt := time.Now().UTC()
+	summary, details := describeApprovalCall(call)
 	if call.Metadata.Permission == ToolPermissionDenied {
 		output := marshalPolicyResult(call, ResultStatusDenied)
 		finishedAt := time.Now().UTC()
@@ -374,6 +378,8 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 			Mode:       mode,
 			CallID:     call.CallID,
 			Name:       call.Name,
+			Summary:    summary,
+			Details:    details,
 			Metadata:   call.Metadata,
 			Status:     ResultStatusDenied,
 			StartedAt:  startedAt,
@@ -392,6 +398,8 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 			Mode:       mode,
 			CallID:     call.CallID,
 			Name:       call.Name,
+			Summary:    summary,
+			Details:    details,
 			Metadata:   call.Metadata,
 			Status:     ResultStatusApprovalRequired,
 			StartedAt:  startedAt,
@@ -409,6 +417,8 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 		Mode:       mode,
 		CallID:     call.CallID,
 		Name:       call.Name,
+		Summary:    summary,
+		Details:    details,
 		Metadata:   call.Metadata,
 		Status:     detectResultStatus(output),
 		StartedAt:  startedAt,
@@ -416,6 +426,21 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 		Duration:   finishedAt.Sub(startedAt),
 		OutputText: output,
 		OutputJSON: rawJSON(output),
+	}
+}
+
+func ApprovalRequestForCall(batch int, call ToolCallPlan) ApprovalRequest {
+	summary, details := describeApprovalCall(call)
+	return ApprovalRequest{
+		Index:    call.Index,
+		Batch:    batch,
+		CallID:   call.CallID,
+		Name:     call.Name,
+		Status:   ResultStatusApprovalRequired,
+		Summary:  summary,
+		Details:  details,
+		Reason:   call.Metadata.PolicyReason,
+		Metadata: call.Metadata,
 	}
 }
 
@@ -586,9 +611,63 @@ func collectApprovalRequests(results []ToolResultEnvelope) []ApprovalRequest {
 			CallID:   result.CallID,
 			Name:     result.Name,
 			Status:   result.Status,
+			Summary:  result.Summary,
+			Details:  result.Details,
 			Reason:   result.Metadata.PolicyReason,
 			Metadata: result.Metadata,
 		})
 	}
 	return requests
+}
+
+func describeApprovalCall(call ToolCallPlan) (string, string) {
+	switch strings.TrimSpace(call.Name) {
+	case "run_shell_command":
+		var args shellArgs
+		if err := decodeArgs(call.Arguments, &args); err == nil {
+			summary := strings.TrimSpace(args.Cmd)
+			if summary == "" {
+				summary = call.Name
+			}
+			if cwd := strings.TrimSpace(args.Cwd); cwd != "" {
+				return summary, fmt.Sprintf("cwd=%s", cwd)
+			}
+			return summary, ""
+		}
+	case "write_file":
+		var args writeArgs
+		if err := decodeArgs(call.Arguments, &args); err == nil {
+			return fmt.Sprintf("write %s", normalizeResourcePath(args.Path, ".")), fmt.Sprintf("bytes=%d", len(args.Content))
+		}
+	case "apply_patch":
+		var args patchArgs
+		if err := decodeArgs(call.Arguments, &args); err == nil {
+			patch := strings.TrimSpace(args.Patch)
+			if patch == "" {
+				return "apply patch", ""
+			}
+			firstLine := strings.SplitN(patch, "\n", 2)[0]
+			return "apply patch", firstLine
+		}
+	case "read_file":
+		var args readArgs
+		if err := decodeArgs(call.Arguments, &args); err == nil {
+			return fmt.Sprintf("read %s", normalizeResourcePath(args.Path, ".")), ""
+		}
+	case "list_directory":
+		var args listArgs
+		if err := decodeArgs(call.Arguments, &args); err == nil {
+			return fmt.Sprintf("list %s", normalizeResourcePath(args.Path, ".")), ""
+		}
+	case "search_text":
+		var args searchArgs
+		if err := decodeArgs(call.Arguments, &args); err == nil {
+			return fmt.Sprintf("search %q", strings.TrimSpace(args.Query)), fmt.Sprintf("path=%s", normalizeResourcePath(args.Path, "."))
+		}
+	}
+	arguments := strings.TrimSpace(string(call.Arguments))
+	if arguments == "" {
+		return call.Name, ""
+	}
+	return call.Name, arguments
 }

@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/Perdonus/lavilas-code/internal/runtime"
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
+	"github.com/Perdonus/lavilas-code/internal/tooling"
 	"github.com/Perdonus/lavilas-code/internal/tui"
 )
 
@@ -283,6 +285,10 @@ func (s *chatSession) runPrompt(prompt string) int {
 	if !options.JSON && !options.DisableStreaming {
 		options.OnProgress = printer.Handle
 	}
+	options.OnApproval = func(ctx context.Context, request tooling.ApprovalRequest) (taskrun.ApprovalDecision, error) {
+		printer.Finish()
+		return promptApprovalDecisionCLI(ctx, s.language, request)
+	}
 
 	result, err := taskrun.Run(contextBackground(), options)
 	if err != nil {
@@ -303,6 +309,55 @@ func (s *chatSession) runPrompt(prompt string) int {
 	}
 	printer.Finish()
 	return 0
+}
+
+func promptApprovalDecisionCLI(ctx context.Context, language CatalogLanguage, request tooling.ApprovalRequest) (taskrun.ApprovalDecision, error) {
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		return taskrun.ApprovalDecisionDeny, err
+	}
+	defer tty.Close()
+
+	reader := bufio.NewReader(tty)
+	for {
+		fmt.Fprintln(os.Stdout, localizedText(language, "[approval] tool call requires confirmation", "[подтверждение] вызов инструмента требует подтверждения"))
+		fmt.Fprintf(os.Stdout, "  %s: %s\n", localizedText(language, "tool", "инструмент"), request.Name)
+		if strings.TrimSpace(request.Summary) != "" {
+			fmt.Fprintf(os.Stdout, "  %s: %s\n", localizedText(language, "summary", "сводка"), request.Summary)
+		}
+		if strings.TrimSpace(request.Details) != "" {
+			fmt.Fprintf(os.Stdout, "  %s: %s\n", localizedText(language, "details", "детали"), request.Details)
+		}
+		if strings.TrimSpace(request.Reason) != "" {
+			fmt.Fprintf(os.Stdout, "  %s: %s\n", localizedText(language, "reason", "причина"), request.Reason)
+		}
+		fmt.Fprint(os.Stdout, localizedText(language, "Allow? [y] once / [a] session / [n] deny: ", "Разрешить? [y] один раз / [a] на сессию / [n] запретить: "))
+		lineCh := make(chan string, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			line, readErr := reader.ReadString('\n')
+			if readErr != nil {
+				errCh <- readErr
+				return
+			}
+			lineCh <- line
+		}()
+		select {
+		case <-ctx.Done():
+			return taskrun.ApprovalDecisionDeny, ctx.Err()
+		case readErr := <-errCh:
+			return taskrun.ApprovalDecisionDeny, readErr
+		case line := <-lineCh:
+			switch strings.ToLower(strings.TrimSpace(line)) {
+			case "y", "yes", "д", "да":
+				return taskrun.ApprovalDecisionApprove, nil
+			case "a", "always", "с", "сессия":
+				return taskrun.ApprovalDecisionApproveForSession, nil
+			case "n", "no", "н", "нет", "":
+				return taskrun.ApprovalDecisionDeny, nil
+			}
+		}
+	}
 }
 
 func newStreamPrinter(language CatalogLanguage) *streamPrinter {

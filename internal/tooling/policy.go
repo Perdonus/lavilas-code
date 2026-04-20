@@ -27,10 +27,12 @@ const (
 type ToolApprovalState string
 
 const (
-	ToolApprovalStateNotNeeded    ToolApprovalState = "not_needed"
-	ToolApprovalStateAutoApproved ToolApprovalState = "auto_approved"
-	ToolApprovalStatePending      ToolApprovalState = "pending"
-	ToolApprovalStateDenied       ToolApprovalState = "denied"
+	ToolApprovalStateNotNeeded       ToolApprovalState = "not_needed"
+	ToolApprovalStateAutoApproved    ToolApprovalState = "auto_approved"
+	ToolApprovalStatePending         ToolApprovalState = "pending"
+	ToolApprovalStateUserApproved    ToolApprovalState = "user_approved"
+	ToolApprovalStateSessionApproved ToolApprovalState = "session_approved"
+	ToolApprovalStateDenied          ToolApprovalState = "denied"
 )
 
 type ToolPolicy struct {
@@ -48,6 +50,8 @@ type ApprovalRequest struct {
 	CallID   string                `json:"call_id"`
 	Name     string                `json:"name"`
 	Status   ResultStatus          `json:"status"`
+	Summary  string                `json:"summary,omitempty"`
+	Details  string                `json:"details,omitempty"`
 	Reason   string                `json:"reason,omitempty"`
 	Metadata ToolExecutionMetadata `json:"metadata"`
 }

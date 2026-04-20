@@ -205,7 +205,7 @@ func TestRunWithToolLoop_PreservesToolTraceInHistory(t *testing.T) {
 		}},
 	}
 
-	history, requestMessages, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), progressReporter{})
+	history, requestMessages, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), nil, progressReporter{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestRunWithToolLoop_RequireApprovalBlocksMutatingTool(t *testing.T) {
 
 	policy := tooling.DefaultToolPolicy()
 	policy.ApprovalMode = tooling.ToolApprovalModeRequire
-	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, progressReporter{})
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, nil, progressReporter{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -310,6 +310,178 @@ func TestRunWithToolLoop_RequireApprovalBlocksMutatingTool(t *testing.T) {
 	}
 	if len(reports) != 1 || reports[0].Summary.ApprovalRequiredCount != 1 {
 		t.Fatalf("tool reports missing approval summary: %+v", reports)
+	}
+}
+
+func TestRunWithToolLoop_ApprovalHandlerExecutesApprovedTool(t *testing.T) {
+	tempDir := t.TempDir()
+	targetPath := filepath.Join(tempDir, "approved.txt")
+	client := fakeProviderClient{
+		name: "approval-handler-tool-loop",
+		caps: provider.Capabilities{Streaming: true, Tools: true},
+		streamFn: func(_ context.Context, request runtime.Request) (runtime.Stream, error) {
+			if len(request.Messages) == 2 {
+				return &fakeStream{events: []runtime.StreamEvent{
+					{
+						Type: runtime.StreamEventTypeDelta,
+						Delta: runtime.MessageDelta{
+							Role: runtime.RoleAssistant,
+							ToolCalls: []runtime.ToolCallDelta{{
+								ID:             "call_write",
+								Type:           runtime.ToolTypeFunction,
+								NameDelta:      "write_file",
+								ArgumentsDelta: `{"path":"` + targetPath + `","content":"approved"}`,
+							}},
+						},
+					},
+					{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonToolCalls},
+					{Type: runtime.StreamEventTypeDone},
+				}}, nil
+			}
+
+			return &fakeStream{events: []runtime.StreamEvent{
+				{
+					Type: runtime.StreamEventTypeDelta,
+					Delta: runtime.MessageDelta{
+						Role:    runtime.RoleAssistant,
+						Content: []runtime.ContentPartDelta{{Type: runtime.ContentPartTypeText, Text: "tool approved"}},
+					},
+				},
+				{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonStop},
+				{Type: runtime.StreamEventTypeDone},
+			}}, nil
+		},
+	}
+
+	request := runtime.Request{
+		Model: "tool-model",
+		Messages: []runtime.Message{
+			runtime.TextMessage(runtime.RoleSystem, "system"),
+			runtime.TextMessage(runtime.RoleUser, "write"),
+		},
+		Tools: []runtime.ToolDefinition{{
+			Type:     runtime.ToolTypeFunction,
+			Function: runtime.FunctionDefinition{Name: "write_file"},
+		}},
+	}
+
+	policy := tooling.DefaultToolPolicy()
+	policy.ApprovalMode = tooling.ToolApprovalModeRequire
+	handlerCalls := 0
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
+		handlerCalls++
+		if request.Name != "write_file" {
+			t.Fatalf("unexpected approval request: %+v", request)
+		}
+		if !strings.Contains(request.Summary, targetPath) {
+			t.Fatalf("approval summary = %q, want path %q", request.Summary, targetPath)
+		}
+		return ApprovalDecisionApprove, nil
+	}, progressReporter{})
+	if err != nil {
+		t.Fatalf("runWithToolLoop: %v", err)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("approval handler calls = %d, want 1", handlerCalls)
+	}
+	if assistant.Text() != "tool approved" {
+		t.Fatalf("assistant text = %q, want tool approved", assistant.Text())
+	}
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("expected approved tool to write file: %v", err)
+	}
+	if string(content) != "approved" {
+		t.Fatalf("written content = %q, want approved", string(content))
+	}
+	if len(reports) != 1 || reports[0].Summary.SucceededCount != 1 || reports[0].Summary.ApprovalRequiredCount != 0 {
+		t.Fatalf("unexpected tool report after approval: %+v", reports)
+	}
+	if len(history) < 4 || history[3].Role != runtime.RoleTool {
+		t.Fatalf("missing tool output in history: %+v", history)
+	}
+	if got := history[3].Text(); got == "" || !strings.Contains(got, `"ok": true`) {
+		t.Fatalf("tool output missing success payload: %s", got)
+	}
+}
+
+func TestRunWithToolLoop_ApprovalHandlerDeniesTool(t *testing.T) {
+	tempDir := t.TempDir()
+	targetPath := filepath.Join(tempDir, "denied.txt")
+	client := fakeProviderClient{
+		name: "approval-handler-deny",
+		caps: provider.Capabilities{Streaming: true, Tools: true},
+		streamFn: func(_ context.Context, request runtime.Request) (runtime.Stream, error) {
+			if len(request.Messages) == 2 {
+				return &fakeStream{events: []runtime.StreamEvent{
+					{
+						Type: runtime.StreamEventTypeDelta,
+						Delta: runtime.MessageDelta{
+							Role: runtime.RoleAssistant,
+							ToolCalls: []runtime.ToolCallDelta{{
+								ID:             "call_write",
+								Type:           runtime.ToolTypeFunction,
+								NameDelta:      "write_file",
+								ArgumentsDelta: `{"path":"` + targetPath + `","content":"denied"}`,
+							}},
+						},
+					},
+					{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonToolCalls},
+					{Type: runtime.StreamEventTypeDone},
+				}}, nil
+			}
+
+			return &fakeStream{events: []runtime.StreamEvent{
+				{
+					Type: runtime.StreamEventTypeDelta,
+					Delta: runtime.MessageDelta{
+						Role:    runtime.RoleAssistant,
+						Content: []runtime.ContentPartDelta{{Type: runtime.ContentPartTypeText, Text: "tool denied"}},
+					},
+				},
+				{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonStop},
+				{Type: runtime.StreamEventTypeDone},
+			}}, nil
+		},
+	}
+
+	request := runtime.Request{
+		Model: "tool-model",
+		Messages: []runtime.Message{
+			runtime.TextMessage(runtime.RoleSystem, "system"),
+			runtime.TextMessage(runtime.RoleUser, "write"),
+		},
+		Tools: []runtime.ToolDefinition{{
+			Type:     runtime.ToolTypeFunction,
+			Function: runtime.FunctionDefinition{Name: "write_file"},
+		}},
+	}
+
+	policy := tooling.DefaultToolPolicy()
+	policy.ApprovalMode = tooling.ToolApprovalModeRequire
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
+		if request.Name != "write_file" {
+			t.Fatalf("unexpected approval request: %+v", request)
+		}
+		return ApprovalDecisionDeny, nil
+	}, progressReporter{})
+	if err != nil {
+		t.Fatalf("runWithToolLoop: %v", err)
+	}
+	if assistant.Text() != "tool denied" {
+		t.Fatalf("assistant text = %q, want tool denied", assistant.Text())
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("denied tool should not execute, stat err = %v", err)
+	}
+	if len(reports) != 1 || reports[0].Summary.DeniedCount != 1 || reports[0].Summary.ApprovalRequiredCount != 0 {
+		t.Fatalf("unexpected tool report after denial: %+v", reports)
+	}
+	if len(history) < 4 || history[3].Role != runtime.RoleTool {
+		t.Fatalf("missing denied tool payload in history: %+v", history)
+	}
+	if got := history[3].Text(); got == "" || !strings.Contains(got, `"status": "denied"`) || !strings.Contains(got, `denied by user`) {
+		t.Fatalf("tool output missing denied payload: %s", got)
 	}
 }
 
@@ -410,7 +582,7 @@ func TestRunWithToolLoop_EmitsToolPlanningProgress(t *testing.T) {
 		}},
 	}
 
-	_, _, _, _, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), progressReporter{
+	_, _, _, _, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), nil, progressReporter{
 		fn: func(update ProgressUpdate) {
 			updates = append(updates, update)
 		},

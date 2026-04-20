@@ -29,6 +29,7 @@ type Options struct {
 	ReasoningEffort  string
 	ToolPolicy       tooling.ToolPolicy
 	OnProgress       func(ProgressUpdate)
+	OnApproval       ApprovalHandler
 	JSON             bool
 	DisableStreaming bool
 	History          []runtime.Message
@@ -70,6 +71,16 @@ type PartialAssistantSnapshot struct {
 	Usage        runtime.Usage        `json:"usage,omitempty"`
 	FinishReason runtime.FinishReason `json:"finish_reason,omitempty"`
 }
+
+type ApprovalDecision string
+
+const (
+	ApprovalDecisionApprove           ApprovalDecision = "approve"
+	ApprovalDecisionApproveForSession ApprovalDecision = "approve_for_session"
+	ApprovalDecisionDeny              ApprovalDecision = "deny"
+)
+
+type ApprovalHandler func(context.Context, tooling.ApprovalRequest) (ApprovalDecision, error)
 
 type ProgressUpdate struct {
 	Kind            ProgressKind                `json:"kind"`
@@ -168,7 +179,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	})
 
 	if len(request.Tools) > 0 {
-		history, requestMessages, response, assistantMessage, events, toolReports, err := runWithToolLoop(ctx, resolved.Client, request, preferStreaming, toolPolicy, reporter)
+		history, requestMessages, response, assistantMessage, events, toolReports, err := runWithToolLoop(ctx, resolved.Client, request, preferStreaming, toolPolicy, options.OnApproval, reporter)
 		if err != nil {
 			reporter.Emit(ProgressUpdate{Kind: ProgressKindTurnFailed, Err: err})
 			return Result{}, err
@@ -246,7 +257,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	return result, nil
 }
 
-func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, toolPolicy tooling.ToolPolicy, reporter progressReporter) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, []tooling.ExecutionReport, error) {
+func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, toolPolicy tooling.ToolPolicy, approvalHandler ApprovalHandler, reporter progressReporter) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, []tooling.ExecutionReport, error) {
 	const maxRounds = 8
 
 	messages := cloneMessages(request.Messages)
@@ -287,17 +298,23 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 			Model:        currentRequest.Model,
 			ToolPlan:     &plan,
 		})
-		report := tooling.ExecutePlan(ctx, plan)
+		resolvedPlan, err := resolveToolApprovals(ctx, plan, approvalHandler, reporter, client.Name(), currentRequest.Model, round+1)
+		if err != nil {
+			return nil, nil, nil, runtime.Message{}, nil, nil, err
+		}
+		report := tooling.ExecutePlan(ctx, resolvedPlan)
 		toolReports = append(toolReports, report)
-		for _, approval := range report.ApprovalRequests {
-			copy := approval
-			reporter.Emit(ProgressUpdate{
-				Kind:            ProgressKindApprovalRequired,
-				Round:           round + 1,
-				ProviderName:    client.Name(),
-				Model:           currentRequest.Model,
-				ApprovalRequest: &copy,
-			})
+		if approvalHandler == nil {
+			for _, approval := range report.ApprovalRequests {
+				copy := approval
+				reporter.Emit(ProgressUpdate{
+					Kind:            ProgressKindApprovalRequired,
+					Round:           round + 1,
+					ProviderName:    client.Name(),
+					Model:           currentRequest.Model,
+					ApprovalRequest: &copy,
+				})
+			}
 		}
 		for _, toolResult := range report.Results {
 			copy := toolResult
@@ -313,6 +330,55 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 	}
 
 	return nil, nil, nil, runtime.Message{}, nil, nil, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+}
+
+func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, approvalHandler ApprovalHandler, reporter progressReporter, providerName string, model string, round int) (tooling.ExecutionPlan, error) {
+	if approvalHandler == nil {
+		return plan, nil
+	}
+	resolved := plan
+	for batchIndex := range resolved.Batches {
+		for callIndex := range resolved.Batches[batchIndex].Calls {
+			call := resolved.Batches[batchIndex].Calls[callIndex]
+			if call.Metadata.Permission != tooling.ToolPermissionApprovalRequired {
+				continue
+			}
+			request := tooling.ApprovalRequestForCall(resolved.Batches[batchIndex].Index, call)
+			reporter.Emit(ProgressUpdate{
+				Kind:            ProgressKindApprovalRequired,
+				Round:           round,
+				ProviderName:    providerName,
+				Model:           model,
+				ApprovalRequest: &request,
+			})
+			decision, err := approvalHandler(ctx, request)
+			if err != nil {
+				return plan, err
+			}
+			applyApprovalDecision(&resolved.Batches[batchIndex].Calls[callIndex], decision)
+		}
+	}
+	return resolved, nil
+}
+
+func applyApprovalDecision(call *tooling.ToolCallPlan, decision ApprovalDecision) {
+	switch decision {
+	case ApprovalDecisionApproveForSession:
+		call.Metadata.Permission = tooling.ToolPermissionAllowed
+		call.Metadata.ToolEnabled = true
+		call.Metadata.ApprovalState = tooling.ToolApprovalStateSessionApproved
+		call.Metadata.PolicyReason = ""
+	case ApprovalDecisionApprove:
+		call.Metadata.Permission = tooling.ToolPermissionAllowed
+		call.Metadata.ToolEnabled = true
+		call.Metadata.ApprovalState = tooling.ToolApprovalStateUserApproved
+		call.Metadata.PolicyReason = ""
+	default:
+		call.Metadata.Permission = tooling.ToolPermissionDenied
+		call.Metadata.ToolEnabled = false
+		call.Metadata.ApprovalState = tooling.ToolApprovalStateDenied
+		call.Metadata.PolicyReason = "tool call denied by user"
+	}
 }
 
 func runSingleTurn(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, round int, reporter progressReporter) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
