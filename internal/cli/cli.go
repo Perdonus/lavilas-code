@@ -32,7 +32,7 @@ func Run(argv []string) int {
 
 	switch argv[0] {
 	case "--version", "-v", "version":
-		fmt.Printf("Go Lavilas %s (%s)\\n", version.Version, version.Channel)
+		fmt.Printf("Go Lavilas %s (%s)\n", version.Version, version.Channel)
 		return 0
 	case "help", "--help", "-h":
 		printBanner()
@@ -60,7 +60,7 @@ func runCommand(commands []Command, lookup map[string]Command, argv []string, al
 		if allowPromptFallback && !strings.HasPrefix(argv[0], "-") {
 			return runTask(argv)
 		}
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\\n\\n", argv[0])
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", argv[0])
 		printCommands(commands)
 		return 2
 	}
@@ -68,7 +68,7 @@ func runCommand(commands []Command, lookup map[string]Command, argv []string, al
 }
 
 func printBanner() {
-	fmt.Printf("Go Lavilas %s (%s)\\n", version.Version, version.Channel)
+	fmt.Printf("Go Lavilas %s (%s)\n", version.Version, version.Channel)
 	fmt.Println("Независимый go-контур для NV alpha.")
 	fmt.Println()
 }
@@ -111,7 +111,7 @@ func printCommands(commands []Command) {
 			if len(cmd.Aliases) > 0 {
 				aliases = fmt.Sprintf(" [%s]", strings.Join(cmd.Aliases, ", "))
 			}
-			fmt.Printf("    %-14s%s %s\\n", cmd.Name, aliases, cmd.Description)
+			fmt.Printf("    %-14s%s %s\n", cmd.Name, aliases, cmd.Description)
 		}
 	}
 }
