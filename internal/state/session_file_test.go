@@ -1,6 +1,7 @@
 package state
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -274,5 +275,56 @@ func TestAppendSessionHistoryRejectsMismatchedPrefix(t *testing.T) {
 	}
 	if len(messages) != 1 || messages[0].Text() != "hello" {
 		t.Fatalf("session history changed after rejected append: %+v", messages)
+	}
+}
+
+func TestLoadSessionsUsesUpdatedIndexOrdering(t *testing.T) {
+	root := t.TempDir()
+	createdAt := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+
+	first, err := CreateSession(root, SessionMeta{
+		SessionID: "first",
+		Model:     "gpt-test",
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	}, []runtime.Message{runtime.TextMessage(runtime.RoleUser, "first")})
+	if err != nil {
+		t.Fatalf("CreateSession first: %v", err)
+	}
+	second, err := CreateSession(root, SessionMeta{
+		SessionID: "second",
+		Model:     "gpt-test",
+		CreatedAt: createdAt.Add(time.Minute),
+		UpdatedAt: createdAt.Add(time.Minute),
+	}, []runtime.Message{runtime.TextMessage(runtime.RoleUser, "second")})
+	if err != nil {
+		t.Fatalf("CreateSession second: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, sessionIndexFileName)); err != nil {
+		t.Fatalf("session index missing: %v", err)
+	}
+
+	entries, err := LoadSessions(root, 2)
+	if err != nil {
+		t.Fatalf("LoadSessions initial: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("unexpected session count before append: %+v", entries)
+	}
+	target := first.Path
+	if entries[0].Path == first.Path {
+		target = second.Path
+	}
+
+	if err := AppendSession(target, runtime.TextMessage(runtime.RoleAssistant, "bumped")); err != nil {
+		t.Fatalf("AppendSession: %v", err)
+	}
+
+	entries, err = LoadSessions(root, 1)
+	if err != nil {
+		t.Fatalf("LoadSessions after append: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Path != target {
+		t.Fatalf("unexpected latest session after append: %+v", entries)
 	}
 }

@@ -10,7 +10,8 @@ import (
 )
 
 type Options struct {
-	TaskOptions taskrun.Options
+	TaskOptions    taskrun.Options
+	PaletteCatalog PaletteCommandCatalog
 }
 
 func Run(options Options) int {

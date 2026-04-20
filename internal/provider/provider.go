@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Perdonus/lavilas-code/internal/runtime"
 )
@@ -27,6 +28,7 @@ type Error struct {
 	Code       string
 	Message    string
 	Retryable  bool
+	RetryAfter time.Duration
 }
 
 func (e *Error) Error() string {

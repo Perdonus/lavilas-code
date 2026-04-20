@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -68,6 +69,7 @@ type Model struct {
 	layout       apphome.Layout
 	options      taskrun.Options
 	history      []runtimeapi.Message
+	catalog      PaletteCommandCatalog
 }
 
 func New() *Model {
@@ -106,6 +108,10 @@ func NewModel(state State) *Model {
 		input:        input,
 		paletteInput: paletteInput,
 		layout:       apphome.DefaultLayout(),
+		catalog:      defaultPaletteCatalog(),
+	}
+	if len(model.state.Palette.Items) == 0 {
+		model.state.Palette.Items = model.rootPaletteItems()
 	}
 	model.refreshViewport()
 	return model
@@ -126,6 +132,10 @@ func newModel(options Options) (*Model, error) {
 	model := NewModel(state)
 	model.layout = layout
 	model.options = options.TaskOptions
+	if options.PaletteCatalog != nil {
+		model.catalog = options.PaletteCatalog
+	}
+	model.state.Palette.Items = model.rootPaletteItems()
 	return model, nil
 }
 
@@ -345,25 +355,36 @@ func (m *Model) renderPalettePane() string {
 	if len(items) == 0 {
 		content = append(content, m.styles.muted.Render("No items match the current filter."))
 	} else {
-		limit := minInt(len(items), 6)
-		selected := clampInt(m.state.Palette.Selected, 0, maxInt(0, len(items)-1))
-		start := 0
-		if selected >= limit {
-			start = selected - limit + 1
-		}
-		end := minInt(len(items), start+limit)
 		entryWidth := maxInt(1, innerWidth(m.styles.pane, m.mainWidth))
-		for index := start; index < end; index++ {
-			entry := fmt.Sprintf("%s  %s", items[index].Title, items[index].Description)
-			style := m.styles.body.Width(entryWidth)
-			if index == selected {
-				style = m.styles.selected.Width(entryWidth)
+		selected := clampInt(m.state.Palette.Selected, 0, maxInt(0, len(items)-1))
+		if backItem, rest, hasBack := splitPaletteBackItem(items); hasBack {
+			content = append(content, m.renderPaletteEntry(backItem, entryWidth, selected == 0))
+			limit := maxInt(1, m.paletteListLimit()-1)
+			start, end := paletteVisibleRange(len(rest), selected-1, limit)
+			for index := start; index < end; index++ {
+				content = append(content, m.renderPaletteEntry(rest[index], entryWidth, selected == index+1))
 			}
-			content = append(content, style.Render(entry))
+		} else {
+			start, end := paletteVisibleRange(len(items), selected, m.paletteListLimit())
+			for index := start; index < end; index++ {
+				content = append(content, m.renderPaletteEntry(items[index], entryWidth, selected == index))
+			}
 		}
 	}
 	content = append(content, m.styles.muted.Render(m.paletteHint()))
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, content...))
+}
+
+func (m *Model) renderPaletteEntry(item PaletteItem, width int, selected bool) string {
+	entry := item.Title
+	if description := strings.TrimSpace(item.Description); description != "" {
+		entry += "  " + description
+	}
+	style := m.styles.body.Width(width)
+	if selected {
+		style = m.styles.selected.Width(width)
+	}
+	return style.Render(entry)
 }
 
 func (m *Model) renderStatusItems() string {
@@ -492,40 +513,12 @@ func (m *Model) dispatchSlash(line string) tea.Cmd {
 		m.appendTranscript("system", "Empty slash command.")
 		return nil
 	}
-
-	switch fields[0] {
-	case "help":
-		m.appendTranscript("system", m.helpText())
-		m.state.Footer = "Help opened"
-		return nil
-	case "exit", "quit":
-		return tea.Quit
-	case "palette":
-		return m.togglePalette()
-	case "new":
-		m.resetConversation()
-		return nil
-	case "resume":
-		return m.loadLatestSessionCmd(false)
-	case "fork":
-		return m.loadLatestSessionCmd(true)
-	case "sessions":
-		return m.openSessionsPalette(false, false)
-	case "status":
-		m.appendTranscript("system", m.statusSummary())
-		return nil
-	case "model":
-		return m.openPaletteMode(PaletteModeModel, false)
-	case "profiles":
-		return m.openPaletteMode(PaletteModeProfiles, false)
-	case "providers":
-		return m.openPaletteMode(PaletteModeProviders, false)
-	case "settings":
-		return m.openPaletteMode(PaletteModeSettings, false)
-	default:
+	command, ok := m.catalog.LookupBySlash(fields[0])
+	if !ok {
 		m.appendTranscript("system", fmt.Sprintf("Unknown slash command: /%s", fields[0]))
 		return nil
 	}
+	return m.executePaletteCommand(command)
 }
 
 func (m *Model) applyTaskResult(msg taskFinishedMsg) {
@@ -564,13 +557,11 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 }
 
 func (m *Model) openPaletteMode(mode PaletteMode, pushCurrent bool) tea.Cmd {
-	if pushCurrent && m.state.Palette.Visible {
-		m.pushPaletteView()
-	}
-	return m.applyPaletteScreen(mode, m.paletteItemsForMode(mode), "", false)
+	return m.applyPaletteScreen(mode, m.paletteItemsForMode(mode), "", pushCurrent)
 }
 
 func (m *Model) applyPaletteScreen(mode PaletteMode, items []PaletteItem, footer string, pushCurrent bool) tea.Cmd {
+	context := m.nextPaletteContext(mode, pushCurrent)
 	if pushCurrent && m.state.Palette.Visible {
 		m.pushPaletteView()
 	}
@@ -578,22 +569,27 @@ func (m *Model) applyPaletteScreen(mode PaletteMode, items []PaletteItem, footer
 	m.state.Palette.Mode = mode
 	m.state.Palette.Query = ""
 	m.state.Palette.Selected = 0
-	m.state.Palette.Items = clonePaletteItems(items)
+	m.state.Palette.Context = context
+	m.state.Palette.Items = m.decoratePaletteItems(mode, items)
+	m.state.Palette.SelectedToken = ""
 	m.paletteInput.Reset()
 	if strings.TrimSpace(footer) != "" {
 		m.state.Footer = footer
 	}
+	m.syncPaletteSelection()
 	m.resize()
 	return m.setFocus(FocusPalette)
 }
 
 func (m *Model) pushPaletteView() {
 	m.state.Palette.Stack = append(m.state.Palette.Stack, PaletteView{
-		Mode:     m.state.Palette.Mode,
-		Query:    m.state.Palette.Query,
-		Items:    clonePaletteItems(m.state.Palette.Items),
-		Selected: m.state.Palette.Selected,
-		Footer:   m.state.Footer,
+		Mode:          m.state.Palette.Mode,
+		Query:         m.state.Palette.Query,
+		Items:         clonePaletteItems(m.state.Palette.Items),
+		Selected:      m.state.Palette.Selected,
+		Context:       m.state.Palette.Context,
+		SelectedToken: m.state.Palette.SelectedToken,
+		Footer:        m.state.Footer,
 	})
 }
 
@@ -611,6 +607,8 @@ func (m *Model) navigatePaletteBack() tea.Cmd {
 	m.state.Palette.Query = last.Query
 	m.state.Palette.Items = clonePaletteItems(last.Items)
 	m.state.Palette.Selected = last.Selected
+	m.state.Palette.Context = last.Context
+	m.state.Palette.SelectedToken = last.SelectedToken
 	m.paletteInput.SetValue(last.Query)
 	m.state.Footer = last.Footer
 	m.syncPaletteSelection()
@@ -629,39 +627,36 @@ func (m *Model) paletteItemsForMode(mode PaletteMode) []PaletteItem {
 	case PaletteModeProviders:
 		return m.providersPaletteItems()
 	default:
-		return defaultPaletteItems()
+		return m.rootPaletteItems()
 	}
 }
 
 func (m *Model) settingsPaletteItems() []PaletteItem {
 	settings, _ := loadSettingsOptional(m.layout.SettingsPath())
 	summary := settings.Summary()
-	items := []PaletteItem{
-		m.paletteBackItem(),
-		{Key: "model", Title: "Model", Description: "Inspect active model"},
-		{Key: "profiles", Title: "Profiles", Description: "Inspect configured profiles"},
-		{Key: "providers", Title: "Providers", Description: "Inspect configured providers"},
-		{Key: "settings.language", Title: "Language", Description: fallback(summary.Language, "<unset>")},
-		{Key: "settings.command_prefix", Title: "Command Prefix", Description: fallback(summary.CommandPrefix, "<unset>")},
-		{Key: "settings.hidden_commands", Title: "Hidden Commands", Description: fmt.Sprintf("%d", len(summary.HiddenCommands))},
+	return []PaletteItem{
+		{Key: "model", Title: "Model", Description: "Inspect active model", Aliases: []string{"/model"}, Keywords: []string{"reasoning", "provider", "profile"}},
+		{Key: "profiles", Title: "Profiles", Description: "Inspect configured profiles", Aliases: []string{"/profiles"}, Keywords: []string{"accounts", "profile", "config"}},
+		{Key: "providers", Title: "Providers", Description: "Inspect configured providers", Aliases: []string{"/providers"}, Keywords: []string{"api", "wire_api", "base_url"}},
+		{Key: "settings.language", Title: "Language", Description: fallback(summary.Language, "<unset>"), Keywords: []string{"locale", "translation"}},
+		{Key: "settings.command_prefix", Title: "Command Prefix", Description: fallback(summary.CommandPrefix, "<unset>"), Keywords: []string{"slash", "prefix", "commands"}},
+		{Key: "settings.hidden_commands", Title: "Hidden Commands", Description: fmt.Sprintf("%d", len(summary.HiddenCommands)), Keywords: []string{"visibility", "commands"}},
 	}
-	return items
 }
 
 func (m *Model) modelPaletteItems() []PaletteItem {
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
 	return []PaletteItem{
-		m.paletteBackItem(),
-		{Key: "model.value", Title: "Model", Description: fallback(m.state.Model, config.EffectiveModel())},
-		{Key: "model.provider", Title: "Provider", Description: fallback(m.state.Provider, config.EffectiveProviderName())},
-		{Key: "model.profile", Title: "Profile", Description: fallback(m.state.Profile, config.ActiveProfileName())},
-		{Key: "model.reasoning", Title: "Reasoning", Description: fallback(m.state.Reasoning, config.EffectiveReasoningEffort())},
+		{Key: "model.value", Title: "Model", Description: fallback(m.state.Model, config.EffectiveModel()), Keywords: []string{"active", "slug", "model"}},
+		{Key: "model.provider", Title: "Provider", Description: fallback(m.state.Provider, config.EffectiveProviderName()), Keywords: []string{"api", "provider"}},
+		{Key: "model.profile", Title: "Profile", Description: fallback(m.state.Profile, config.ActiveProfileName()), Keywords: []string{"account", "profile"}},
+		{Key: "model.reasoning", Title: "Reasoning", Description: fallback(m.state.Reasoning, config.EffectiveReasoningEffort()), Keywords: []string{"effort", "thinking", "reasoning"}},
 	}
 }
 
 func (m *Model) profilesPaletteItems() []PaletteItem {
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
-	items := []PaletteItem{m.paletteBackItem()}
+	items := []PaletteItem{}
 	if len(config.Profiles) == 0 {
 		return append(items, PaletteItem{Key: "profiles.empty", Title: "No Profiles", Description: "No configured profiles found"})
 	}
@@ -670,14 +665,14 @@ func (m *Model) profilesPaletteItems() []PaletteItem {
 		if profile.Name == config.ActiveProfileName() {
 			description += " · active"
 		}
-		items = append(items, PaletteItem{Key: "profiles.entry", Title: profile.Name, Description: description})
+		items = append(items, PaletteItem{Key: "profiles.entry", Title: profile.Name, Description: description, Keywords: []string{profile.Provider, profile.Model, profile.ReasoningEffort}})
 	}
 	return items
 }
 
 func (m *Model) providersPaletteItems() []PaletteItem {
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
-	items := []PaletteItem{m.paletteBackItem()}
+	items := []PaletteItem{}
 	if len(config.ModelProviders) == 0 {
 		return append(items, PaletteItem{Key: "providers.empty", Title: "No Providers", Description: "No configured providers found"})
 	}
@@ -686,32 +681,243 @@ func (m *Model) providersPaletteItems() []PaletteItem {
 			Key:         "providers.entry",
 			Title:       provider.Name,
 			Description: fmt.Sprintf("base_url=%s wire_api=%s", fallback(provider.BaseURL, "<unset>"), fallback(provider.WireAPI, "chat_completions")),
+			Keywords:    []string{provider.BaseURL, provider.WireAPI},
 		})
 	}
 	return items
 }
 
 func (m *Model) paletteBackItem() PaletteItem {
-	title := "Back to Chat"
-	description := "Close this screen"
-	if len(m.state.Palette.Stack) > 0 {
-		previous := m.state.Palette.Stack[len(m.state.Palette.Stack)-1]
-		if previous.Mode == PaletteModeSettings {
-			title = "Back to Settings"
-			description = "Return to settings"
-		} else {
-			title = "Back to Palette"
-			description = "Return to previous menu"
-		}
-	}
-	return PaletteItem{Key: "__back", Title: title, Description: description}
+	context := normalizePaletteContext(m.state.Palette.Context)
+	return PaletteItem{Key: "__back", Title: context.BackTitle, Description: context.BackDescription, Keywords: []string{"back", "close", "return"}}
 }
 
 func (m *Model) paletteHint() string {
-	if m.state.Palette.Mode == PaletteModeRoot || len(m.state.Palette.Stack) == 0 {
-		return "Enter select · Esc close"
+	return normalizePaletteContext(m.state.Palette.Context).BackHint
+}
+
+func (m *Model) rootPaletteItems() []PaletteItem {
+	if m.catalog == nil {
+		m.catalog = defaultPaletteCatalog()
 	}
-	return "Enter select · Esc back"
+	return clonePaletteItems(m.catalog.RootItems())
+}
+
+func (m *Model) decoratePaletteItems(mode PaletteMode, items []PaletteItem) []PaletteItem {
+	decorated := clonePaletteItems(items)
+	if mode == PaletteModeRoot {
+		return decorated
+	}
+	if len(decorated) > 0 && decorated[0].Key == "__back" {
+		decorated[0] = m.paletteBackItem()
+		return decorated
+	}
+	return append([]PaletteItem{m.paletteBackItem()}, decorated...)
+}
+
+func (m *Model) nextPaletteContext(mode PaletteMode, pushCurrent bool) PaletteContext {
+	context := defaultPaletteContext()
+	if m.state.Palette.Visible {
+		context.ReturnFocus = normalizePaletteContext(m.state.Palette.Context).ReturnFocus
+	} else {
+		context.ReturnFocus = normalizeFocus(m.state.Focus)
+		if context.ReturnFocus == FocusPalette {
+			context.ReturnFocus = FocusInput
+		}
+	}
+	if !m.state.Palette.Visible || !pushCurrent {
+		return context
+	}
+	context.BackTitle, context.BackDescription = paletteBackCopyForMode(m.state.Palette.Mode)
+	context.BackHint = "Enter select · Esc back"
+	return context
+}
+
+func paletteBackCopyForMode(mode PaletteMode) (string, string) {
+	switch mode {
+	case PaletteModeSettings:
+		return "Back to Settings", "Return to settings"
+	case PaletteModeRoot:
+		return "Back to Palette", "Return to command palette"
+	case PaletteModeModel:
+		return "Back to Model", "Return to model details"
+	case PaletteModeProfiles:
+		return "Back to Profiles", "Return to profiles"
+	case PaletteModeProviders:
+		return "Back to Providers", "Return to providers"
+	case PaletteModeResume:
+		return "Back to Resume", "Return to saved sessions"
+	case PaletteModeFork:
+		return "Back to Fork", "Return to fork browser"
+	default:
+		return "Back to Chat", "Return to transcript"
+	}
+}
+
+func (m *Model) paletteListLimit() int {
+	return maxInt(3, innerHeight(m.styles.pane, palettePaneHeight)-3)
+}
+
+func (m *Model) palettePageSize() int {
+	return maxInt(1, m.paletteListLimit()-1)
+}
+
+type scoredPaletteItem struct {
+	Item  PaletteItem
+	Score int
+	Index int
+}
+
+func splitPaletteBackItem(items []PaletteItem) (PaletteItem, []PaletteItem, bool) {
+	if len(items) == 0 || items[0].Key != "__back" {
+		return PaletteItem{}, items, false
+	}
+	return items[0], items[1:], true
+}
+
+func paletteVisibleRange(total int, selected int, limit int) (int, int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	limit = clampInt(limit, 1, total)
+	selected = clampInt(selected, 0, total-1)
+	start := selected - limit/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + limit
+	if end > total {
+		end = total
+		start = maxInt(0, end-limit)
+	}
+	return start, end
+}
+
+func tokenizePaletteQuery(query string) []string {
+	normalized := normalizePaletteSearchText(query)
+	if normalized == "" {
+		return nil
+	}
+	return strings.Fields(normalized)
+}
+
+func normalizePaletteSearchText(value string) string {
+	replacer := strings.NewReplacer("/", " ", "-", " ", "_", " ", ".", " ", ":", " ", "=", " ", "·", " ", ",", " ")
+	return strings.ToLower(strings.TrimSpace(replacer.Replace(value)))
+}
+
+func scorePaletteItem(item PaletteItem, tokens []string) (int, bool) {
+	title := normalizePaletteSearchText(item.Title)
+	description := normalizePaletteSearchText(item.Description)
+	value := normalizePaletteSearchText(item.Value)
+	aliases := make([]string, 0, len(item.Aliases))
+	for _, alias := range item.Aliases {
+		aliases = append(aliases, normalizePaletteSearchText(alias))
+	}
+	keywords := make([]string, 0, len(item.Keywords))
+	for _, keyword := range item.Keywords {
+		keywords = append(keywords, normalizePaletteSearchText(keyword))
+	}
+	score := 0
+	for _, token := range tokens {
+		tokenScore, ok := scorePaletteToken(token, title, description, value, aliases, keywords)
+		if !ok {
+			return 0, false
+		}
+		score += tokenScore
+	}
+	return score, true
+}
+
+func scorePaletteToken(token string, title string, description string, value string, aliases []string, keywords []string) (int, bool) {
+	switch {
+	case title == token || listContainsExact(aliases, token):
+		return 0, true
+	case strings.HasPrefix(title, token) || listHasPrefix(aliases, token):
+		return 1, true
+	case strings.Contains(title, token) || listContainsToken(keywords, token):
+		return 2, true
+	case strings.Contains(value, token) || listHasPrefix(keywords, token):
+		return 3, true
+	case strings.Contains(description, token) || listContainsToken(aliases, token):
+		return 4, true
+	default:
+		return 0, false
+	}
+}
+
+func listContainsExact(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func listHasPrefix(items []string, needle string) bool {
+	for _, item := range items {
+		if strings.HasPrefix(item, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func listContainsToken(items []string, needle string) bool {
+	for _, item := range items {
+		if strings.Contains(item, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func paletteItemToken(item PaletteItem) string {
+	return item.Key + "\x00" + item.Title + "\x00" + item.Value
+}
+
+func (m *Model) executePaletteCommand(command PaletteCommandSpec) tea.Cmd {
+	switch command.Action {
+	case PaletteActionOpenPalette:
+		if m.state.Palette.Visible {
+			return nil
+		}
+		return m.openPaletteMode(PaletteModeRoot, false)
+	case PaletteActionNewSession:
+		m.resetConversation()
+		if m.state.Palette.Visible {
+			return m.closePalette()
+		}
+		return nil
+	case PaletteActionResumeLatest:
+		return m.loadLatestSessionCmd(false)
+	case PaletteActionForkLatest:
+		return m.loadLatestSessionCmd(true)
+	case PaletteActionBrowseResume:
+		return m.openSessionsPalette(false, m.state.Palette.Visible)
+	case PaletteActionBrowseFork:
+		return m.openSessionsPalette(true, m.state.Palette.Visible)
+	case PaletteActionShowStatus:
+		m.appendTranscript("system", m.statusSummary())
+		if m.state.Palette.Visible {
+			return m.closePalette()
+		}
+		return nil
+	case PaletteActionShowHelp:
+		m.appendTranscript("system", m.helpText())
+		m.state.Footer = "Help opened"
+		if m.state.Palette.Visible {
+			return m.closePalette()
+		}
+		return nil
+	case PaletteActionQuit:
+		return tea.Quit
+	case PaletteActionOpenMode:
+		return m.openPaletteMode(command.Mode, m.state.Palette.Visible)
+	default:
+		return nil
+	}
 }
 
 func (m *Model) togglePalette() tea.Cmd {
@@ -722,15 +928,21 @@ func (m *Model) togglePalette() tea.Cmd {
 }
 
 func (m *Model) closePalette() tea.Cmd {
+	returnFocus := normalizePaletteContext(m.state.Palette.Context).ReturnFocus
+	if returnFocus == FocusPalette {
+		returnFocus = FocusInput
+	}
 	m.state.Palette.Visible = false
 	m.state.Palette.Mode = PaletteModeRoot
 	m.state.Palette.Query = ""
 	m.state.Palette.Selected = 0
-	m.state.Palette.Items = defaultPaletteItems()
+	m.state.Palette.Items = m.rootPaletteItems()
+	m.state.Palette.Context = defaultPaletteContext()
+	m.state.Palette.SelectedToken = ""
 	m.state.Palette.Stack = nil
 	m.paletteInput.Reset()
 	m.resize()
-	return m.setFocus(FocusInput)
+	return m.setFocus(returnFocus)
 }
 
 func (m *Model) updatePalette(msg tea.Msg) tea.Cmd {
@@ -744,14 +956,22 @@ func (m *Model) updatePalette(msg tea.Msg) tea.Cmd {
 		case key.Matches(keyMsg, m.keys.Down):
 			m.movePaletteSelection(1)
 			return nil
+		case key.Matches(keyMsg, m.keys.PageUp):
+			m.movePaletteSelection(-m.palettePageSize())
+			return nil
+		case key.Matches(keyMsg, m.keys.PageDown):
+			m.movePaletteSelection(m.palettePageSize())
+			return nil
 		case key.Matches(keyMsg, m.keys.Submit):
 			return m.activatePaletteSelection()
 		}
 	}
 
 	var cmd tea.Cmd
+	previousToken := m.state.Palette.SelectedToken
 	m.paletteInput, cmd = m.paletteInput.Update(msg)
 	m.state.Palette.Query = m.paletteInput.Value()
+	m.state.Palette.SelectedToken = previousToken
 	m.syncPaletteSelection()
 	return cmd
 }
@@ -768,34 +988,14 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 	case PaletteModeFork:
 		return m.loadSessionCmd(item.Value, true)
 	default:
+		if item.Key != "__back" {
+			if command, ok := m.catalog.LookupByKey(item.Key); ok {
+				return m.executePaletteCommand(command)
+			}
+		}
 		switch item.Key {
 		case "__back":
 			return m.navigatePaletteBack()
-		case "new":
-			m.resetConversation()
-			return m.closePalette()
-		case "resume_latest":
-			return m.loadLatestSessionCmd(false)
-		case "fork_latest":
-			return m.loadLatestSessionCmd(true)
-		case "sessions_resume":
-			return m.openSessionsPalette(false, true)
-		case "sessions_fork":
-			return m.openSessionsPalette(true, true)
-		case "model":
-			return m.openPaletteMode(PaletteModeModel, m.state.Palette.Visible)
-		case "profiles":
-			return m.openPaletteMode(PaletteModeProfiles, m.state.Palette.Visible)
-		case "providers":
-			return m.openPaletteMode(PaletteModeProviders, m.state.Palette.Visible)
-		case "settings":
-			return m.openPaletteMode(PaletteModeSettings, m.state.Palette.Visible)
-		case "status":
-			m.appendTranscript("system", m.statusSummary())
-			return m.closePalette()
-		case "help":
-			m.appendTranscript("system", m.helpText())
-			return m.closePalette()
 		}
 		return nil
 	}
@@ -813,27 +1013,34 @@ func (m *Model) selectedPaletteItem() (PaletteItem, bool) {
 func (m *Model) filteredPaletteItems() []PaletteItem {
 	items := m.state.Palette.Items
 	if len(items) == 0 {
-		items = defaultPaletteItems()
+		items = m.rootPaletteItems()
 	}
-	query := strings.ToLower(strings.TrimSpace(m.state.Palette.Query))
-	if query == "" {
+	tokens := tokenizePaletteQuery(m.state.Palette.Query)
+	if len(tokens) == 0 {
 		return items
 	}
 	filtered := make([]PaletteItem, 0, len(items))
+	scored := make([]scoredPaletteItem, 0, len(items))
 	for _, item := range items {
 		if item.Key == "__back" {
 			filtered = append(filtered, item)
-			break
-		}
-	}
-	for _, item := range items {
-		if item.Key == "__back" {
 			continue
 		}
-		candidate := strings.ToLower(item.Title + " " + item.Description + " " + item.Value)
-		if strings.Contains(candidate, query) {
-			filtered = append(filtered, item)
+		if score, ok := scorePaletteItem(item, tokens); ok {
+			scored = append(scored, scoredPaletteItem{Item: item, Score: score, Index: len(scored)})
 		}
+	}
+	sort.SliceStable(scored, func(left, right int) bool {
+		if scored[left].Score == scored[right].Score {
+			if scored[left].Index == scored[right].Index {
+				return scored[left].Item.Title < scored[right].Item.Title
+			}
+			return scored[left].Index < scored[right].Index
+		}
+		return scored[left].Score < scored[right].Score
+	})
+	for _, item := range scored {
+		filtered = append(filtered, item.Item)
 	}
 	return filtered
 }
@@ -842,18 +1049,31 @@ func (m *Model) movePaletteSelection(delta int) {
 	items := m.filteredPaletteItems()
 	if len(items) == 0 {
 		m.state.Palette.Selected = 0
+		m.state.Palette.SelectedToken = ""
 		return
 	}
 	m.state.Palette.Selected = clampInt(m.state.Palette.Selected+delta, 0, len(items)-1)
+	m.state.Palette.SelectedToken = paletteItemToken(items[m.state.Palette.Selected])
 }
 
 func (m *Model) syncPaletteSelection() {
 	items := m.filteredPaletteItems()
 	if len(items) == 0 {
 		m.state.Palette.Selected = 0
+		m.state.Palette.SelectedToken = ""
 		return
 	}
+	if token := strings.TrimSpace(m.state.Palette.SelectedToken); token != "" {
+		for index, item := range items {
+			if paletteItemToken(item) == token {
+				m.state.Palette.Selected = index
+				m.state.Palette.SelectedToken = token
+				return
+			}
+		}
+	}
 	m.state.Palette.Selected = clampInt(m.state.Palette.Selected, 0, len(items)-1)
+	m.state.Palette.SelectedToken = paletteItemToken(items[m.state.Palette.Selected])
 }
 
 func (m *Model) cycleFocus(delta int) tea.Cmd {
@@ -1008,21 +1228,7 @@ func (m *Model) appendTranscript(role string, body string) {
 }
 
 func (m *Model) helpText() string {
-	return strings.Join([]string{
-		"Slash commands:",
-		"/help      show command help",
-		"/palette   open the command palette",
-		"/new       start a fresh session",
-		"/resume    load the latest session",
-		"/fork      fork the latest session",
-		"/sessions  browse saved sessions",
-		"/status    show runtime summary",
-		"/model     show active model summary",
-		"/profiles  show configured profiles",
-		"/providers show configured providers",
-		"/settings  show saved UI settings",
-		"/exit      quit the TUI",
-	}, "\n")
+	return m.catalog.HelpText(commandPrefix(m.layout.SettingsPath()))
 }
 
 func (m *Model) statusSummary() string {
@@ -1091,11 +1297,20 @@ func buildStatusItems(layout apphome.Layout, state State, historyLen int) []Stat
 }
 
 func buildFooter(settings appstate.Settings) string {
+	return fmt.Sprintf("Enter submit · Ctrl+P palette · %shelp slash help", commandPrefixFromSettings(settings))
+}
+
+func commandPrefix(settingsPath string) string {
+	settings, _ := loadSettingsOptional(settingsPath)
+	return commandPrefixFromSettings(settings)
+}
+
+func commandPrefixFromSettings(settings appstate.Settings) string {
 	prefix := settings.CommandPrefix
 	if strings.TrimSpace(prefix) == "" {
 		prefix = "/"
 	}
-	return fmt.Sprintf("Enter submit · Ctrl+P palette · %shelp slash help", prefix)
+	return prefix
 }
 
 func transcriptFromMessages(messages []runtimeapi.Message) []TranscriptEntry {

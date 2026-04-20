@@ -59,3 +59,29 @@ func TestReplCommandsStayBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildReplLookupAcceptsBilingualAliases(t *testing.T) {
+	lookup := buildReplLookup(replCommands())
+	tests := map[string]string{
+		"status":     "status",
+		"статус":     "status",
+		"model":      "model",
+		"модель":     "model",
+		"profiles":   "profiles",
+		"профили":    "profiles",
+		"providers":  "providers",
+		"провайдеры": "providers",
+		"settings":   "settings",
+		"настройки":  "settings",
+	}
+
+	for key, want := range tests {
+		command, ok := lookup[key]
+		if !ok {
+			t.Fatalf("lookup[%q] missing", key)
+		}
+		if command.Name != want {
+			t.Fatalf("lookup[%q].Name = %q, want %q", key, command.Name, want)
+		}
+	}
+}

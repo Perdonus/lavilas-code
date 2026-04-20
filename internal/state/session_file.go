@@ -69,7 +69,12 @@ func CreateSession(root string, meta SessionMeta, messages []runtime.Message) (S
 	if err != nil {
 		return SessionEntry{}, err
 	}
-	return buildSessionEntry(root, path, info), nil
+	entry := buildSessionEntry(root, path, info)
+	if !meta.UpdatedAt.IsZero() {
+		entry.ModTime = meta.UpdatedAt.UTC()
+	}
+	_ = UpsertSessionIndexEntry(root, entry)
+	return entry, nil
 }
 
 func AppendSession(path string, messages ...runtime.Message) error {
@@ -77,12 +82,15 @@ func AppendSession(path string, messages ...runtime.Message) error {
 		return nil
 	}
 
-	meta, existing, err := LoadSession(path)
+	meta, err := LoadSessionMeta(path)
 	if err != nil {
 		return err
 	}
 	meta.UpdatedAt = time.Now().UTC()
-	return persistSession(path, meta, append(existing, messages...))
+	if err := appendSessionDelta(path, meta, messages); err != nil {
+		return err
+	}
+	return refreshSessionIndexEntry(path, meta.UpdatedAt)
 }
 
 func AppendSessionHistory(path string, meta SessionMeta, history []runtime.Message) error {
@@ -102,7 +110,11 @@ func AppendSessionHistory(path string, meta SessionMeta, history []runtime.Messa
 	if meta.UpdatedAt.IsZero() {
 		merged.UpdatedAt = time.Now().UTC()
 	}
-	return persistSession(path, merged, history)
+	tail := history[len(existing):]
+	if err := appendSessionDelta(path, merged, tail); err != nil {
+		return err
+	}
+	return refreshSessionIndexEntry(path, merged.UpdatedAt)
 }
 
 func LoadSession(path string) (SessionMeta, []runtime.Message, error) {
@@ -138,6 +150,35 @@ func LoadSession(path string) (SessionMeta, []runtime.Message, error) {
 		return SessionMeta{}, nil, err
 	}
 	return meta, messages, nil
+}
+
+func LoadSessionMeta(path string) (SessionMeta, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return SessionMeta{}, err
+	}
+	defer file.Close()
+
+	var meta SessionMeta
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var current sessionLine
+		if err := json.Unmarshal([]byte(line), &current); err != nil {
+			return SessionMeta{}, fmt.Errorf("decode session meta line: %w", err)
+		}
+		if current.Type == "meta" {
+			meta = sessionMetaFromLine(current)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return SessionMeta{}, err
+	}
+	return meta, nil
 }
 
 func normalizeSessionMeta(meta SessionMeta) SessionMeta {
@@ -361,6 +402,23 @@ func sessionMessageEqual(left runtime.Message, right runtime.Message) bool {
 		reflect.DeepEqual(left.ToolCalls, right.ToolCalls)
 }
 
+func appendSessionDelta(path string, meta SessionMeta, messages []runtime.Message) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	if err := writeSessionMeta(writer, meta); err != nil {
+		return err
+	}
+	if err := writeSessionMessages(writer, messages); err != nil {
+		return err
+	}
+	return writer.Flush()
+}
+
 func persistSession(path string, meta SessionMeta, messages []runtime.Message) (err error) {
 	meta = normalizeSessionMeta(meta)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -399,4 +457,32 @@ func persistSession(path string, meta SessionMeta, messages []runtime.Message) (
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+func refreshSessionIndexEntry(path string, updatedAt time.Time) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	root := sessionRootFromPath(path)
+	if root == "" {
+		return nil
+	}
+	entry := buildSessionEntry(root, path, info)
+	if !updatedAt.IsZero() {
+		entry.ModTime = updatedAt.UTC()
+	}
+	return UpsertSessionIndexEntry(root, entry)
+}
+
+func sessionRootFromPath(path string) string {
+	dir := filepath.Dir(path)
+	for range 3 {
+		next := filepath.Dir(dir)
+		if next == dir {
+			return ""
+		}
+		dir = next
+	}
+	return dir
 }

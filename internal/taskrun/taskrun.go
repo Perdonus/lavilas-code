@@ -46,6 +46,12 @@ type Result struct {
 	AssistantMessage runtime.Message       `json:"-"`
 }
 
+const (
+	maxProviderAttempts = 4
+	baseProviderBackoff = time.Second
+	maxProviderBackoff  = 30 * time.Second
+)
+
 func (result Result) FullHistory() []runtime.Message {
 	if len(result.History) > 0 {
 		return cloneMessages(result.History)
@@ -180,7 +186,7 @@ func runSingleTurn(ctx context.Context, client provider.Client, request runtime.
 		return collectStreamTurn(ctx, client, request)
 	}
 
-	response, err := client.Create(ctx, request)
+	response, err := createWithRetry(ctx, client, request)
 	if err != nil {
 		return nil, nil, runtime.Message{}, err
 	}
@@ -191,14 +197,17 @@ func runSingleTurn(ctx context.Context, client provider.Client, request runtime.
 }
 
 func collectStreamTurn(ctx context.Context, client provider.Client, request runtime.Request) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
-	stream, err := client.Stream(ctx, request)
+	stream, err := streamWithRetry(ctx, client, request)
 	if err != nil {
 		return nil, nil, runtime.Message{}, err
 	}
 	defer stream.Close()
+	return collectStreamResponse(stream, client.Name(), request.Model)
+}
 
+func collectStreamResponse(stream runtime.Stream, providerName string, fallbackModel string) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
 	events := make([]runtime.StreamEvent, 0, 16)
-	accumulator := newTurnAccumulator(client.Name(), request.Model)
+	accumulator := newTurnAccumulator(providerName, fallbackModel)
 	for {
 		event, err := stream.Recv()
 		if err == io.EOF {
@@ -219,6 +228,81 @@ func collectStreamTurn(ctx context.Context, client provider.Client, request runt
 		return nil, nil, runtime.Message{}, fmt.Errorf("provider returned no streamed choices")
 	}
 	return response, events, response.Choices[0].Message, nil
+}
+
+func createWithRetry(ctx context.Context, client provider.Client, request runtime.Request) (*runtime.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
+		response, err := client.Create(ctx, request)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		delay, ok := providerRetryDelay(err, attempt)
+		if !ok {
+			return nil, err
+		}
+		if err := sleepWithContext(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func streamWithRetry(ctx context.Context, client provider.Client, request runtime.Request) (runtime.Stream, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
+		stream, err := client.Stream(ctx, request)
+		if err == nil {
+			return stream, nil
+		}
+		lastErr = err
+		delay, ok := providerRetryDelay(err, attempt)
+		if !ok {
+			return nil, err
+		}
+		if err := sleepWithContext(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func providerRetryDelay(err error, attempt int) (time.Duration, bool) {
+	if attempt >= maxProviderAttempts-1 {
+		return 0, false
+	}
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) || !providerErr.Retryable {
+		return 0, false
+	}
+	if providerErr.RetryAfter > 0 {
+		return providerErr.RetryAfter, true
+	}
+	delay := baseProviderBackoff * time.Duration(1<<attempt)
+	if delay > maxProviderBackoff {
+		delay = maxProviderBackoff
+	}
+	return delay, true
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 type turnAccumulator struct {

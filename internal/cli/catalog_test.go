@@ -5,6 +5,38 @@ import (
 	"testing"
 )
 
+func TestRegistryUsesSharedCatalogAliases(t *testing.T) {
+	lookup := buildLookup(registry())
+	tests := map[string]string{
+		"chat":        "chat",
+		"чат":         "chat",
+		"interactive": "chat",
+		"resume":      "resume",
+		"продолжить":  "resume",
+		"profiles":    "profiles",
+		"аккаунты":    "profiles",
+	}
+
+	for key, want := range tests {
+		command, ok := lookup[key]
+		if !ok {
+			t.Fatalf("lookup[%q] missing", key)
+		}
+		if command.Name != want {
+			t.Fatalf("lookup[%q].Name = %q, want %q", key, command.Name, want)
+		}
+	}
+}
+
+func TestCommandAndAliasNamesIncludeBilingualCatalogValues(t *testing.T) {
+	got := commandAndAliasNames(registry())
+	for _, want := range []string{"chat", "чат", "interactive", "resume", "продолжить", "profiles", "аккаунты"} {
+		if !containsString(got, want) {
+			t.Fatalf("commandAndAliasNames(registry()) missing %q in %#v", want, got)
+		}
+	}
+}
+
 func TestCatalogResolveCanonicalAndAliases(t *testing.T) {
 	catalog := Catalog()
 	tests := []struct {
@@ -205,4 +237,13 @@ func findCatalogListItem(items []CatalogListItem, command string) (CatalogListIt
 		}
 	}
 	return CatalogListItem{}, false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

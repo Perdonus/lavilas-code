@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Perdonus/lavilas-code/internal/apphome"
+	"github.com/Perdonus/lavilas-code/internal/modelcatalog"
 	"github.com/Perdonus/lavilas-code/internal/provider/openai"
 	"github.com/Perdonus/lavilas-code/internal/provider/responsesapi"
 	"github.com/Perdonus/lavilas-code/internal/state"
@@ -114,6 +115,12 @@ func runLogout(args []string) int {
 	}
 
 	if input.ProfileName != "" && !input.KeepProfile {
+		if profile, ok := config.Profile(input.ProfileName); ok {
+			if err := modelcatalog.DeleteProfileSnapshot(profile, apphome.CodexHome()); err != nil {
+				fmt.Fprintf(os.Stderr, "logout: failed to remove sidecar: %v\n", err)
+				return 1
+			}
+		}
 		config.DeleteProfile(input.ProfileName)
 	}
 
@@ -154,8 +161,16 @@ func runStatus(args []string) int {
 	}
 
 	providerConfig, _ := config.EffectiveProvider()
+	ctx, err := modelcatalog.ResolveRuntimeContext(config, apphome.CodexHome(), "", "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "status: failed to resolve model catalog: %v\n", err)
+		return 1
+	}
+	model, matched := modelcatalog.ResolveModelChoice(ctx.ProviderID, ctx.Catalog, config.EffectiveModel())
 	payload := map[string]any{
 		"model":              fallback(config.EffectiveModel(), ""),
+		"model_display_name": fallback(model.DisplayName, ""),
+		"model_matched":      matched,
 		"reasoning":          fallback(config.EffectiveReasoningEffort(), ""),
 		"active_profile":     fallback(config.ActiveProfileName(), ""),
 		"active_provider":    fallback(config.EffectiveProviderName(), ""),
@@ -163,6 +178,10 @@ func runStatus(args []string) int {
 		"provider_base_url":  fallback(providerConfig.BaseURL, ""),
 		"provider_wire_api":  fallback(providerConfig.WireAPI, "chat_completions"),
 		"provider_has_token": strings.TrimSpace(providerConfig.BearerToken()) != "",
+		"provider_id":        fallback(ctx.ProviderID, ""),
+		"catalog_path":       fallback(ctx.SidecarPath, ""),
+		"catalog_found":      ctx.SidecarFound,
+		"catalog_models":     len(ctx.Snapshot.Models),
 		"language":           fallback(settings.Language, ""),
 		"command_prefix":     fallback(settings.CommandPrefix, ""),
 		"config_path":        configPath,
@@ -175,13 +194,19 @@ func runStatus(args []string) int {
 	}
 
 	fmt.Printf("model: %s\n", fallback(payload["model"].(string), "<unset>"))
+	fmt.Printf("model_display_name: %s\n", fallback(payload["model_display_name"].(string), "<unset>"))
+	fmt.Printf("model_matched: %t\n", payload["model_matched"].(bool))
 	fmt.Printf("reasoning: %s\n", fallback(payload["reasoning"].(string), "<unset>"))
 	fmt.Printf("active_profile: %s\n", fallback(payload["active_profile"].(string), "<unset>"))
 	fmt.Printf("active_provider: %s\n", fallback(payload["active_provider"].(string), "<unset>"))
 	fmt.Printf("provider_name: %s\n", fallback(payload["provider_name"].(string), "<unset>"))
+	fmt.Printf("provider_id: %s\n", fallback(payload["provider_id"].(string), "<unset>"))
 	fmt.Printf("provider_base_url: %s\n", fallback(payload["provider_base_url"].(string), "<unset>"))
 	fmt.Printf("provider_wire_api: %s\n", fallback(payload["provider_wire_api"].(string), "<unset>"))
 	fmt.Printf("provider_has_token: %t\n", payload["provider_has_token"].(bool))
+	fmt.Printf("catalog_path: %s\n", fallback(payload["catalog_path"].(string), "<unset>"))
+	fmt.Printf("catalog_found: %t\n", payload["catalog_found"].(bool))
+	fmt.Printf("catalog_models: %d\n", payload["catalog_models"].(int))
 	fmt.Printf("language: %s\n", fallback(payload["language"].(string), "<unset>"))
 	fmt.Printf("command_prefix: %s\n", fallback(payload["command_prefix"].(string), "<unset>"))
 	fmt.Printf("config_path: %s\n", payload["config_path"].(string))

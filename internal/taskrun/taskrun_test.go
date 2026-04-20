@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/Perdonus/lavilas-code/internal/provider"
 	"github.com/Perdonus/lavilas-code/internal/runtime"
@@ -221,6 +222,87 @@ func TestRunWithToolLoop_PreservesToolTraceInHistory(t *testing.T) {
 	}
 	if history[4].Role != runtime.RoleAssistant || history[4].Text() != "done" {
 		t.Fatalf("final assistant missing from history: %+v", history[4])
+	}
+}
+
+func TestRunSingleTurn_RetriesRetryableCreateErrors(t *testing.T) {
+	attempts := 0
+	client := fakeProviderClient{
+		name: "retry-create",
+		createFn: func(context.Context, runtime.Request) (*runtime.Response, error) {
+			attempts++
+			if attempts < 3 {
+				return nil, &provider.Error{
+					Provider:   "retry-create",
+					StatusCode: 429,
+					Message:    "rate limited",
+					Retryable:  true,
+					RetryAfter: time.Millisecond,
+				}
+			}
+			return &runtime.Response{
+				Model: "alpha-model",
+				Choices: []runtime.Choice{{
+					Index:   0,
+					Message: runtime.TextMessage(runtime.RoleAssistant, "ready"),
+				}},
+			}, nil
+		},
+	}
+
+	response, _, assistant, err := runSingleTurn(context.Background(), client, runtime.Request{Model: "alpha-model"}, false)
+	if err != nil {
+		t.Fatalf("runSingleTurn: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("create attempts = %d, want 3", attempts)
+	}
+	if response == nil || assistant.Text() != "ready" {
+		t.Fatalf("unexpected response after retry: %+v %+v", response, assistant)
+	}
+}
+
+func TestCollectStreamTurn_RetriesRetryableStreamOpen(t *testing.T) {
+	attempts := 0
+	client := fakeProviderClient{
+		name: "retry-stream",
+		caps: provider.Capabilities{Streaming: true},
+		streamFn: func(context.Context, runtime.Request) (runtime.Stream, error) {
+			attempts++
+			if attempts < 3 {
+				return nil, &provider.Error{
+					Provider:   "retry-stream",
+					StatusCode: 503,
+					Message:    "temporary upstream failure",
+					Retryable:  true,
+					RetryAfter: time.Millisecond,
+				}
+			}
+			return &fakeStream{events: []runtime.StreamEvent{
+				{
+					Type: runtime.StreamEventTypeDelta,
+					Delta: runtime.MessageDelta{
+						Role: runtime.RoleAssistant,
+						Content: []runtime.ContentPartDelta{
+							{Type: runtime.ContentPartTypeText, Text: "stream ok"},
+						},
+					},
+				},
+				{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonStop},
+				{Type: runtime.StreamEventTypeDone},
+			}}, nil
+		},
+	}
+
+	response, _, assistant, err := collectStreamTurn(context.Background(), client, runtime.Request{Model: "alpha-model"})
+	if err != nil {
+		t.Fatalf("collectStreamTurn: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("stream attempts = %d, want 3", attempts)
+	}
+	if response == nil || assistant.Text() != "stream ok" {
+		t.Fatalf("unexpected streamed response after retry: %+v %+v", response, assistant)
 	}
 }
 

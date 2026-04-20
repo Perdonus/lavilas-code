@@ -238,6 +238,21 @@ func (c Config) ProfileNames() []string {
 	return result
 }
 
+func (c Config) ProfilesForProvider(name string) []ProfileConfig {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	result := make([]ProfileConfig, 0)
+	for _, profile := range c.Profiles {
+		if strings.TrimSpace(profile.EffectiveProviderName()) != name {
+			continue
+		}
+		result = append(result, profile.clone())
+	}
+	return result
+}
+
 func (c Config) ModelProviderNames() []string {
 	result := make([]string, 0, len(c.ModelProviders))
 	for _, provider := range c.ModelProviders {
@@ -382,8 +397,10 @@ func (c Config) EffectiveReasoningEffort() string {
 }
 
 func (c Config) EffectiveProviderName() string {
-	if profile, ok := c.ActiveProfile(); ok && strings.TrimSpace(profile.Provider) != "" {
-		return strings.TrimSpace(profile.Provider)
+	if profile, ok := c.ActiveProfile(); ok {
+		if provider := strings.TrimSpace(profile.EffectiveProviderName()); provider != "" {
+			return provider
+		}
 	}
 	return strings.TrimSpace(c.Model.Fields.Text("model_provider"))
 }
@@ -452,6 +469,59 @@ func (p ProfileConfig) clone() ProfileConfig {
 		Fields:          p.Fields.Clone(),
 		fieldOrder:      cloneStrings(p.fieldOrder),
 	}
+}
+
+func (p ProfileConfig) EffectiveProviderName() string {
+	if value := strings.TrimSpace(p.Provider); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(p.Fields.Text("model_provider")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(p.Fields.Text("provider"))
+}
+
+func (p ProfileConfig) CatalogPath() string {
+	return strings.TrimSpace(p.Fields.Text("model_catalog_json"))
+}
+
+func (p *ProfileConfig) SetModel(value string) {
+	p.Model = strings.TrimSpace(value)
+	p.fieldOrder = appendUnique(p.fieldOrder, "model")
+}
+
+func (p *ProfileConfig) SetProvider(value string) {
+	p.Provider = strings.TrimSpace(value)
+	if p.Provider == "" {
+		p.Fields.Delete("model_provider")
+		p.Fields.Delete("provider")
+		p.fieldOrder = removeKey(p.fieldOrder, "model_provider")
+		p.fieldOrder = removeKey(p.fieldOrder, "provider")
+		return
+	}
+	key := profileProviderKey(p.fieldOrder)
+	p.fieldOrder = removeKey(p.fieldOrder, alternateProfileProviderKey(key))
+	p.fieldOrder = appendUnique(p.fieldOrder, key)
+}
+
+func (p *ProfileConfig) SetReasoningEffort(value string) {
+	p.ReasoningEffort = strings.TrimSpace(value)
+	if p.ReasoningEffort == "" {
+		p.fieldOrder = removeKey(p.fieldOrder, "model_reasoning_effort")
+		return
+	}
+	p.fieldOrder = appendUnique(p.fieldOrder, "model_reasoning_effort")
+}
+
+func (p *ProfileConfig) SetCatalogPath(value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		p.Fields.Delete("model_catalog_json")
+		p.fieldOrder = removeKey(p.fieldOrder, "model_catalog_json")
+		return
+	}
+	p.Fields.Set("model_catalog_json", StringConfigValue(value))
+	p.fieldOrder = appendUnique(p.fieldOrder, "model_catalog_json")
 }
 
 func (p ProviderConfig) clone() ProviderConfig {
@@ -1206,6 +1276,13 @@ func profileProviderKey(order []string) string {
 		return "provider"
 	}
 	return "model_provider"
+}
+
+func alternateProfileProviderKey(key string) string {
+	if key == "provider" {
+		return "model_provider"
+	}
+	return "provider"
 }
 
 func samePath(left []string, right []string) bool {

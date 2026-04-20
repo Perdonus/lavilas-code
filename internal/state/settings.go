@@ -3,6 +3,8 @@ package state
 import (
 	"encoding/json"
 	"os"
+	"sort"
+	"strings"
 )
 
 type SettingsSummary struct {
@@ -18,6 +20,9 @@ type SettingsSummary struct {
 	CommandTextColor         string   `json:"command_text_color"`
 	ReasoningTextColor       string   `json:"reasoning_text_color"`
 	CommandOutputTextColor   string   `json:"command_output_text_color"`
+	ModelPresetsEnabled      bool     `json:"model_presets_enabled"`
+	ModelPresetProviders     []string `json:"model_preset_providers,omitempty"`
+	ModelPresetCount         int      `json:"model_preset_count"`
 }
 
 type Settings struct {
@@ -27,6 +32,7 @@ type Settings struct {
 	HiddenCommands     []string                   `json:"-"`
 	SelectionHighlight SelectionHighlightSettings `json:"-"`
 	Colors             SettingsColors             `json:"-"`
+	ModelPresets       ModelPresetSettings        `json:"-"`
 	Extras             map[string]json.RawMessage `json:"-"`
 }
 
@@ -43,6 +49,21 @@ type SettingsColors struct {
 	CommandText   string
 	ReasoningText string
 	CommandOutput string
+}
+
+type ModelPresetSettings struct {
+	Enabled   bool
+	Providers map[string]ProviderPresetSettings
+}
+
+type ProviderPresetSettings struct {
+	Presets map[string]ModelPresetConfig
+}
+
+type ModelPresetConfig struct {
+	Name      string `json:"name,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 type settingsFile struct {
@@ -102,8 +123,37 @@ func ParseSettings(data []byte) (Settings, error) {
 		"command_text_color",
 		"reasoning_text_color",
 		"command_output_text_color",
+		"model_presets_enabled",
+		"model_presets",
 	} {
 		delete(extras, key)
+	}
+
+	modelPresets := ModelPresetSettings{}
+	if rawValue, ok := raw["model_presets_enabled"]; ok {
+		_ = json.Unmarshal(rawValue, &modelPresets.Enabled)
+	}
+	if rawValue, ok := raw["model_presets"]; ok {
+		var providers map[string]map[string]ModelPresetConfig
+		if err := json.Unmarshal(rawValue, &providers); err == nil {
+			modelPresets.Providers = make(map[string]ProviderPresetSettings, len(providers))
+			for provider, presets := range providers {
+				if provider == "" || len(presets) == 0 {
+					continue
+				}
+				cleaned := make(map[string]ModelPresetConfig, len(presets))
+				for key, preset := range presets {
+					if key == "" {
+						continue
+					}
+					cleaned[key] = preset
+				}
+				if len(cleaned) == 0 {
+					continue
+				}
+				modelPresets.Providers[provider] = ProviderPresetSettings{Presets: cleaned}
+			}
+		}
 	}
 
 	return Settings{
@@ -123,7 +173,8 @@ func ParseSettings(data []byte) (Settings, error) {
 			ReasoningText: file.ReasoningTextColor,
 			CommandOutput: file.CommandOutputTextColor,
 		},
-		Extras: extras,
+		ModelPresets: modelPresets,
+		Extras:       extras,
 	}, nil
 }
 
@@ -169,7 +220,8 @@ func (s Settings) Clone() Settings {
 			ReasoningText: s.Colors.ReasoningText,
 			CommandOutput: s.Colors.CommandOutput,
 		},
-		Extras: extras,
+		ModelPresets: s.ModelPresets.Clone(),
+		Extras:       extras,
 	}
 }
 
@@ -187,6 +239,9 @@ func (s Settings) Summary() SettingsSummary {
 		CommandTextColor:         s.Colors.CommandText,
 		ReasoningTextColor:       s.Colors.ReasoningText,
 		CommandOutputTextColor:   s.Colors.CommandOutput,
+		ModelPresetsEnabled:      s.ModelPresets.Enabled,
+		ModelPresetProviders:     s.ModelPresets.ProviderNames(),
+		ModelPresetCount:         s.ModelPresets.Count(),
 	}
 }
 
@@ -224,6 +279,60 @@ func (s *Settings) ShowCommand(name string) {
 	s.HiddenCommands = filtered
 }
 
+func (s *Settings) SetModelPresetsEnabled(value bool) {
+	s.ModelPresets.Enabled = value
+}
+
+func (s Settings) ModelPreset(provider, key string) (ModelPresetConfig, bool) {
+	provider = strings.TrimSpace(provider)
+	key = strings.TrimSpace(key)
+	if provider == "" || key == "" {
+		return ModelPresetConfig{}, false
+	}
+	providerPresets, ok := s.ModelPresets.Providers[provider]
+	if !ok {
+		return ModelPresetConfig{}, false
+	}
+	preset, ok := providerPresets.Presets[key]
+	return preset, ok
+}
+
+func (s *Settings) SetModelPreset(provider, key string, preset ModelPresetConfig) {
+	provider = strings.TrimSpace(provider)
+	key = strings.TrimSpace(key)
+	if provider == "" || key == "" {
+		return
+	}
+	s.ModelPresets.Enabled = true
+	if s.ModelPresets.Providers == nil {
+		s.ModelPresets.Providers = make(map[string]ProviderPresetSettings)
+	}
+	providerPresets := s.ModelPresets.Providers[provider]
+	if providerPresets.Presets == nil {
+		providerPresets.Presets = make(map[string]ModelPresetConfig)
+	}
+	providerPresets.Presets[key] = preset
+	s.ModelPresets.Providers[provider] = providerPresets
+}
+
+func (s *Settings) DeleteModelPreset(provider, key string) {
+	provider = strings.TrimSpace(provider)
+	key = strings.TrimSpace(key)
+	if provider == "" || key == "" {
+		return
+	}
+	providerPresets, ok := s.ModelPresets.Providers[provider]
+	if !ok || len(providerPresets.Presets) == 0 {
+		return
+	}
+	delete(providerPresets.Presets, key)
+	if len(providerPresets.Presets) == 0 {
+		delete(s.ModelPresets.Providers, provider)
+		return
+	}
+	s.ModelPresets.Providers[provider] = providerPresets
+}
+
 func (s Settings) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.marshalMap())
 }
@@ -249,6 +358,75 @@ func (s Settings) marshalMap() map[string]any {
 	result["command_text_color"] = s.Colors.CommandText
 	result["reasoning_text_color"] = s.Colors.ReasoningText
 	result["command_output_text_color"] = s.Colors.CommandOutput
+	result["model_presets_enabled"] = s.ModelPresets.Enabled
+	result["model_presets"] = s.ModelPresets.marshalMap()
+	return result
+}
+
+func (s ModelPresetSettings) Clone() ModelPresetSettings {
+	result := ModelPresetSettings{
+		Enabled: s.Enabled,
+	}
+	if len(s.Providers) == 0 {
+		return result
+	}
+	result.Providers = make(map[string]ProviderPresetSettings, len(s.Providers))
+	for provider, presets := range s.Providers {
+		result.Providers[provider] = presets.Clone()
+	}
+	return result
+}
+
+func (s ModelPresetSettings) Count() int {
+	total := 0
+	for _, provider := range s.Providers {
+		total += len(provider.Presets)
+	}
+	return total
+}
+
+func (s ModelPresetSettings) ProviderNames() []string {
+	if len(s.Providers) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(s.Providers))
+	for provider := range s.Providers {
+		result = append(result, provider)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func (s ModelPresetSettings) marshalMap() map[string]any {
+	result := make(map[string]any, len(s.Providers))
+	for _, provider := range s.ProviderNames() {
+		providerPresets := s.Providers[provider]
+		result[provider] = providerPresets.marshalMap()
+	}
+	return result
+}
+
+func (p ProviderPresetSettings) Clone() ProviderPresetSettings {
+	if len(p.Presets) == 0 {
+		return ProviderPresetSettings{}
+	}
+	result := ProviderPresetSettings{Presets: make(map[string]ModelPresetConfig, len(p.Presets))}
+	for key, preset := range p.Presets {
+		result.Presets[key] = preset
+	}
+	return result
+}
+
+func (p ProviderPresetSettings) marshalMap() map[string]any {
+	result := make(map[string]any, len(p.Presets))
+	keys := make([]string, 0, len(p.Presets))
+	for key := range p.Presets {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		result[key] = p.Presets[key]
+	}
 	return result
 }
 

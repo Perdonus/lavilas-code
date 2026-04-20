@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Perdonus/lavilas-code/internal/provider"
 	"github.com/Perdonus/lavilas-code/internal/runtime"
@@ -131,6 +132,7 @@ func (c *Client) checkResponse(resp *http.Response) error {
 			Code:       parsed.Error.Code,
 			Message:    parsed.Error.Message,
 			Retryable:  resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500,
+			RetryAfter: provider.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}
 	if trimmed == "" {
@@ -141,6 +143,7 @@ func (c *Client) checkResponse(resp *http.Response) error {
 		StatusCode: resp.StatusCode,
 		Message:    trimmed,
 		Retryable:  resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500,
+		RetryAfter: provider.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
 	}
 }
 
