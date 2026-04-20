@@ -85,10 +85,49 @@ func runTask(args []string) int {
 }
 
 func runModel(args []string) int {
-	config, err := state.LoadConfig(apphome.ConfigPath())
+	configPath := apphome.ConfigPath()
+	config, err := state.LoadConfig(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read config: %v\n", err)
 		return 1
+	}
+
+	if len(args) > 0 && args[0] == "set" {
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "model: set requires a model name")
+			return 2
+		}
+		modelName := args[1]
+		config.SetModel(modelName)
+		for index := 2; index < len(args); index++ {
+			switch args[index] {
+			case "--reasoning":
+				value, next, err := takeFlagValue(args, index, "--reasoning")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "model: %v\n", err)
+					return 2
+				}
+				config.SetReasoningEffort(value)
+				index = next
+			case "--profile":
+				value, next, err := takeFlagValue(args, index, "--profile")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "model: %v\n", err)
+					return 2
+				}
+				config.SetActiveProfile(value)
+				index = next
+			default:
+				fmt.Fprintf(os.Stderr, "model: unknown flag %q\n", args[index])
+				return 2
+			}
+		}
+		if err := state.SaveConfig(configPath, config); err != nil {
+			fmt.Fprintf(os.Stderr, "model: failed to save config: %v\n", err)
+			return 1
+		}
+		fmt.Printf("model updated: %s\n", modelName)
+		return 0
 	}
 
 	if hasFlag(args, "--json") {
@@ -113,10 +152,47 @@ func runModel(args []string) int {
 }
 
 func runProfiles(args []string) int {
-	config, err := state.LoadConfig(apphome.ConfigPath())
+	configPath := apphome.ConfigPath()
+	config, err := state.LoadConfig(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read config: %v\n", err)
 		return 1
+	}
+
+	if len(args) > 0 {
+		switch args[0] {
+		case "activate":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "profiles: activate requires a profile name")
+				return 2
+			}
+			if _, ok := config.Profile(args[1]); !ok {
+				fmt.Fprintf(os.Stderr, "profiles: profile %q not found\n", args[1])
+				return 1
+			}
+			config.SetActiveProfile(args[1])
+			if err := state.SaveConfig(configPath, config); err != nil {
+				fmt.Fprintf(os.Stderr, "profiles: failed to save config: %v\n", err)
+				return 1
+			}
+			fmt.Printf("active profile: %s\n", args[1])
+			return 0
+		case "delete":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "profiles: delete requires a profile name")
+				return 2
+			}
+			if !config.DeleteProfile(args[1]) {
+				fmt.Fprintf(os.Stderr, "profiles: profile %q not found\n", args[1])
+				return 1
+			}
+			if err := state.SaveConfig(configPath, config); err != nil {
+				fmt.Fprintf(os.Stderr, "profiles: failed to save config: %v\n", err)
+				return 1
+			}
+			fmt.Printf("deleted profile: %s\n", args[1])
+			return 0
+		}
 	}
 
 	if hasFlag(args, "--json") {
@@ -186,28 +262,83 @@ func runProfiles(args []string) int {
 }
 
 func runSettings(args []string) int {
-	settings, err := state.LoadSettingsSummary(apphome.SettingsPath())
+	settingsPath := apphome.SettingsPath()
+	settings, err := state.LoadSettings(settingsPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read settings: %v\n", err)
 		return 1
 	}
 
-	if hasFlag(args, "--json") {
-		return printJSON(settings)
+	if len(args) > 0 {
+		switch args[0] {
+		case "language":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "settings: language requires a value")
+				return 2
+			}
+			settings.SetLanguage(args[1])
+			if err := state.SaveSettings(settingsPath, settings); err != nil {
+				fmt.Fprintf(os.Stderr, "settings: failed to save settings: %v\n", err)
+				return 1
+			}
+			fmt.Printf("language updated: %s\n", args[1])
+			return 0
+		case "prefix":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "settings: prefix requires a value")
+				return 2
+			}
+			settings.SetCommandPrefix(args[1])
+			if err := state.SaveSettings(settingsPath, settings); err != nil {
+				fmt.Fprintf(os.Stderr, "settings: failed to save settings: %v\n", err)
+				return 1
+			}
+			fmt.Printf("command prefix updated: %s\n", args[1])
+			return 0
+		case "hide-command":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "settings: hide-command requires a command key")
+				return 2
+			}
+			settings.HideCommand(args[1])
+			if err := state.SaveSettings(settingsPath, settings); err != nil {
+				fmt.Fprintf(os.Stderr, "settings: failed to save settings: %v\n", err)
+				return 1
+			}
+			fmt.Printf("hidden command added: %s\n", args[1])
+			return 0
+		case "show-command":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "settings: show-command requires a command key")
+				return 2
+			}
+			settings.ShowCommand(args[1])
+			if err := state.SaveSettings(settingsPath, settings); err != nil {
+				fmt.Fprintf(os.Stderr, "settings: failed to save settings: %v\n", err)
+				return 1
+			}
+			fmt.Printf("hidden command removed: %s\n", args[1])
+			return 0
+		}
 	}
 
-	fmt.Printf("language: %s\n", fallback(settings.Language, "<unset>"))
-	fmt.Printf("command_prefix: %s\n", fallback(settings.CommandPrefix, "<unset>"))
-	fmt.Printf("hidden_commands: %d\n", len(settings.HiddenCommands))
-	fmt.Printf("selection_fill: %t\n", settings.SelectionHighlightFill)
-	fmt.Printf("selection_preset: %s\n", fallback(settings.SelectionHighlightPreset, "<unset>"))
-	fmt.Printf("selection_color: %s\n", fallback(settings.SelectionHighlightColor, "<unset>"))
-	fmt.Printf("list_primary_color: %s\n", fallback(settings.ListPrimaryColor, "<unset>"))
-	fmt.Printf("list_secondary_color: %s\n", fallback(settings.ListSecondaryColor, "<unset>"))
-	fmt.Printf("reply_text_color: %s\n", fallback(settings.ReplyTextColor, "<unset>"))
-	fmt.Printf("command_text_color: %s\n", fallback(settings.CommandTextColor, "<unset>"))
-	fmt.Printf("reasoning_text_color: %s\n", fallback(settings.ReasoningTextColor, "<unset>"))
-	fmt.Printf("command_output_text_color: %s\n", fallback(settings.CommandOutputTextColor, "<unset>"))
+	if hasFlag(args, "--json") {
+		return printJSON(settings.Summary())
+	}
+
+	summary := settings.Summary()
+	fmt.Printf("language: %s\n", fallback(summary.Language, "<unset>"))
+	fmt.Printf("command_prefix: %s\n", fallback(summary.CommandPrefix, "<unset>"))
+	fmt.Printf("hidden_commands: %d\n", len(summary.HiddenCommands))
+	fmt.Printf("selection_fill: %t\n", summary.SelectionHighlightFill)
+	fmt.Printf("selection_preset: %s\n", fallback(summary.SelectionHighlightPreset, "<unset>"))
+	fmt.Printf("selection_color: %s\n", fallback(summary.SelectionHighlightColor, "<unset>"))
+	fmt.Printf("list_primary_color: %s\n", fallback(summary.ListPrimaryColor, "<unset>"))
+	fmt.Printf("list_secondary_color: %s\n", fallback(summary.ListSecondaryColor, "<unset>"))
+	fmt.Printf("reply_text_color: %s\n", fallback(summary.ReplyTextColor, "<unset>"))
+	fmt.Printf("command_text_color: %s\n", fallback(summary.CommandTextColor, "<unset>"))
+	fmt.Printf("reasoning_text_color: %s\n", fallback(summary.ReasoningTextColor, "<unset>"))
+	fmt.Printf("command_output_text_color: %s\n", fallback(summary.CommandOutputTextColor, "<unset>"))
 	return 0
 }
 

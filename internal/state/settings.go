@@ -199,6 +199,31 @@ func (s Settings) HasHiddenCommand(name string) bool {
 	return false
 }
 
+func (s *Settings) SetLanguage(value string) {
+	s.Language = value
+}
+
+func (s *Settings) SetCommandPrefix(value string) {
+	s.CommandPrefix = value
+}
+
+func (s *Settings) HideCommand(name string) {
+	if s.HasHiddenCommand(name) {
+		return
+	}
+	s.HiddenCommands = append(s.HiddenCommands, name)
+}
+
+func (s *Settings) ShowCommand(name string) {
+	filtered := s.HiddenCommands[:0]
+	for _, hidden := range s.HiddenCommands {
+		if hidden != name {
+			filtered = append(filtered, hidden)
+		}
+	}
+	s.HiddenCommands = filtered
+}
+
 func (s Settings) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.marshalMap())
 }

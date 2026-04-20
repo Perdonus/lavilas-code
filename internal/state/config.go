@@ -246,6 +246,104 @@ func (c Config) ModelProviderNames() []string {
 	return result
 }
 
+func (c *Config) SetActiveProfile(name string) {
+	c.Model.Profile = strings.TrimSpace(name)
+	c.Model.fieldOrder = appendUnique(c.Model.fieldOrder, "profile")
+}
+
+func (c *Config) SetModel(name string) {
+	c.Model.Name = strings.TrimSpace(name)
+	c.Model.fieldOrder = appendUnique(c.Model.fieldOrder, "model")
+}
+
+func (c *Config) SetReasoningEffort(value string) {
+	c.Model.ReasoningEffort = strings.TrimSpace(value)
+	c.Model.fieldOrder = appendUnique(c.Model.fieldOrder, "model_reasoning_effort")
+}
+
+func (c *Config) UpsertProfile(profile ProfileConfig) {
+	name := strings.TrimSpace(profile.Name)
+	if name == "" {
+		return
+	}
+	for index := range c.Profiles {
+		if c.Profiles[index].Name == name {
+			c.Profiles[index] = profile.clone()
+			c.Profiles[index].Name = name
+			return
+		}
+	}
+	profile.Name = name
+	if profile.Fields == nil {
+		profile.Fields = make(ConfigFields)
+	}
+	c.Profiles = append(c.Profiles, profile)
+}
+
+func (c *Config) DeleteProfile(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for index := range c.Profiles {
+		if c.Profiles[index].Name != name {
+			continue
+		}
+		c.Profiles = append(c.Profiles[:index], c.Profiles[index+1:]...)
+		if c.ActiveProfileName() == name {
+			c.Model.Profile = ""
+			c.Model.fieldOrder = removeKey(c.Model.fieldOrder, "profile")
+		}
+		return true
+	}
+	return false
+}
+
+func (c *Config) UpsertProvider(provider ProviderConfig) {
+	name := strings.TrimSpace(provider.Name)
+	if name == "" {
+		return
+	}
+	for index := range c.ModelProviders {
+		if c.ModelProviders[index].Name == name {
+			c.ModelProviders[index] = provider.clone()
+			c.ModelProviders[index].Name = name
+			return
+		}
+	}
+	provider.Name = name
+	if provider.Fields == nil {
+		provider.Fields = make(ConfigFields)
+	}
+	c.ModelProviders = append(c.ModelProviders, provider)
+}
+
+func (c *Config) DeleteProvider(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for index := range c.ModelProviders {
+		if c.ModelProviders[index].Name != name {
+			continue
+		}
+		c.ModelProviders = append(c.ModelProviders[:index], c.ModelProviders[index+1:]...)
+		for profileIndex := range c.Profiles {
+			if c.Profiles[profileIndex].Provider == name {
+				c.Profiles[profileIndex].Provider = ""
+				c.Profiles[profileIndex].fieldOrder = removeKey(c.Profiles[profileIndex].fieldOrder, "model_provider")
+				c.Profiles[profileIndex].fieldOrder = removeKey(c.Profiles[profileIndex].fieldOrder, "provider")
+			}
+		}
+		if c.EffectiveProviderName() == name {
+			c.Model.Fields.Delete("model_provider")
+			c.Model.fieldOrder = removeKey(c.Model.fieldOrder, "model_provider")
+		}
+		return true
+	}
+	return false
+}
+
 func (c Config) ActiveProfileName() string {
 	return strings.TrimSpace(c.Model.Profile)
 }
@@ -1068,6 +1166,19 @@ func appendUnique(values []string, value string) []string {
 		return values
 	}
 	return append(values, value)
+}
+
+func removeKey(values []string, value string) []string {
+	if len(values) == 0 {
+		return values
+	}
+	filtered := values[:0]
+	for _, current := range values {
+		if current != value {
+			filtered = append(filtered, current)
+		}
+	}
+	return filtered
 }
 
 func containsKey(values []string, value string) bool {
