@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"github.com/Perdonus/lavilas-code/internal/apphome"
 	"github.com/Perdonus/lavilas-code/internal/doctor"
 	"github.com/Perdonus/lavilas-code/internal/state"
+	"github.com/Perdonus/lavilas-code/internal/taskrun"
 )
 
 func registry() []Command {
@@ -22,7 +25,7 @@ func registry() []Command {
 	return []Command{
 		{Name: "resume", Aliases: []string{"r", "continue", "продолжить"}, Description: "Show recent sessions from ~/.codex", Category: "interactive", Run: runResume},
 		{Name: "fork", Aliases: []string{"branch-chat", "форк"}, Description: "Fork a previous session", Category: "interactive", Run: stub("fork")},
-		{Name: "run", Aliases: []string{"exec", "ask", "запуск"}, Description: "Execute a one-shot task", Category: "interactive", Run: stub("run")},
+		{Name: "run", Aliases: []string{"exec", "ask", "запуск"}, Description: "Execute a one-shot task", Category: "interactive", Run: runTask},
 		{Name: "review", Aliases: []string{"rev", "ревью"}, Description: "Run non-interactive review", Category: "interactive", Run: stub("review")},
 		{Name: "apply", Aliases: []string{"patch", "применить"}, Description: "Apply latest agent patch", Category: "interactive", Run: stub("apply")},
 
@@ -48,28 +51,115 @@ func registry() []Command {
 }
 
 func runDoctor(args []string) int {
-	return doctor.Run()
+	return doctor.Run(hasFlag(args, "--json"))
+}
+
+func runTask(args []string) int {
+	options, err := parseRunOptions(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+		return 2
+	}
+
+	result, err := taskrun.Run(contextBackground(), options)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+		return 1
+	}
+
+	if options.JSON {
+		data, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "run: failed to encode json: %v\n", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	if err := taskrun.Print(result); err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runModel(args []string) int {
-	config, err := state.LoadConfigSummary(apphome.ConfigPath())
+	config, err := state.LoadConfig(apphome.ConfigPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read config: %v\n", err)
 		return 1
 	}
 
-	fmt.Printf("model: %s\n", fallback(config.Model, "<unset>"))
-	fmt.Printf("reasoning: %s\n", fallback(config.Reasoning, "<unset>"))
+	if hasFlag(args, "--json") {
+		payload := map[string]any{
+			"model":            fallback(config.EffectiveModel(), ""),
+			"reasoning":        fallback(config.EffectiveReasoningEffort(), ""),
+			"active_profile":   fallback(config.ActiveProfileName(), ""),
+			"active_provider":  fallback(config.EffectiveProviderName(), ""),
+			"profiles":         config.ProfileNames(),
+			"providers":        config.ModelProviderNames(),
+		}
+		return printJSON(payload)
+	}
+
+	fmt.Printf("model: %s\n", fallback(config.EffectiveModel(), "<unset>"))
+	fmt.Printf("reasoning: %s\n", fallback(config.EffectiveReasoningEffort(), "<unset>"))
+	fmt.Printf("active_profile: %s\n", fallback(config.ActiveProfileName(), "<unset>"))
+	fmt.Printf("active_provider: %s\n", fallback(config.EffectiveProviderName(), "<unset>"))
 	fmt.Printf("profiles: %d\n", len(config.Profiles))
 	fmt.Printf("providers: %d\n", len(config.ModelProviders))
 	return 0
 }
 
 func runProfiles(args []string) int {
-	config, err := state.LoadConfigSummary(apphome.ConfigPath())
+	config, err := state.LoadConfig(apphome.ConfigPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read config: %v\n", err)
 		return 1
+	}
+
+	if hasFlag(args, "--json") {
+		type profileView struct {
+			Name      string `json:"name"`
+			Model     string `json:"model,omitempty"`
+			Provider  string `json:"provider,omitempty"`
+			Reasoning string `json:"reasoning,omitempty"`
+			Active    bool   `json:"active"`
+		}
+		type providerView struct {
+			Name      string `json:"name"`
+			BaseURL   string `json:"base_url,omitempty"`
+			WireAPI   string `json:"wire_api,omitempty"`
+			APIKeyEnv string `json:"api_key_env,omitempty"`
+		}
+
+		profiles := make([]profileView, 0, len(config.Profiles))
+		for _, profile := range config.Profiles {
+			profiles = append(profiles, profileView{
+				Name:      profile.Name,
+				Model:     profile.Model,
+				Provider:  profile.Provider,
+				Reasoning: profile.ReasoningEffort,
+				Active:    profile.Name == config.ActiveProfileName(),
+			})
+		}
+		providers := make([]providerView, 0, len(config.ModelProviders))
+		for _, provider := range config.ModelProviders {
+			providers = append(providers, providerView{
+				Name:      provider.Name,
+				BaseURL:   provider.BaseURL,
+				WireAPI:   provider.WireAPI,
+				APIKeyEnv: provider.APIKeyEnv,
+			})
+		}
+
+		payload := map[string]any{
+			"active_profile": config.ActiveProfileName(),
+			"profiles":       profiles,
+			"providers":      providers,
+		}
+		return printJSON(payload)
 	}
 
 	if len(config.Profiles) == 0 {
@@ -78,8 +168,19 @@ func runProfiles(args []string) int {
 	}
 
 	fmt.Println("Profiles:")
-	for _, name := range config.Profiles {
-		fmt.Printf("  - %s\n", name)
+	for _, profile := range config.Profiles {
+		suffix := ""
+		if profile.Name == config.ActiveProfileName() {
+			suffix = " (active)"
+		}
+		fmt.Printf(
+			"  - %s%s  model=%s provider=%s reasoning=%s\n",
+			profile.Name,
+			suffix,
+			fallback(profile.Model, "<unset>"),
+			fallback(profile.Provider, "<unset>"),
+			fallback(profile.ReasoningEffort, "<unset>"),
+		)
 	}
 	return 0
 }
@@ -89,6 +190,10 @@ func runSettings(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read settings: %v\n", err)
 		return 1
+	}
+
+	if hasFlag(args, "--json") {
+		return printJSON(settings)
 	}
 
 	fmt.Printf("language: %s\n", fallback(settings.Language, "<unset>"))
@@ -123,6 +228,10 @@ func runResume(args []string) int {
 		if arg == "--last" {
 			lastOnly = true
 		}
+	}
+
+	if hasFlag(args, "--json") {
+		return printJSON(sessions)
 	}
 
 	if lastOnly {
@@ -162,4 +271,98 @@ func humanSize(size int64) string {
 	default:
 		return fmt.Sprintf("%dB", size)
 	}
+}
+
+func hasFlag(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == flag {
+			return true
+		}
+	}
+	return false
+}
+
+func printJSON(value any) int {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+		return 1
+	}
+	fmt.Println(string(data))
+	return 0
+}
+
+func parseRunOptions(args []string) (taskrun.Options, error) {
+	var options taskrun.Options
+	var promptParts []string
+
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "--json":
+			options.JSON = true
+		case "--no-stream":
+			options.DisableStreaming = true
+		case "--stream":
+			options.DisableStreaming = false
+		case "--model":
+			value, next, err := takeFlagValue(args, index, arg)
+			if err != nil {
+				return taskrun.Options{}, err
+			}
+			options.Model = value
+			index = next
+		case "--profile":
+			value, next, err := takeFlagValue(args, index, arg)
+			if err != nil {
+				return taskrun.Options{}, err
+			}
+			options.Profile = value
+			index = next
+		case "--provider":
+			value, next, err := takeFlagValue(args, index, arg)
+			if err != nil {
+				return taskrun.Options{}, err
+			}
+			options.Provider = value
+			index = next
+		case "--reasoning":
+			value, next, err := takeFlagValue(args, index, arg)
+			if err != nil {
+				return taskrun.Options{}, err
+			}
+			options.ReasoningEffort = value
+			index = next
+		case "--system":
+			value, next, err := takeFlagValue(args, index, arg)
+			if err != nil {
+				return taskrun.Options{}, err
+			}
+			options.SystemPrompt = value
+			index = next
+		default:
+			if strings.HasPrefix(arg, "--") {
+				return taskrun.Options{}, fmt.Errorf("unknown flag %q", arg)
+			}
+			promptParts = append(promptParts, arg)
+		}
+	}
+
+	options.Prompt = strings.TrimSpace(strings.Join(promptParts, " "))
+	if options.Prompt == "" {
+		return taskrun.Options{}, fmt.Errorf("prompt is required")
+	}
+	return options, nil
+}
+
+func takeFlagValue(args []string, index int, flag string) (string, int, error) {
+	next := index + 1
+	if next >= len(args) {
+		return "", index, fmt.Errorf("%s requires a value", flag)
+	}
+	return args[next], next, nil
+}
+
+func contextBackground() context.Context {
+	return context.Background()
 }

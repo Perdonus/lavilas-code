@@ -9,14 +9,21 @@ import (
 )
 
 type SessionEntry struct {
+	ID      string
+	Name    string
 	Path    string
 	RelPath string
 	ModTime time.Time
 	Size    int64
 }
 
-func LoadSessions(root string, limit int) ([]SessionEntry, error) {
-	var sessions []SessionEntry
+type SessionIndex struct {
+	Root    string
+	Entries []SessionEntry
+}
+
+func ScanSessions(root string) (SessionIndex, error) {
+	index := SessionIndex{Root: root}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -28,28 +35,71 @@ func LoadSessions(root string, limit int) ([]SessionEntry, error) {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = d.Name()
-		}
-		sessions = append(sessions, SessionEntry{
-			Path:    path,
-			RelPath: rel,
-			ModTime: info.ModTime(),
-			Size:    info.Size(),
-		})
+		index.Entries = append(index.Entries, buildSessionEntry(root, path, info))
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return SessionIndex{}, err
 	}
 
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].ModTime.After(sessions[j].ModTime)
+	sort.SliceStable(index.Entries, func(i, j int) bool {
+		left := index.Entries[i]
+		right := index.Entries[j]
+		if left.ModTime.Equal(right.ModTime) {
+			return left.RelPath < right.RelPath
+		}
+		return left.ModTime.After(right.ModTime)
 	})
 
-	if limit > 0 && len(sessions) > limit {
-		sessions = sessions[:limit]
+	return index, nil
+}
+
+func LoadSessions(root string, limit int) ([]SessionEntry, error) {
+	index, err := ScanSessions(root)
+	if err != nil {
+		return nil, err
 	}
-	return sessions, nil
+	return index.Limit(limit), nil
+}
+
+func (s SessionIndex) Clone() SessionIndex {
+	entries := make([]SessionEntry, len(s.Entries))
+	copy(entries, s.Entries)
+	return SessionIndex{
+		Root:    s.Root,
+		Entries: entries,
+	}
+}
+
+func (s SessionIndex) Latest() (SessionEntry, bool) {
+	if len(s.Entries) == 0 {
+		return SessionEntry{}, false
+	}
+	return s.Entries[0], true
+}
+
+func (s SessionIndex) Limit(limit int) []SessionEntry {
+	entries := s.Entries
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	result := make([]SessionEntry, len(entries))
+	copy(result, entries)
+	return result
+}
+
+func buildSessionEntry(root string, path string, info fs.FileInfo) SessionEntry {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		rel = filepath.Base(path)
+	}
+	name := filepath.Base(path)
+	return SessionEntry{
+		ID:      strings.TrimSuffix(name, filepath.Ext(name)),
+		Name:    name,
+		Path:    path,
+		RelPath: rel,
+		ModTime: info.ModTime(),
+		Size:    info.Size(),
+	}
 }

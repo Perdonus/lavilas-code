@@ -1,17 +1,19 @@
 # Go Lavilas Alpha
 
-Это независимый orphan-поток для go-переписывания `lavilas` под слабое железо и быстрый install через `nv`.
+`Go Lavilas Alpha` - это отдельный NV-продукт для go-реализации `lavilas`, с отдельным alpha-каналом и своим packaging-контуром.
 
 Текущее состояние:
+- package id в `nv`: `go-lavilas`;
 - publish-контур целится в `nv`, не в `npm`;
-- основной канал сейчас `alpha`;
-- цель ветки — постепенно довести `Go Lavilas` до функционального паритета с основным `lavilas`.
+- alpha foundation собирает `linux/amd64`, `linux/arm64` и `windows/amd64`;
+- release metadata складывается в `dist/SHA256SUMS` и `dist/release-metadata.json`;
+- цель ветки - постепенно довести `Go Lavilas` до функционального паритета с основным `lavilas`.
 
 ## Каналы
 
-- `alpha` — текущий go-канал
-- `beta` — будет добавлен после стабилизации базового UX
-- `latest` — только после достижения достаточного паритета
+- `alpha` - текущий go-канал
+- `beta` - будет добавлен после стабилизации базового UX
+- `latest` - только после достижения достаточного паритета
 
 ## Локальный запуск
 
@@ -21,14 +23,39 @@ go run ./cmd/lavilas help
 go run ./cmd/lavilas resume
 ```
 
-## Сборка артефактов
+## Сборка alpha-артефактов
 
 ```bash
+LAVILAS_VERSION=0.1.0-alpha.local \
 ./scripts/build-release.sh
 ```
+
+После сборки в `dist/` будут:
+- `go-lavilas-linux-amd64.tar.gz`
+- `go-lavilas-linux-arm64.tar.gz`
+- `go-lavilas-windows-amd64.exe`
+- `SHA256SUMS`
+- `release-metadata.json`
+
+## Подготовка publish-manifest
+
+```bash
+LAVILAS_VERSION=0.1.0-alpha.local \
+./scripts/prepare-nv-manifest.sh
+```
+
+Скрипт генерирует `dist/nv.package.publish.json` с актуальной версией релиза и абсолютными путями до артефактов/README.
 
 ## Публикация в NV
 
 ```bash
-nv publish --manifest ./nv.package.json --tag alpha
+nv publish --manifest ./dist/nv.package.publish.json --tag alpha
 ```
+
+## GitHub Actions
+
+Workflow `.github/workflows/nv-go-alpha.yml`:
+- вычисляет alpha-версию автоматически или принимает manual override;
+- собирает branded alpha artifacts для `go-lavilas`;
+- прикладывает checksums и release metadata в общий `dist/` artifact;
+- публикует в NV только через подготовленный publish-manifest.
