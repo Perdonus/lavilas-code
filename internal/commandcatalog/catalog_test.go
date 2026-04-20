@@ -67,6 +67,70 @@ func TestCatalogListSwitchesDisplayLanguageByQueryScript(t *testing.T) {
 	if got, want := englishQueryList[0].MirrorName, "ревью"; got != want {
 		t.Fatalf("List(ru, rev).MirrorName = %q, want %q", got, want)
 	}
+	if got, want := englishQueryList[0].DisplayName, "review (ревью)"; got != want {
+		t.Fatalf("List(ru, rev).DisplayName = %q, want %q", got, want)
+	}
+	if got, want := englishQueryList[0].InsertName, "review"; got != want {
+		t.Fatalf("List(ru, rev).InsertName = %q, want %q", got, want)
+	}
+}
+
+func TestCatalogPresentUsesMirrorDisplayWithoutChangingInsertName(t *testing.T) {
+	catalog := Catalog()
+
+	item, ok := catalog.Present("resume", CatalogLanguageEnglish, "прод")
+	if !ok {
+		t.Fatal("Present(resume) = false, want true")
+	}
+	if got, want := item.DisplayLanguage, CatalogLanguageRussian; got != want {
+		t.Fatalf("DisplayLanguage = %q, want %q", got, want)
+	}
+	if got, want := item.DisplayName, "продолжить (resume)"; got != want {
+		t.Fatalf("DisplayName = %q, want %q", got, want)
+	}
+	if got, want := item.InsertName, "продолжить"; got != want {
+		t.Fatalf("InsertName = %q, want %q", got, want)
+	}
+	if got, want := item.DisplayMirrorName, "resume"; got != want {
+		t.Fatalf("DisplayMirrorName = %q, want %q", got, want)
+	}
+	if got, want := item.DisplayShowsMirror, true; got != want {
+		t.Fatalf("DisplayShowsMirror = %v, want %v", got, want)
+	}
+}
+
+func TestCatalogListKeepsPresentationOrder(t *testing.T) {
+	items := Catalog().List(CatalogListOptions{Language: CatalogLanguageEnglish})
+	if len(items) < 10 {
+		t.Fatalf("List(en) len = %d, want >= 10", len(items))
+	}
+	got := []string{
+		items[0].Command,
+		items[1].Command,
+		items[2].Command,
+		items[3].Command,
+		items[4].Command,
+		items[5].Command,
+		items[6].Command,
+		items[7].Command,
+	}
+	want := []string{"model", "profiles", "review", "resume", "fork", "status", "logout", "settings"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("List(en) leading order = %#v, want %#v", got, want)
+	}
+}
+
+func TestCatalogLookupAliasesIncludePrimaryAndMirrorNames(t *testing.T) {
+	items := Catalog().List(CatalogListOptions{
+		Language: CatalogLanguageRussian,
+		Query:    "rev",
+	})
+	if len(items) != 1 {
+		t.Fatalf("List(ru, rev) len = %d, want 1", len(items))
+	}
+	if got, want := catalogLookupAliases(items[0]), []string{"rev", "review", "ревью"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalogLookupAliases = %#v, want %#v", got, want)
+	}
 }
 
 func TestCatalogCommandsExposeAliasesAndDescriptions(t *testing.T) {

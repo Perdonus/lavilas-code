@@ -193,7 +193,23 @@ func TestCatalogLookupAliasesExposeBothLanguages(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("List(model) len = %d, want 1", len(items))
 	}
-	if got, want := catalogLookupAliases(items[0]), []string{"models", "модели"}; !reflect.DeepEqual(got, want) {
+	if got, want := catalogLookupAliases(items[0]), []string{"models", "модели", "model", "модель"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalogLookupAliases = %#v, want %#v", got, want)
+	}
+}
+
+func TestCatalogHelpersPreferDisplayNameAndMirrorAwareAliases(t *testing.T) {
+	items := Catalog().List(CatalogListOptions{
+		Language: CatalogLanguageRussian,
+		Query:    "rev",
+	})
+	if len(items) != 1 {
+		t.Fatalf("List(ru, rev) len = %d, want 1", len(items))
+	}
+	if got, want := catalogDisplayNames(items), []string{"review (ревью)"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalogDisplayNames = %#v, want %#v", got, want)
+	}
+	if got, want := catalogLookupAliases(items[0]), []string{"rev", "review", "ревью"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("catalogLookupAliases = %#v, want %#v", got, want)
 	}
 }

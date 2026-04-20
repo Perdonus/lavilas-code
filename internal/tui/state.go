@@ -19,13 +19,18 @@ const (
 )
 
 const (
-	PaletteModeRoot      PaletteMode = "root"
-	PaletteModeResume    PaletteMode = "resume"
-	PaletteModeFork      PaletteMode = "fork"
-	PaletteModeModel     PaletteMode = "model"
-	PaletteModeProfiles  PaletteMode = "profiles"
-	PaletteModeProviders PaletteMode = "providers"
-	PaletteModeSettings  PaletteMode = "settings"
+	PaletteModeRoot            PaletteMode = "root"
+	PaletteModeResume          PaletteMode = "resume"
+	PaletteModeFork            PaletteMode = "fork"
+	PaletteModeModel           PaletteMode = "model"
+	PaletteModeModelSettings   PaletteMode = "model_settings"
+	PaletteModeModelCatalog    PaletteMode = "model_catalog"
+	PaletteModeReasoning       PaletteMode = "reasoning"
+	PaletteModeProfiles        PaletteMode = "profiles"
+	PaletteModeProfileActions  PaletteMode = "profile_actions"
+	PaletteModeProviders       PaletteMode = "providers"
+	PaletteModeProviderActions PaletteMode = "provider_actions"
+	PaletteModeSettings        PaletteMode = "settings"
 )
 
 type State struct {
@@ -206,7 +211,18 @@ func normalizeFocus(value PaneFocus) PaneFocus {
 
 func normalizePaletteMode(value PaletteMode) PaletteMode {
 	switch value {
-	case PaletteModeRoot, PaletteModeResume, PaletteModeFork, PaletteModeModel, PaletteModeProfiles, PaletteModeProviders, PaletteModeSettings:
+	case PaletteModeRoot,
+		PaletteModeResume,
+		PaletteModeFork,
+		PaletteModeModel,
+		PaletteModeModelSettings,
+		PaletteModeModelCatalog,
+		PaletteModeReasoning,
+		PaletteModeProfiles,
+		PaletteModeProfileActions,
+		PaletteModeProviders,
+		PaletteModeProviderActions,
+		PaletteModeSettings:
 		return value
 	default:
 		return PaletteModeRoot

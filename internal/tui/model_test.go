@@ -72,3 +72,53 @@ func TestFilteredPaletteItemsUseAliasesAndKeywords(t *testing.T) {
 		t.Fatalf("keyword filter key = %q, want %q", got, "model")
 	}
 }
+
+func TestSettingsModelSettingsBackFlow(t *testing.T) {
+	model := NewModel(DefaultState())
+
+	model.openPaletteMode(PaletteModeSettings, false)
+	model.state.Palette.Selected = 1
+	if cmd := model.activatePaletteSelection(); cmd == nil {
+		t.Fatal("activatePaletteSelection(settings.model_settings) returned nil")
+	}
+
+	if got := model.state.Palette.Mode; got != PaletteModeModelSettings {
+		t.Fatalf("mode after opening model settings = %q, want %q", got, PaletteModeModelSettings)
+	}
+	if got := model.paletteBackItem().Title; got != "Back to Settings" {
+		t.Fatalf("model settings back title = %q, want %q", got, "Back to Settings")
+	}
+
+	if cmd := model.navigatePaletteBack(); cmd == nil {
+		t.Fatal("navigatePaletteBack() returned nil")
+	}
+	if got := model.state.Palette.Mode; got != PaletteModeSettings {
+		t.Fatalf("mode after navigating back = %q, want %q", got, PaletteModeSettings)
+	}
+}
+
+func TestProfilesOpenedFromModelSettingsReturnBackToModelSettings(t *testing.T) {
+	model := NewModel(DefaultState())
+
+	model.openPaletteMode(PaletteModeSettings, false)
+	model.state.Palette.Selected = 1
+	_ = model.activatePaletteSelection()
+	model.state.Palette.Selected = 2
+	if cmd := model.activatePaletteSelection(); cmd == nil {
+		t.Fatal("activatePaletteSelection(model_settings.profiles) returned nil")
+	}
+
+	if got := model.state.Palette.Mode; got != PaletteModeProfiles {
+		t.Fatalf("mode after opening profiles = %q, want %q", got, PaletteModeProfiles)
+	}
+	if got := model.paletteBackItem().Title; got != "Back to Model Settings" {
+		t.Fatalf("profiles back title = %q, want %q", got, "Back to Model Settings")
+	}
+
+	if cmd := model.navigatePaletteBack(); cmd == nil {
+		t.Fatal("navigatePaletteBack() returned nil")
+	}
+	if got := model.state.Palette.Mode; got != PaletteModeModelSettings {
+		t.Fatalf("mode after backing out of profiles = %q, want %q", got, PaletteModeModelSettings)
+	}
+}

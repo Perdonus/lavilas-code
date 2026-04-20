@@ -19,6 +19,7 @@ import (
 
 	"github.com/Perdonus/lavilas-code/internal/apphome"
 	"github.com/Perdonus/lavilas-code/internal/commandcatalog"
+	"github.com/Perdonus/lavilas-code/internal/modelcatalog"
 	runtimeapi "github.com/Perdonus/lavilas-code/internal/runtime"
 	appstate "github.com/Perdonus/lavilas-code/internal/state"
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
@@ -929,11 +930,21 @@ func (m *Model) paletteItemsForMode(mode PaletteMode) []PaletteItem {
 	case PaletteModeSettings:
 		return m.settingsPaletteItems()
 	case PaletteModeModel:
-		return m.modelPaletteItems()
+		return nil
+	case PaletteModeModelSettings:
+		return m.modelSettingsPaletteItems()
+	case PaletteModeModelCatalog:
+		return nil
+	case PaletteModeReasoning:
+		return nil
 	case PaletteModeProfiles:
-		return m.profilesPaletteItems()
+		return m.profilesManagerItems()
+	case PaletteModeProfileActions:
+		return nil
 	case PaletteModeProviders:
-		return m.providersPaletteItems()
+		return m.providersManagerItems()
+	case PaletteModeProviderActions:
+		return nil
 	default:
 		return m.rootPaletteItems()
 	}
@@ -943,63 +954,11 @@ func (m *Model) settingsPaletteItems() []PaletteItem {
 	settings, _ := loadSettingsOptional(m.layout.SettingsPath())
 	summary := settings.Summary()
 	return []PaletteItem{
-		{Key: "model", Title: m.localize("Model", "Модель"), Description: m.localize("Inspect active model", "Открыть активную модель"), Aliases: []string{"/model", "/модель"}, Keywords: []string{"reasoning", "provider", "profile", "модель", "провайдер"}},
-		{Key: "profiles", Title: m.localize("Profiles", "Профили"), Description: m.localize("Inspect configured profiles", "Открыть профили"), Aliases: []string{"/profiles", "/профили"}, Keywords: []string{"accounts", "profile", "config", "аккаунты", "профиль"}},
-		{Key: "providers", Title: m.localize("Providers", "Провайдеры"), Description: m.localize("Inspect configured providers", "Открыть провайдеры"), Aliases: []string{"/providers", "/провайдеры"}, Keywords: []string{"api", "wire_api", "base_url", "провайдер"}},
+		{Key: "settings.model_settings", Title: m.localize("Model Settings", "Настройки моделей"), Description: m.localize("Models, profiles, and providers", "Модели, профили и провайдеры"), Aliases: []string{"/model", "/profiles", "/providers", "/модель", "/профили", "/провайдеры"}, Keywords: []string{"reasoning", "provider", "profile", "models", "profiles", "providers", "модель", "провайдер", "профиль"}},
 		{Key: "settings.language", Title: m.localize("Language", "Язык"), Description: fallback(summary.Language, localizedUnsetTUI(m.language)), Keywords: []string{"locale", "translation", "язык"}},
 		{Key: "settings.command_prefix", Title: m.localize("Command Prefix", "Префикс команд"), Description: fallback(summary.CommandPrefix, localizedUnsetTUI(m.language)), Keywords: []string{"slash", "prefix", "commands", "префикс"}},
 		{Key: "settings.hidden_commands", Title: m.localize("Hidden Commands", "Скрытые команды"), Description: fmt.Sprintf("%d", len(summary.HiddenCommands)), Keywords: []string{"visibility", "commands", "скрытые"}},
 	}
-}
-
-func (m *Model) modelPaletteItems() []PaletteItem {
-	config, _ := loadConfigOptional(m.layout.ConfigPath())
-	return []PaletteItem{
-		{Key: "model.value", Title: m.localize("Model", "Модель"), Description: fallback(m.state.Model, config.EffectiveModel()), Keywords: []string{"active", "slug", "model", "модель"}},
-		{Key: "model.provider", Title: m.localize("Provider", "Провайдер"), Description: fallback(m.state.Provider, config.EffectiveProviderName()), Keywords: []string{"api", "provider", "провайдер"}},
-		{Key: "model.profile", Title: m.localize("Profile", "Профиль"), Description: fallback(m.state.Profile, config.ActiveProfileName()), Keywords: []string{"account", "profile", "профиль"}},
-		{Key: "model.reasoning", Title: m.localize("Reasoning", "Размышления"), Description: fallback(m.state.Reasoning, config.EffectiveReasoningEffort()), Keywords: []string{"effort", "thinking", "reasoning", "размышления"}},
-	}
-}
-
-func (m *Model) profilesPaletteItems() []PaletteItem {
-	config, _ := loadConfigOptional(m.layout.ConfigPath())
-	items := []PaletteItem{}
-	if len(config.Profiles) == 0 {
-		return append(items, PaletteItem{Key: "profiles.empty", Title: m.localize("No Profiles", "Нет профилей"), Description: m.localize("No configured profiles found", "Профили не настроены")})
-	}
-	for _, profile := range config.Profiles {
-		description := localizedTextTUI(
-			m.language,
-			"model=%s provider=%s reasoning=%s",
-			"модель=%s провайдер=%s размышления=%s",
-			fallback(profile.Model, localizedUnsetTUI(m.language)),
-			fallback(profile.Provider, localizedUnsetTUI(m.language)),
-			fallback(profile.ReasoningEffort, localizedUnsetTUI(m.language)),
-		)
-		if profile.Name == config.ActiveProfileName() {
-			description += m.localize(" · active", " · активен")
-		}
-		items = append(items, PaletteItem{Key: "profiles.entry", Title: profile.Name, Description: description, Keywords: []string{profile.Provider, profile.Model, profile.ReasoningEffort}})
-	}
-	return items
-}
-
-func (m *Model) providersPaletteItems() []PaletteItem {
-	config, _ := loadConfigOptional(m.layout.ConfigPath())
-	items := []PaletteItem{}
-	if len(config.ModelProviders) == 0 {
-		return append(items, PaletteItem{Key: "providers.empty", Title: m.localize("No Providers", "Нет провайдеров"), Description: m.localize("No configured providers found", "Провайдеры не настроены")})
-	}
-	for _, provider := range config.ModelProviders {
-		items = append(items, PaletteItem{
-			Key:         "providers.entry",
-			Title:       provider.Name,
-			Description: fmt.Sprintf("base_url=%s wire_api=%s", fallback(provider.BaseURL, localizedUnsetTUI(m.language)), fallback(provider.WireAPI, "chat_completions")),
-			Keywords:    []string{provider.BaseURL, provider.WireAPI},
-		})
-	}
-	return items
 }
 
 func (m *Model) paletteBackItem() PaletteItem {
@@ -1060,12 +1019,22 @@ func paletteBackCopyForMode(mode PaletteMode, language commandcatalog.CatalogLan
 		return localize("Back to Settings", "Назад к настройкам"), localize("Return to settings", "Вернуться к настройкам")
 	case PaletteModeRoot:
 		return localize("Back to Palette", "Назад к палитре"), localize("Return to command palette", "Вернуться к палитре команд")
+	case PaletteModeModelSettings:
+		return localize("Back to Model Settings", "Назад к настройкам моделей"), localize("Return to model settings", "Вернуться к настройкам моделей")
 	case PaletteModeModel:
-		return localize("Back to Model", "Назад к модели"), localize("Return to model details", "Вернуться к модели")
+		return localize("Back to Model Picker", "Назад к выбору модели"), localize("Return to the model picker", "Вернуться к выбору модели")
+	case PaletteModeModelCatalog:
+		return localize("Back to Model Catalog", "Назад к каталогу моделей"), localize("Return to the model catalog", "Вернуться к каталогу моделей")
+	case PaletteModeReasoning:
+		return localize("Back to Reasoning", "Назад к размышлениям"), localize("Return to reasoning choices", "Вернуться к выбору размышлений")
 	case PaletteModeProfiles:
 		return localize("Back to Profiles", "Назад к профилям"), localize("Return to profiles", "Вернуться к профилям")
+	case PaletteModeProfileActions:
+		return localize("Back to Profile Actions", "Назад к действиям профиля"), localize("Return to profile actions", "Вернуться к действиям профиля")
 	case PaletteModeProviders:
 		return localize("Back to Providers", "Назад к провайдерам"), localize("Return to providers", "Вернуться к провайдерам")
+	case PaletteModeProviderActions:
+		return localize("Back to Provider Actions", "Назад к действиям провайдера"), localize("Return to provider actions", "Вернуться к действиям провайдера")
 	case PaletteModeResume:
 		return localize("Back to Resume", "Назад к продолжению"), localize("Return to saved sessions", "Вернуться к сохранённым сессиям")
 	case PaletteModeFork:
@@ -1235,7 +1204,18 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec) tea.Cmd {
 	case PaletteActionQuit:
 		return tea.Quit
 	case PaletteActionOpenMode:
-		return m.openPaletteMode(command.Mode, m.state.Palette.Visible)
+		switch command.Mode {
+		case PaletteModeModel:
+			return m.openModelPickerPalette(m.state.Palette.Visible)
+		case PaletteModeProfiles:
+			return m.openPaletteMode(PaletteModeProfiles, m.state.Palette.Visible)
+		case PaletteModeProviders:
+			return m.openPaletteMode(PaletteModeProviders, m.state.Palette.Visible)
+		case PaletteModeSettings:
+			return m.openPaletteMode(PaletteModeSettings, m.state.Palette.Visible)
+		default:
+			return m.openPaletteMode(command.Mode, m.state.Palette.Visible)
+		}
 	default:
 		return nil
 	}
@@ -1313,10 +1293,119 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 		return m.loadSessionCmd(item.Value, true)
 	case PaletteModeSettings:
 		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "settings.model_settings":
+			return m.openModelSettingsPalette(true)
 		case "settings.language":
 			return m.toggleSettingsLanguage()
 		case "settings.command_prefix":
 			return m.cycleCommandPrefix()
+		}
+		return nil
+	case PaletteModeModelSettings:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "model_settings.models":
+			return m.openModelPickerPalette(true)
+		case "model_settings.profiles":
+			return m.openPaletteMode(PaletteModeProfiles, true)
+		case "model_settings.providers":
+			return m.openPaletteMode(PaletteModeProviders, true)
+		}
+		return nil
+	case PaletteModeModel:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "model.catalog":
+			return m.openAllModelsPalette(true)
+		case "model.preset":
+			slug, reasoning, providerName := splitModelSelectionValue(item.Value)
+			if strings.TrimSpace(slug) == "" {
+				return nil
+			}
+			return m.openReasoningPalette(modelcatalog.Model{
+				Slug:                  slug,
+				DisplayName:           firstNonEmpty(strings.TrimSpace(item.Title), strings.TrimSpace(slug)),
+				DefaultReasoningLevel: reasoning,
+			}, providerName, true)
+		}
+		return nil
+	case PaletteModeModelCatalog:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "model.catalog.entry":
+			slug, providerName := splitModelCatalogValue(item.Value)
+			if strings.TrimSpace(slug) == "" {
+				return nil
+			}
+			config, err := loadConfigOptional(m.layout.ConfigPath())
+			if err != nil {
+				m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load config", "Не удалось загрузить конфиг"), err)
+				return nil
+			}
+			ctx, err := modelcatalog.ResolveRuntimeContext(config, apphome.CodexHome(), "", providerName)
+			if err != nil {
+				m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load provider catalog", "Не удалось загрузить каталог провайдера"), err)
+				return nil
+			}
+			model, _ := modelcatalog.ResolveModelChoice(ctx.ProviderID, ctx.Catalog, slug)
+			return m.openReasoningPalette(model, firstNonEmpty(providerName, ctx.ProviderName), true)
+		}
+		return nil
+	case PaletteModeReasoning:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "model.reasoning.entry":
+			slug, providerName, effort := splitReasoningSelectionValue(item.Value)
+			if strings.TrimSpace(slug) == "" {
+				return nil
+			}
+			return m.applyModelSelection(modelcatalog.Model{
+				Slug:                  slug,
+				DisplayName:           firstNonEmpty(strings.TrimSpace(item.Title), strings.TrimSpace(slug)),
+				DefaultReasoningLevel: effort,
+			}, providerName, effort)
+		}
+		return nil
+	case PaletteModeProfiles:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "profiles.entry":
+			return m.openProfileActionsPalette(item.Value, true)
+		}
+		return nil
+	case PaletteModeProfileActions:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "profile.activate":
+			return m.activateProfile(item.Value)
+		case "profile.delete":
+			return m.deleteProfile(item.Value)
+		}
+		return nil
+	case PaletteModeProviders:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "providers.entry":
+			return m.openProviderActionsPalette(item.Value, true)
+		}
+		return nil
+	case PaletteModeProviderActions:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "provider.activate":
+			return m.activateProvider(item.Value)
+		case "provider.delete":
+			return m.deleteProvider(item.Value)
 		}
 		return nil
 	default:
@@ -1468,11 +1557,21 @@ func (m *Model) paletteTitle() string {
 	case PaletteModeFork:
 		return m.localize("Fork Session", "Ответвить сессию")
 	case PaletteModeModel:
-		return m.localize("Model", "Модель")
+		return m.localize("Choose Model", "Выбор модели")
+	case PaletteModeModelSettings:
+		return m.localize("Model Settings", "Настройки моделей")
+	case PaletteModeModelCatalog:
+		return m.localize("All Models", "Все модели")
+	case PaletteModeReasoning:
+		return m.localize("Reasoning", "Размышления")
 	case PaletteModeProfiles:
 		return m.localize("Profiles", "Профили")
+	case PaletteModeProfileActions:
+		return m.localize("Profile Actions", "Действия профиля")
 	case PaletteModeProviders:
 		return m.localize("Providers", "Провайдеры")
+	case PaletteModeProviderActions:
+		return m.localize("Provider Actions", "Действия провайдера")
 	case PaletteModeSettings:
 		return m.localize("Settings", "Настройки")
 	default:
@@ -1591,7 +1690,7 @@ func (m *Model) startupCmd() tea.Cmd {
 		}
 		return m.loadSessionCmd(m.startup.SessionPath, true)
 	case StartupModeModel:
-		return m.openPaletteMode(PaletteModeModel, false)
+		return m.openModelPickerPalette(false)
 	case StartupModeProfiles:
 		return m.openPaletteMode(PaletteModeProfiles, false)
 	case StartupModeProviders:
