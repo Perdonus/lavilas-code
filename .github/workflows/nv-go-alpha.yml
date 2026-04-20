@@ -110,8 +110,10 @@ jobs:
     needs:
       - prepare
       - build
-    if: ${{ needs.prepare.outputs.publish_enabled == 'true' && secrets.NV_PUBLISH_TOKEN != '' }}
+    if: ${{ needs.prepare.outputs.publish_enabled == 'true' }}
     runs-on: ubuntu-latest
+    env:
+      NV_PUBLISH_TOKEN: ${{ secrets.NV_PUBLISH_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -130,9 +132,12 @@ jobs:
       - name: Install NV CLI
         run: curl -fsSL https://sosiskibot.ru/install/nv.sh | sh
 
+      - name: Skip publish without NV token
+        if: ${{ env.NV_PUBLISH_TOKEN == '' }}
+        run: echo "NV_PUBLISH_TOKEN is not configured. Skipping publish." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish alpha to NV
-        env:
-          NV_PUBLISH_TOKEN: ${{ secrets.NV_PUBLISH_TOKEN }}
+        if: ${{ env.NV_PUBLISH_TOKEN != '' }}
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           nv publish --manifest ./dist/nv.package.publish.json --tag "${RELEASE_CHANNEL}" --server "${NV_SERVER_URL}"
