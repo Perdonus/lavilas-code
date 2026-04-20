@@ -28,8 +28,13 @@ const (
 	PaletteModeReasoning       PaletteMode = "reasoning"
 	PaletteModeProfiles        PaletteMode = "profiles"
 	PaletteModeProfileActions  PaletteMode = "profile_actions"
+	PaletteModeAddAccount      PaletteMode = "add_account"
 	PaletteModeProviders       PaletteMode = "providers"
 	PaletteModeProviderActions PaletteMode = "provider_actions"
+	PaletteModeModelPresets    PaletteMode = "model_presets"
+	PaletteModePresetEditor    PaletteMode = "preset_editor"
+	PaletteModePresetActions   PaletteMode = "preset_actions"
+	PaletteModePresetModels    PaletteMode = "preset_models"
 	PaletteModeSettings        PaletteMode = "settings"
 )
 
@@ -220,8 +225,13 @@ func normalizePaletteMode(value PaletteMode) PaletteMode {
 		PaletteModeReasoning,
 		PaletteModeProfiles,
 		PaletteModeProfileActions,
+		PaletteModeAddAccount,
 		PaletteModeProviders,
 		PaletteModeProviderActions,
+		PaletteModeModelPresets,
+		PaletteModePresetEditor,
+		PaletteModePresetActions,
+		PaletteModePresetModels,
 		PaletteModeSettings:
 		return value
 	default:

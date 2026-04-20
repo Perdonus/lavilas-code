@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/Perdonus/lavilas-code/internal/accountprofiles"
 	"github.com/Perdonus/lavilas-code/internal/apphome"
 	"github.com/Perdonus/lavilas-code/internal/modelcatalog"
 	appstate "github.com/Perdonus/lavilas-code/internal/state"
@@ -174,6 +175,12 @@ func (m *Model) modelSettingsPaletteItems() []PaletteItem {
 			Keywords:    []string{"profiles", "accounts", "keys", "профили", "аккаунты", "ключи"},
 		},
 		{
+			Key:         "model_settings.presets",
+			Title:       m.localize("Presets", "Пресеты"),
+			Description: m.localize("Quick model presets", "Быстрые пресеты моделей"),
+			Keywords:    []string{"presets", "quick", "models", "пресеты", "быстрые", "модели"},
+		},
+		{
 			Key:         "model_settings.providers",
 			Title:       m.localize("Providers", "Провайдеры"),
 			Description: m.localize("Inspect and manage providers", "Просмотр и удаление провайдеров"),
@@ -192,35 +199,48 @@ func (m *Model) profilesManagerItems() []PaletteItem {
 			Description: err.Error(),
 		}}
 	}
-	if len(config.Profiles) == 0 {
+	records, err := accountprofiles.ListStoredProfiles(apphome.CodexHome())
+	if err != nil {
 		return []PaletteItem{{
-			Key:         "profiles.empty",
-			Title:       m.localize("No profiles", "Нет профилей"),
-			Description: m.localize("The config has no saved profiles", "В конфиге нет сохранённых профилей"),
+			Key:         "profiles.error",
+			Title:       m.localize("Profiles unavailable", "Профили недоступны"),
+			Description: err.Error(),
 		}}
 	}
-
 	activeProfile := strings.TrimSpace(config.ActiveProfileName())
-	items := make([]PaletteItem, 0, len(config.Profiles))
-	for _, profile := range config.Profiles {
+	items := []PaletteItem{{
+		Key:         "profiles.add_account",
+		Title:       m.localize("Add Account", "Добавить аккаунт"),
+		Description: m.localize("Create and activate a saved account", "Создать и активировать сохранённый аккаунт"),
+		Keywords:    []string{"add", "account", "profile", "добавить", "аккаунт", "профиль"},
+	}}
+	if len(records) == 0 {
+		items = append(items, PaletteItem{
+			Key:         "profiles.empty",
+			Title:       m.localize("No saved profiles", "Нет сохранённых профилей"),
+			Description: m.localize("Use Add Account to create the first profile", "Используйте «Добавить аккаунт», чтобы создать первый профиль"),
+		})
+		return items
+	}
+	for _, record := range records {
+		profile := record.Profile
 		descriptionParts := []string{
+			firstNonEmpty(accountprofiles.ProviderDisplayName(profile.Provider, m.language == "ru"), localizedUnsetTUI(m.language)),
 			firstNonEmpty(strings.TrimSpace(profile.Model), localizedUnsetTUI(m.language)),
-			firstNonEmpty(strings.TrimSpace(profile.EffectiveProviderName()), localizedUnsetTUI(m.language)),
-			firstNonEmpty(strings.TrimSpace(profile.ReasoningEffort), localizedUnsetTUI(m.language)),
 		}
-		if strings.TrimSpace(profile.Name) == activeProfile {
+		if firstNonEmpty(strings.TrimSpace(profile.ConfigProfile), record.Key) == activeProfile {
 			descriptionParts = append(descriptionParts, m.localize("active", "активен"))
 		}
 		items = append(items, PaletteItem{
 			Key:         "profiles.entry",
-			Title:       profile.Name,
+			Title:       firstNonEmpty(strings.TrimSpace(profile.Name), record.Key),
 			Description: strings.Join(descriptionParts, " · "),
-			Value:       profile.Name,
+			Value:       record.Key,
 			Keywords: []string{
+				record.Key,
 				profile.Name,
+				profile.Provider,
 				profile.Model,
-				profile.EffectiveProviderName(),
-				profile.ReasoningEffort,
 			},
 		})
 	}
@@ -228,14 +248,10 @@ func (m *Model) profilesManagerItems() []PaletteItem {
 }
 
 func (m *Model) openProfileActionsPalette(profileName string, pushCurrent bool) tea.Cmd {
-	config, err := loadConfigOptional(m.layout.ConfigPath())
+	recordPath := accountprofiles.StoredProfilePath(apphome.CodexHome(), profileName)
+	stored, err := accountprofiles.LoadStoredProfile(recordPath)
 	if err != nil {
-		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load config", "Не удалось загрузить конфиг"), err)
-		return nil
-	}
-	profile, ok := config.Profile(profileName)
-	if !ok {
-		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Profile not found", "Профиль не найден"), profileName)
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load profile", "Не удалось загрузить профиль"), err)
 		return nil
 	}
 	items := []PaletteItem{
@@ -243,18 +259,41 @@ func (m *Model) openProfileActionsPalette(profileName string, pushCurrent bool) 
 			Key:         "profile.activate",
 			Title:       m.localize("Activate", "Активировать"),
 			Description: m.localize("Make this profile active", "Сделать этот профиль активным"),
-			Value:       profile.Name,
+			Value:       profileName,
 			Keywords:    []string{"activate", "switch", "активировать", "переключить"},
 		},
 		{
 			Key:         "profile.delete",
 			Title:       m.localize("Delete", "Удалить"),
 			Description: m.localize("Delete profile and sidecar snapshot", "Удалить профиль и sidecar-снимок"),
-			Value:       profile.Name,
+			Value:       profileName,
 			Keywords:    []string{"delete", "remove", "удалить"},
 		},
 	}
-	return m.applyPaletteScreen(PaletteModeProfileActions, items, "", pushCurrent)
+	return m.applyPaletteScreen(PaletteModeProfileActions, items, firstNonEmpty(strings.TrimSpace(stored.Name), profileName), pushCurrent)
+}
+
+func (m *Model) openAddAccountProviderPalette(pushCurrent bool) tea.Cmd {
+	items := make([]PaletteItem, 0, len(accountprofiles.SupportedProviders()))
+	for _, provider := range accountprofiles.SupportedProviders() {
+		description := m.localize("Name and API key", "Имя профиля и API-ключ")
+		switch {
+		case provider.BuiltinProviderID != "":
+			description = m.localize("Name and standard OpenAI sign-in", "Имя профиля и стандартный вход OpenAI")
+		case provider.RequiresBaseURL:
+			description = m.localize("Name, API key, and base URL", "Имя, API-ключ и базовый URL")
+		case provider.APIKeyOptional:
+			description = m.localize("Name and optional API key", "Имя и необязательный API-ключ")
+		}
+		items = append(items, PaletteItem{
+			Key:         "profiles.add_provider",
+			Title:       accountprofiles.ProviderDisplayName(provider.ID, m.language == "ru"),
+			Description: description,
+			Value:       provider.ID,
+			Keywords:    []string{provider.ID, provider.NameEN, provider.NameRU, provider.DefaultModel},
+		})
+	}
+	return m.applyPaletteScreen(PaletteModeAddAccount, items, "", pushCurrent)
 }
 
 func (m *Model) providersManagerItems() []PaletteItem {
@@ -355,23 +394,27 @@ func (m *Model) applyModelSelection(model modelcatalog.Model, providerName strin
 }
 
 func (m *Model) activateProfile(profileName string) tea.Cmd {
+	stored, err := accountprofiles.LoadStoredProfile(accountprofiles.StoredProfilePath(apphome.CodexHome(), profileName))
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load profile", "Не удалось загрузить профиль"), err)
+		return nil
+	}
 	configPath := m.layout.ConfigPath()
 	config, err := loadConfigOptional(configPath)
 	if err != nil {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load config", "Не удалось загрузить конфиг"), err)
 		return nil
 	}
-	if _, ok := config.Profile(profileName); !ok {
-		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Profile not found", "Профиль не найден"), profileName)
+	if err := accountprofiles.ApplyStoredProfile(&config, apphome.CodexHome(), profileName, stored); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to activate profile", "Не удалось активировать профиль"), err)
 		return nil
 	}
-	config.SetActiveProfile(profileName)
 	if err := appstate.SaveConfig(configPath, config); err != nil {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save config", "Не удалось сохранить конфиг"), err)
 		return nil
 	}
 	m.syncConfigState(config)
-	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Active profile", "Активный профиль"), profileName)
+	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Active profile", "Активный профиль"), firstNonEmpty(stored.Name, profileName))
 	if m.state.Palette.Visible {
 		return m.closePalette()
 	}
@@ -385,29 +428,18 @@ func (m *Model) deleteProfile(profileName string) tea.Cmd {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load config", "Не удалось загрузить конфиг"), err)
 		return nil
 	}
-	profile, ok := config.Profile(profileName)
-	if !ok {
-		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Profile not found", "Профиль не найден"), profileName)
+	if err := accountprofiles.DeleteStoredProfile(apphome.CodexHome(), profileName); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to remove stored profile", "Не удалось удалить сохранённый профиль"), err)
 		return nil
 	}
-	if !config.DeleteProfile(profileName) {
-		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Profile not found", "Профиль не найден"), profileName)
-		return nil
-	}
-	if err := modelcatalog.DeleteProfileSnapshot(profile, apphome.CodexHome()); err != nil {
-		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to remove profile snapshot", "Не удалось удалить снимок профиля"), err)
-		return nil
-	}
+	accountprofiles.CleanStoredProfileFromConfig(&config, profileName)
 	if err := appstate.SaveConfig(configPath, config); err != nil {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save config", "Не удалось сохранить конфиг"), err)
 		return nil
 	}
 	m.syncConfigState(config)
 	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Deleted profile", "Профиль удалён"), profileName)
-	if m.state.Palette.Visible {
-		return m.closePalette()
-	}
-	return nil
+	return m.openPaletteMode(PaletteModeProfiles, false)
 }
 
 func (m *Model) activateProvider(providerName string) tea.Cmd {

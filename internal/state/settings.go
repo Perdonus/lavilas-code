@@ -57,6 +57,7 @@ type ModelPresetSettings struct {
 }
 
 type ProviderPresetSettings struct {
+	Order   []string
 	Presets map[string]ModelPresetConfig
 }
 
@@ -64,6 +65,12 @@ type ModelPresetConfig struct {
 	Name      string `json:"name,omitempty"`
 	Model     string `json:"model,omitempty"`
 	Reasoning string `json:"reasoning,omitempty"`
+}
+
+type storedModelPresetJSON struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Model string `json:"model"`
 }
 
 type settingsFile struct {
@@ -129,30 +136,15 @@ func ParseSettings(data []byte) (Settings, error) {
 		delete(extras, key)
 	}
 
-	modelPresets := ModelPresetSettings{}
-	if rawValue, ok := raw["model_presets_enabled"]; ok {
-		_ = json.Unmarshal(rawValue, &modelPresets.Enabled)
-	}
+	modelPresets := ModelPresetSettings{Enabled: true}
 	if rawValue, ok := raw["model_presets"]; ok {
-		var providers map[string]map[string]ModelPresetConfig
-		if err := json.Unmarshal(rawValue, &providers); err == nil {
-			modelPresets.Providers = make(map[string]ProviderPresetSettings, len(providers))
-			for provider, presets := range providers {
-				if provider == "" || len(presets) == 0 {
-					continue
-				}
-				cleaned := make(map[string]ModelPresetConfig, len(presets))
-				for key, preset := range presets {
-					if key == "" {
-						continue
-					}
-					cleaned[key] = preset
-				}
-				if len(cleaned) == 0 {
-					continue
-				}
-				modelPresets.Providers[provider] = ProviderPresetSettings{Presets: cleaned}
-			}
+		modelPresets = parseModelPresets(rawValue)
+	} else {
+		if rawValue, ok := raw["model_presets_enabled"]; ok {
+			_ = json.Unmarshal(rawValue, &modelPresets.Enabled)
+		}
+		if rawValue, ok := raw["model_presets"]; ok {
+			modelPresets = parseLegacyModelPresets(rawValue, modelPresets.Enabled)
 		}
 	}
 
@@ -303,13 +295,15 @@ func (s *Settings) SetModelPreset(provider, key string, preset ModelPresetConfig
 	if provider == "" || key == "" {
 		return
 	}
-	s.ModelPresets.Enabled = true
 	if s.ModelPresets.Providers == nil {
 		s.ModelPresets.Providers = make(map[string]ProviderPresetSettings)
 	}
 	providerPresets := s.ModelPresets.Providers[provider]
 	if providerPresets.Presets == nil {
 		providerPresets.Presets = make(map[string]ModelPresetConfig)
+	}
+	if _, exists := providerPresets.Presets[key]; !exists {
+		providerPresets.Order = append(providerPresets.Order, key)
 	}
 	providerPresets.Presets[key] = preset
 	s.ModelPresets.Providers[provider] = providerPresets
@@ -326,10 +320,7 @@ func (s *Settings) DeleteModelPreset(provider, key string) {
 		return
 	}
 	delete(providerPresets.Presets, key)
-	if len(providerPresets.Presets) == 0 {
-		delete(s.ModelPresets.Providers, provider)
-		return
-	}
+	providerPresets.Order = removeString(providerPresets.Order, key)
 	s.ModelPresets.Providers[provider] = providerPresets
 }
 
@@ -358,8 +349,10 @@ func (s Settings) marshalMap() map[string]any {
 	result["command_text_color"] = s.Colors.CommandText
 	result["reasoning_text_color"] = s.Colors.ReasoningText
 	result["command_output_text_color"] = s.Colors.CommandOutput
-	result["model_presets_enabled"] = s.ModelPresets.Enabled
-	result["model_presets"] = s.ModelPresets.marshalMap()
+	result["model_presets"] = map[string]any{
+		"enabled":   s.ModelPresets.Enabled,
+		"providers": s.ModelPresets.marshalMap(),
+	}
 	return result
 }
 
@@ -408,26 +401,174 @@ func (s ModelPresetSettings) marshalMap() map[string]any {
 
 func (p ProviderPresetSettings) Clone() ProviderPresetSettings {
 	if len(p.Presets) == 0 {
-		return ProviderPresetSettings{}
+		return ProviderPresetSettings{Order: cloneStrings(p.Order)}
 	}
-	result := ProviderPresetSettings{Presets: make(map[string]ModelPresetConfig, len(p.Presets))}
+	result := ProviderPresetSettings{
+		Order:   cloneStrings(p.Order),
+		Presets: make(map[string]ModelPresetConfig, len(p.Presets)),
+	}
 	for key, preset := range p.Presets {
 		result.Presets[key] = preset
 	}
 	return result
 }
 
-func (p ProviderPresetSettings) marshalMap() map[string]any {
-	result := make(map[string]any, len(p.Presets))
-	keys := make([]string, 0, len(p.Presets))
-	for key := range p.Presets {
+func (p ProviderPresetSettings) marshalMap() []map[string]any {
+	keys := orderedPresetKeys(p)
+	result := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		preset, ok := p.Presets[key]
+		if !ok {
+			continue
+		}
+		result = append(result, map[string]any{
+			"id":    key,
+			"name":  preset.Name,
+			"model": preset.Model,
+		})
+	}
+	return result
+}
+
+func parseModelPresets(rawValue json.RawMessage) ModelPresetSettings {
+	type nestedModelPresets struct {
+		Enabled   *bool                      `json:"enabled"`
+		Providers map[string]json.RawMessage `json:"providers"`
+	}
+	settings := ModelPresetSettings{Enabled: true}
+	var nested nestedModelPresets
+	if err := json.Unmarshal(rawValue, &nested); err != nil {
+		return parseLegacyModelPresets(rawValue, settings.Enabled)
+	}
+	if nested.Enabled != nil {
+		settings.Enabled = *nested.Enabled
+	}
+	if len(nested.Providers) == 0 {
+		return settings
+	}
+	settings.Providers = make(map[string]ProviderPresetSettings, len(nested.Providers))
+	for provider, value := range nested.Providers {
+		provider = strings.TrimSpace(provider)
+		if provider == "" {
+			continue
+		}
+		var stored []storedModelPresetJSON
+		if err := json.Unmarshal(value, &stored); err == nil {
+			settings.Providers[provider] = providerPresetSettingsFromStored(stored)
+			continue
+		}
+		settings.Providers[provider] = parseLegacyProviderPresets(value)
+	}
+	return settings
+}
+
+func parseLegacyModelPresets(rawValue json.RawMessage, enabled bool) ModelPresetSettings {
+	var providers map[string]map[string]ModelPresetConfig
+	settings := ModelPresetSettings{Enabled: enabled}
+	if err := json.Unmarshal(rawValue, &providers); err != nil {
+		return settings
+	}
+	if len(providers) == 0 {
+		return settings
+	}
+	settings.Providers = make(map[string]ProviderPresetSettings, len(providers))
+	for provider, presets := range providers {
+		provider = strings.TrimSpace(provider)
+		if provider == "" {
+			continue
+		}
+		current := ProviderPresetSettings{Presets: make(map[string]ModelPresetConfig, len(presets))}
+		keys := make([]string, 0, len(presets))
+		for key, preset := range presets {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			current.Presets[key] = preset
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		current.Order = append(current.Order, keys...)
+		settings.Providers[provider] = current
+	}
+	return settings
+}
+
+func parseLegacyProviderPresets(rawValue json.RawMessage) ProviderPresetSettings {
+	var presets map[string]ModelPresetConfig
+	if err := json.Unmarshal(rawValue, &presets); err != nil {
+		return ProviderPresetSettings{}
+	}
+	result := ProviderPresetSettings{Presets: make(map[string]ModelPresetConfig, len(presets))}
+	keys := make([]string, 0, len(presets))
+	for key, preset := range presets {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		result.Presets[key] = preset
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	for _, key := range keys {
-		result[key] = p.Presets[key]
+	result.Order = append(result.Order, keys...)
+	return result
+}
+
+func providerPresetSettingsFromStored(stored []storedModelPresetJSON) ProviderPresetSettings {
+	result := ProviderPresetSettings{Presets: make(map[string]ModelPresetConfig, len(stored))}
+	for _, preset := range stored {
+		key := strings.TrimSpace(preset.ID)
+		if key == "" {
+			continue
+		}
+		if _, exists := result.Presets[key]; exists {
+			continue
+		}
+		result.Order = append(result.Order, key)
+		result.Presets[key] = ModelPresetConfig{
+			Name:  strings.TrimSpace(preset.Name),
+			Model: strings.TrimSpace(preset.Model),
+		}
 	}
 	return result
+}
+
+func orderedPresetKeys(p ProviderPresetSettings) []string {
+	if len(p.Presets) == 0 {
+		return cloneStrings(p.Order)
+	}
+	keys := make([]string, 0, len(p.Presets))
+	seen := make(map[string]struct{}, len(p.Presets))
+	for _, key := range p.Order {
+		if _, ok := p.Presets[key]; !ok {
+			continue
+		}
+		keys = append(keys, key)
+		seen[key] = struct{}{}
+	}
+	extra := make([]string, 0, len(p.Presets))
+	for key := range p.Presets {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		extra = append(extra, key)
+	}
+	sort.Strings(extra)
+	keys = append(keys, extra...)
+	return keys
+}
+
+func removeString(values []string, target string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	filtered := values[:0]
+	for _, value := range values {
+		if value != target {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func cloneStrings(values []string) []string {

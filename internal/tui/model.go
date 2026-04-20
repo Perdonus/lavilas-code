@@ -112,6 +112,7 @@ type Model struct {
 	language     commandcatalog.CatalogLanguage
 	approval     *approvalPromptState
 	cwdPrompt    *cwdPromptState
+	formPrompt   *formPromptState
 }
 
 func New() *Model {
@@ -275,6 +276,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cwdPrompt != nil {
 			return m, m.updateCWDPrompt(msg)
 		}
+		if m.formPrompt != nil {
+			return m, m.updateFormPrompt(msg)
+		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -331,6 +335,9 @@ func (m *Model) View() string {
 	}
 	if m.cwdPrompt != nil {
 		mainSections = append(mainSections, m.renderCWDPromptPane())
+	}
+	if m.formPrompt != nil {
+		mainSections = append(mainSections, m.renderFormPromptPane())
 	}
 	if m.state.Palette.Visible {
 		mainSections = append(mainSections, m.renderPalettePane())
@@ -945,6 +952,14 @@ func (m *Model) paletteItemsForMode(mode PaletteMode) []PaletteItem {
 		return m.providersManagerItems()
 	case PaletteModeProviderActions:
 		return nil
+	case PaletteModeModelPresets:
+		return m.modelPresetsSettingsItems()
+	case PaletteModePresetEditor:
+		return nil
+	case PaletteModePresetActions:
+		return nil
+	case PaletteModePresetModels:
+		return nil
 	default:
 		return m.rootPaletteItems()
 	}
@@ -1031,10 +1046,20 @@ func paletteBackCopyForMode(mode PaletteMode, language commandcatalog.CatalogLan
 		return localize("Back to Profiles", "Назад к профилям"), localize("Return to profiles", "Вернуться к профилям")
 	case PaletteModeProfileActions:
 		return localize("Back to Profile Actions", "Назад к действиям профиля"), localize("Return to profile actions", "Вернуться к действиям профиля")
+	case PaletteModeAddAccount:
+		return localize("Back to Add Account", "Назад к добавлению аккаунта"), localize("Return to add-account providers", "Вернуться к выбору провайдера")
 	case PaletteModeProviders:
 		return localize("Back to Providers", "Назад к провайдерам"), localize("Return to providers", "Вернуться к провайдерам")
 	case PaletteModeProviderActions:
 		return localize("Back to Provider Actions", "Назад к действиям провайдера"), localize("Return to provider actions", "Вернуться к действиям провайдера")
+	case PaletteModeModelPresets:
+		return localize("Back to Presets", "Назад к пресетам"), localize("Return to model presets", "Вернуться к пресетам моделей")
+	case PaletteModePresetEditor:
+		return localize("Back to Preset Editor", "Назад к редактору пресетов"), localize("Return to the current provider preset list", "Вернуться к списку пресетов провайдера")
+	case PaletteModePresetActions:
+		return localize("Back to Preset Actions", "Назад к действиям пресета"), localize("Return to preset actions", "Вернуться к действиям пресета")
+	case PaletteModePresetModels:
+		return localize("Back to Preset Models", "Назад к моделям пресета"), localize("Return to the preset model picker", "Вернуться к выбору модели пресета")
 	case PaletteModeResume:
 		return localize("Back to Resume", "Назад к продолжению"), localize("Return to saved sessions", "Вернуться к сохранённым сессиям")
 	case PaletteModeFork:
@@ -1209,6 +1234,8 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec) tea.Cmd {
 			return m.openModelPickerPalette(m.state.Palette.Visible)
 		case PaletteModeProfiles:
 			return m.openPaletteMode(PaletteModeProfiles, m.state.Palette.Visible)
+		case PaletteModeModelPresets:
+			return m.openModelPresetsSettingsPalette(m.state.Palette.Visible)
 		case PaletteModeProviders:
 			return m.openPaletteMode(PaletteModeProviders, m.state.Palette.Visible)
 		case PaletteModeSettings:
@@ -1311,6 +1338,8 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 			return m.openModelPickerPalette(true)
 		case "model_settings.profiles":
 			return m.openPaletteMode(PaletteModeProfiles, true)
+		case "model_settings.presets":
+			return m.openModelPresetsSettingsPalette(true)
 		case "model_settings.providers":
 			return m.openPaletteMode(PaletteModeProviders, true)
 		}
@@ -1376,6 +1405,8 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 		switch item.Key {
 		case "__back":
 			return m.navigatePaletteBack()
+		case "profiles.add_account":
+			return m.openAddAccountProviderPalette(true)
 		case "profiles.entry":
 			return m.openProfileActionsPalette(item.Value, true)
 		}
@@ -1388,6 +1419,14 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 			return m.activateProfile(item.Value)
 		case "profile.delete":
 			return m.deleteProfile(item.Value)
+		}
+		return nil
+	case PaletteModeAddAccount:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "profiles.add_provider":
+			return m.openAddAccountDetailsPrompt(item.Value, "")
 		}
 		return nil
 	case PaletteModeProviders:
@@ -1406,6 +1445,46 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 			return m.activateProvider(item.Value)
 		case "provider.delete":
 			return m.deleteProvider(item.Value)
+		}
+		return nil
+	case PaletteModeModelPresets:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "model_presets.toggle":
+			return m.toggleModelPresetsEnabled()
+		case "model_presets.provider":
+			return m.openCurrentProviderPresetEditor(true)
+		}
+		return nil
+	case PaletteModePresetEditor:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "preset.add":
+			return m.openCurrentProviderPresetModelPicker("", true)
+		case "preset.entry":
+			return m.openCurrentProviderPresetActions(item.Value, true)
+		}
+		return nil
+	case PaletteModePresetActions:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "preset.rename":
+			return m.openCurrentProviderPresetRenamePrompt(item.Value)
+		case "preset.model":
+			return m.openCurrentProviderPresetModelPicker(item.Value, true)
+		case "preset.delete":
+			return m.deleteCurrentProviderPreset(item.Value)
+		}
+		return nil
+	case PaletteModePresetModels:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "preset.model.entry":
+			return m.applyCurrentProviderPresetModelSelection(item.Value)
 		}
 		return nil
 	default:
@@ -1519,10 +1598,20 @@ func (m *Model) setFocus(next PaneFocus) tea.Cmd {
 }
 
 func (m *Model) applyFocusState() tea.Cmd {
-	if m.state.Palette.Visible {
+	if m.formPrompt != nil {
+		m.state.Focus = FocusInput
+	} else if m.state.Palette.Visible {
 		m.state.Focus = FocusPalette
 	}
 	var cmds []tea.Cmd
+	if m.formPrompt != nil {
+		m.input.Blur()
+		m.paletteInput.Blur()
+		if m.formPrompt != nil {
+			cmds = append(cmds, m.formPrompt.Input.Focus())
+		}
+		return tea.Batch(cmds...)
+	}
 	switch m.state.Focus {
 	case FocusInput:
 		cmds = append(cmds, m.input.Focus())
@@ -1572,6 +1661,16 @@ func (m *Model) paletteTitle() string {
 		return m.localize("Providers", "Провайдеры")
 	case PaletteModeProviderActions:
 		return m.localize("Provider Actions", "Действия провайдера")
+	case PaletteModeAddAccount:
+		return m.localize("Add Account", "Добавить аккаунт")
+	case PaletteModeModelPresets:
+		return m.localize("Model Presets", "Пресеты моделей")
+	case PaletteModePresetEditor:
+		return m.localize("Preset Editor", "Редактор пресетов")
+	case PaletteModePresetActions:
+		return m.localize("Preset Actions", "Действия пресета")
+	case PaletteModePresetModels:
+		return m.localize("Choose Preset Model", "Выбор модели для пресета")
 	case PaletteModeSettings:
 		return m.localize("Settings", "Настройки")
 	default:
