@@ -91,6 +91,10 @@ func catalogCommandRun(name string) (func(args []string) int, bool) {
 		return runModel, true
 	case "settings":
 		return runSettings, true
+	case "setlang":
+		return runSetlang, true
+	case "permissions":
+		return runPermissions, true
 	case "completion":
 		return runCompletion, true
 	case "features":

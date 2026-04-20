@@ -86,6 +86,10 @@ func NormalizeToolPolicy(policy ToolPolicy) ToolPolicy {
 	return policy
 }
 
+func IsZeroToolPolicy(policy ToolPolicy) bool {
+	return isZeroToolPolicy(policy)
+}
+
 func DefinitionsWithPolicy(policy ToolPolicy) []toolruntime.ToolDefinition {
 	policy = NormalizeToolPolicy(policy)
 	definitions := Definitions()
@@ -165,6 +169,20 @@ func applyToolPolicy(name string, metadata ToolExecutionMetadata, policy ToolPol
 		metadata.ToolEnabled = false
 		metadata.ApprovalState = ToolApprovalStateDenied
 		metadata.PolicyReason = "mutating tools are blocked by policy"
+		return metadata
+	}
+	if normalizedName == "request_permissions" {
+		switch policy.ApprovalMode {
+		case ToolApprovalModeDeny:
+			metadata.Permission = ToolPermissionDenied
+			metadata.ToolEnabled = false
+			metadata.ApprovalState = ToolApprovalStateDenied
+			metadata.PolicyReason = "permission requests are denied by approval policy"
+		default:
+			metadata.Permission = ToolPermissionApprovalRequired
+			metadata.ApprovalState = ToolApprovalStatePending
+			metadata.PolicyReason = "permission request requires user approval"
+		}
 		return metadata
 	}
 

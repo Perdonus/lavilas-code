@@ -20,6 +20,10 @@ func TestCatalogResolveCanonicalAndAliases(t *testing.T) {
 		{key: "продолжить", preferred: CatalogLanguageRussian, wantCommand: "resume", wantLanguage: CatalogLanguageRussian, wantPrimaryKey: true},
 		{key: "accounts", preferred: CatalogLanguageEnglish, wantCommand: "profiles", wantLanguage: CatalogLanguageEnglish, wantPrimaryKey: false},
 		{key: "АККАУНТЫ", preferred: CatalogLanguageRussian, wantCommand: "profiles", wantLanguage: CatalogLanguageRussian, wantPrimaryKey: false},
+		{key: "language", preferred: CatalogLanguageEnglish, wantCommand: "setlang", wantLanguage: CatalogLanguageEnglish, wantPrimaryKey: false},
+		{key: "язык", preferred: CatalogLanguageRussian, wantCommand: "setlang", wantLanguage: CatalogLanguageRussian, wantPrimaryKey: true},
+		{key: "approvals", preferred: CatalogLanguageEnglish, wantCommand: "permissions", wantLanguage: CatalogLanguageEnglish, wantPrimaryKey: false},
+		{key: "подтверждения", preferred: CatalogLanguageRussian, wantCommand: "permissions", wantLanguage: CatalogLanguageRussian, wantPrimaryKey: false},
 	}
 
 	for _, tt := range tests {

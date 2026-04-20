@@ -136,6 +136,29 @@ func Definitions() []toolruntime.ToolDefinition {
 				"required": []string{"patch"},
 			},
 		),
+		functionTool(
+			"request_permissions",
+			"Ask the user to grant additional writable roots for later write operations. The approval choice decides whether the grant lasts for the current turn or the whole session.",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"reason": map[string]any{"type": "string", "description": "Why the extra write access is needed."},
+					"permissions": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"writable_roots": map[string]any{
+								"type":        "array",
+								"description": "Directories or file paths that should be writable after approval.",
+								"items":       map[string]any{"type": "string"},
+								"minItems":    1,
+							},
+						},
+						"required": []string{"writable_roots"},
+					},
+				},
+				"required": []string{"permissions"},
+			},
+		),
 	}
 }
 

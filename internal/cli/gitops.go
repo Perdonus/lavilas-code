@@ -156,6 +156,7 @@ func runReview(args []string) int {
 	}
 
 	runOptions.Prompt = buildReviewPrompt(string(diff))
+	applySettingsToolPolicy(&runOptions)
 	result, err := taskrun.Run(contextBackground(), runOptions)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "review: %v\n", err)

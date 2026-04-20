@@ -263,6 +263,10 @@ func (c Config) ModelProviderNames() []string {
 
 func (c *Config) SetActiveProfile(name string) {
 	c.Model.Profile = strings.TrimSpace(name)
+	if c.Model.Profile == "" {
+		c.Model.fieldOrder = removeKey(c.Model.fieldOrder, "profile")
+		return
+	}
 	c.Model.fieldOrder = appendUnique(c.Model.fieldOrder, "profile")
 }
 

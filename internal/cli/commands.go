@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -460,10 +459,11 @@ func runSettings(args []string) int {
 	if shouldOpenInteractiveConfig(args) {
 		return tui.Run(tui.Options{Startup: tui.StartupOptions{Mode: tui.StartupModeSettings}})
 	}
+	language := currentCatalogLanguage()
 	settingsPath := apphome.SettingsPath()
 	settings, err := loadSettingsOptional(settingsPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read settings: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%s: %v\n", localizedText(language, "failed to read settings", "не удалось прочитать настройки"), err)
 		return 1
 	}
 
@@ -473,51 +473,51 @@ func runSettings(args []string) int {
 			return runSettingsPresets(settings, settingsPath, args[1:])
 		case "language":
 			if len(args) < 2 {
-				fmt.Fprintln(os.Stderr, "settings: language requires a value")
+				fmt.Fprintln(os.Stderr, localizedText(language, "settings: language requires a value", "settings: для языка нужно значение"))
 				return 2
 			}
 			settings.SetLanguage(args[1])
 			if err := state.SaveSettings(settingsPath, settings); err != nil {
-				fmt.Fprintf(os.Stderr, "settings: failed to save settings: %v\n", err)
+				fmt.Fprintf(os.Stderr, "%s: %v\n", localizedText(language, "settings: failed to save settings", "settings: не удалось сохранить настройки"), err)
 				return 1
 			}
-			fmt.Printf("language updated: %s\n", args[1])
+			fmt.Printf("%s: %s\n", localizedText(language, "language updated", "язык обновлён"), args[1])
 			return 0
 		case "prefix":
 			if len(args) < 2 {
-				fmt.Fprintln(os.Stderr, "settings: prefix requires a value")
+				fmt.Fprintln(os.Stderr, localizedText(language, "settings: prefix requires a value", "settings: для префикса нужно значение"))
 				return 2
 			}
 			settings.SetCommandPrefix(args[1])
 			if err := state.SaveSettings(settingsPath, settings); err != nil {
-				fmt.Fprintf(os.Stderr, "settings: failed to save settings: %v\n", err)
+				fmt.Fprintf(os.Stderr, "%s: %v\n", localizedText(language, "settings: failed to save settings", "settings: не удалось сохранить настройки"), err)
 				return 1
 			}
-			fmt.Printf("command prefix updated: %s\n", args[1])
+			fmt.Printf("%s: %s\n", localizedText(language, "command prefix updated", "префикс команд обновлён"), args[1])
 			return 0
 		case "hide-command":
 			if len(args) < 2 {
-				fmt.Fprintln(os.Stderr, "settings: hide-command requires a command key")
+				fmt.Fprintln(os.Stderr, localizedText(language, "settings: hide-command requires a command key", "settings: для hide-command нужен ключ команды"))
 				return 2
 			}
 			settings.HideCommand(args[1])
 			if err := state.SaveSettings(settingsPath, settings); err != nil {
-				fmt.Fprintf(os.Stderr, "settings: failed to save settings: %v\n", err)
+				fmt.Fprintf(os.Stderr, "%s: %v\n", localizedText(language, "settings: failed to save settings", "settings: не удалось сохранить настройки"), err)
 				return 1
 			}
-			fmt.Printf("hidden command added: %s\n", args[1])
+			fmt.Printf("%s: %s\n", localizedText(language, "hidden command added", "скрытая команда добавлена"), args[1])
 			return 0
 		case "show-command":
 			if len(args) < 2 {
-				fmt.Fprintln(os.Stderr, "settings: show-command requires a command key")
+				fmt.Fprintln(os.Stderr, localizedText(language, "settings: show-command requires a command key", "settings: для show-command нужен ключ команды"))
 				return 2
 			}
 			settings.ShowCommand(args[1])
 			if err := state.SaveSettings(settingsPath, settings); err != nil {
-				fmt.Fprintf(os.Stderr, "settings: failed to save settings: %v\n", err)
+				fmt.Fprintf(os.Stderr, "%s: %v\n", localizedText(language, "settings: failed to save settings", "settings: не удалось сохранить настройки"), err)
 				return 1
 			}
-			fmt.Printf("hidden command removed: %s\n", args[1])
+			fmt.Printf("%s: %s\n", localizedText(language, "hidden command removed", "скрытая команда убрана"), args[1])
 			return 0
 		}
 	}
@@ -527,25 +527,151 @@ func runSettings(args []string) int {
 	}
 
 	summary := settings.Summary()
-	fmt.Printf("language: %s\n", fallback(summary.Language, "<unset>"))
-	fmt.Printf("command_prefix: %s\n", fallback(summary.CommandPrefix, "<unset>"))
+	fmt.Printf("%s: %s\n", localizedText(language, "language", "язык"), fallback(summary.Language, localizedUnset(language)))
+	fmt.Printf("%s: %s\n", localizedText(language, "command_prefix", "префикс_команд"), fallback(summary.CommandPrefix, localizedUnset(language)))
 	fmt.Printf("hidden_commands: %d\n", len(summary.HiddenCommands))
 	fmt.Printf("selection_fill: %t\n", summary.SelectionHighlightFill)
-	fmt.Printf("selection_preset: %s\n", fallback(summary.SelectionHighlightPreset, "<unset>"))
-	fmt.Printf("selection_color: %s\n", fallback(summary.SelectionHighlightColor, "<unset>"))
-	fmt.Printf("list_primary_color: %s\n", fallback(summary.ListPrimaryColor, "<unset>"))
-	fmt.Printf("list_secondary_color: %s\n", fallback(summary.ListSecondaryColor, "<unset>"))
-	fmt.Printf("reply_text_color: %s\n", fallback(summary.ReplyTextColor, "<unset>"))
-	fmt.Printf("command_text_color: %s\n", fallback(summary.CommandTextColor, "<unset>"))
-	fmt.Printf("reasoning_text_color: %s\n", fallback(summary.ReasoningTextColor, "<unset>"))
-	fmt.Printf("command_output_text_color: %s\n", fallback(summary.CommandOutputTextColor, "<unset>"))
+	fmt.Printf("selection_preset: %s\n", fallback(summary.SelectionHighlightPreset, localizedUnset(language)))
+	fmt.Printf("selection_color: %s\n", fallback(summary.SelectionHighlightColor, localizedUnset(language)))
+	fmt.Printf("list_primary_color: %s\n", fallback(summary.ListPrimaryColor, localizedUnset(language)))
+	fmt.Printf("list_secondary_color: %s\n", fallback(summary.ListSecondaryColor, localizedUnset(language)))
+	fmt.Printf("reply_text_color: %s\n", fallback(summary.ReplyTextColor, localizedUnset(language)))
+	fmt.Printf("command_text_color: %s\n", fallback(summary.CommandTextColor, localizedUnset(language)))
+	fmt.Printf("reasoning_text_color: %s\n", fallback(summary.ReasoningTextColor, localizedUnset(language)))
+	fmt.Printf("command_output_text_color: %s\n", fallback(summary.CommandOutputTextColor, localizedUnset(language)))
 	fmt.Printf("model_presets_enabled: %t\n", summary.ModelPresetsEnabled)
 	fmt.Printf("model_preset_providers: %d\n", len(summary.ModelPresetProviders))
 	fmt.Printf("model_preset_count: %d\n", summary.ModelPresetCount)
+	fmt.Printf("tool_approval_mode: %s\n", fallback(summary.ToolApprovalMode, localizedUnset(language)))
+	fmt.Printf("allowed_tools_count: %d\n", summary.AllowedToolsCount)
+	fmt.Printf("blocked_tools_count: %d\n", summary.BlockedToolsCount)
+	fmt.Printf("block_mutating_tools: %t\n", summary.BlockMutatingTools)
+	fmt.Printf("block_shell_commands: %t\n", summary.BlockShellCommands)
+	fmt.Printf("tool_parallel_enabled: %t\n", summary.ToolParallelEnabled)
+	fmt.Printf("tool_parallelism: %d\n", summary.ToolParallelism)
+	return 0
+}
+
+func runSetlang(args []string) int {
+	jsonOutput := hasFlag(args, "--json")
+	filteredArgs := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--json" {
+			continue
+		}
+		filteredArgs = append(filteredArgs, arg)
+	}
+	args = filteredArgs
+	if shouldOpenInteractiveConfig(args) {
+		return tui.Run(tui.Options{Startup: tui.StartupOptions{Mode: tui.StartupModeLanguage}})
+	}
+	language := currentCatalogLanguage()
+	settingsPath := apphome.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", localizedText(language, "setlang: failed to read settings", "setlang: не удалось прочитать настройки"), err)
+		return 1
+	}
+	if len(args) == 0 {
+		if jsonOutput {
+			return printJSON(map[string]any{"language": fallback(settings.Language, "")})
+		}
+		fmt.Printf("%s: %s\n", localizedText(language, "language", "язык"), fallback(settings.Language, localizedUnset(language)))
+		return 0
+	}
+	value := strings.ToLower(strings.TrimSpace(args[0]))
+	if value != "ru" && value != "en" {
+		fmt.Fprintln(os.Stderr, localizedText(language, "setlang: expected en or ru", "setlang: ожидается en или ru"))
+		return 2
+	}
+	settings.SetLanguage(value)
+	if err := state.SaveSettings(settingsPath, settings); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", localizedText(language, "setlang: failed to save settings", "setlang: не удалось сохранить настройки"), err)
+		return 1
+	}
+	fmt.Printf("%s: %s\n", localizedText(valueCatalogLanguage(value), "language updated", "язык обновлён"), value)
+	return 0
+}
+
+func runPermissions(args []string) int {
+	jsonOutput := hasFlag(args, "--json")
+	filteredArgs := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--json" {
+			continue
+		}
+		filteredArgs = append(filteredArgs, arg)
+	}
+	args = filteredArgs
+	if shouldOpenInteractiveConfig(args) {
+		return tui.Run(tui.Options{Startup: tui.StartupOptions{Mode: tui.StartupModePermissions}})
+	}
+	language := currentCatalogLanguage()
+	settingsPath := apphome.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", localizedText(language, "permissions: failed to read settings", "permissions: не удалось прочитать настройки"), err)
+		return 1
+	}
+	policy := tooling.NormalizeToolPolicy(settings.ToolPolicy)
+	if len(args) > 0 {
+		switch strings.ToLower(strings.TrimSpace(args[0])) {
+		case "auto", "авто":
+			policy.ApprovalMode = tooling.ToolApprovalModeAuto
+		case "require", "требовать":
+			policy.ApprovalMode = tooling.ToolApprovalModeRequire
+		case "deny", "запретить":
+			policy.ApprovalMode = tooling.ToolApprovalModeDeny
+		case "block-mutating", "block-mutating-tools", "блок-записи":
+			policy.BlockMutatingTools = true
+		case "allow-mutating", "разрешить-запись":
+			policy.BlockMutatingTools = false
+		case "block-shell", "block-shell-tools", "блок-shell":
+			policy.BlockShellCommands = true
+		case "allow-shell", "разрешить-shell":
+			policy.BlockShellCommands = false
+		case "enable-parallel", "включить-параллель":
+			policy.Planning.AllowParallel = true
+		case "disable-parallel", "выключить-параллель":
+			policy.Planning.AllowParallel = false
+		case "parallelism", "параллелизм":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, localizedText(language, "permissions: parallelism requires a value", "permissions: для параллелизма нужно значение"))
+				return 2
+			}
+			value, convErr := strconv.Atoi(strings.TrimSpace(args[1]))
+			if convErr != nil || value < 1 {
+				fmt.Fprintln(os.Stderr, localizedText(language, "permissions: parallelism must be a positive integer", "permissions: параллелизм должен быть положительным числом"))
+				return 2
+			}
+			policy.Planning.MaxParallelCalls = value
+			policy.Planning.AllowParallel = value > 1
+		default:
+			fmt.Fprintln(os.Stderr, localizedText(language, "permissions: unsupported action", "permissions: неподдерживаемое действие"))
+			return 2
+		}
+		settings.SetToolPolicy(policy)
+		if err := state.SaveSettings(settingsPath, settings); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", localizedText(language, "permissions: failed to save settings", "permissions: не удалось сохранить настройки"), err)
+			return 1
+		}
+	}
+
+	if jsonOutput {
+		return printJSON(policy)
+	}
+	fmt.Printf("%s: %s\n", localizedText(language, "approval_mode", "режим_подтверждений"), fallback(string(policy.ApprovalMode), localizedUnset(language)))
+	fmt.Printf("%s: %t\n", localizedText(language, "block_mutating_tools", "блок_изменяющих_инструментов"), policy.BlockMutatingTools)
+	fmt.Printf("%s: %t\n", localizedText(language, "block_shell_commands", "блок_shell_команд"), policy.BlockShellCommands)
+	fmt.Printf("%s: %t\n", localizedText(language, "parallel_tools", "параллельные_инструменты"), policy.Planning.AllowParallel)
+	fmt.Printf("%s: %d\n", localizedText(language, "tool_parallelism", "параллелизм_инструментов"), policy.Planning.MaxParallelCalls)
+	fmt.Printf("%s: %d\n", localizedText(language, "allowed_tools", "разрешённые_инструменты"), len(policy.AllowedTools))
+	fmt.Printf("%s: %d\n", localizedText(language, "blocked_tools", "запрещённые_инструменты"), len(policy.BlockedTools))
 	return 0
 }
 
 func runResume(args []string) int {
+	language := currentCatalogLanguage()
 	input, err := parseResumeArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
@@ -555,10 +681,10 @@ func runResume(args []string) int {
 		return runResumeTUI(input, false)
 	}
 
-	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), input.Selector, input.Last)
+	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), input.Selector, input.Last, input.ShowAll, false)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Println("No sessions found.")
+			fmt.Println(localizedText(language, "No sessions found.", "Сессии не найдены."))
 			return 0
 		}
 		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
@@ -579,7 +705,7 @@ func runResume(args []string) int {
 				"messages": messages,
 			})
 		}
-		fmt.Printf("session: %s\n", sessionEntry.Path)
+		fmt.Printf("%s: %s\n", localizedText(language, "session", "сессия"), sessionEntry.Path)
 		for _, message := range messages {
 			text := strings.TrimSpace(message.Text())
 			if text == "" && len(message.ToolCalls) == 0 {
@@ -590,13 +716,13 @@ func runResume(args []string) int {
 				continue
 			}
 			for _, call := range message.ToolCalls {
-				fmt.Printf("[%s] tool_call %s %s %s\n", message.Role, call.ID, call.Function.Name, call.Function.ArgumentsString())
+				fmt.Printf("[%s] %s %s %s %s\n", message.Role, localizedText(language, "tool_call", "вызов_инструмента"), call.ID, call.Function.Name, call.Function.ArgumentsString())
 			}
 		}
 		return 0
 	}
 
-	result, err := taskrun.Run(contextBackground(), taskrun.Options{
+	runOptions := taskrun.Options{
 		Prompt:          input.Prompt,
 		Model:           meta.Model,
 		Profile:         meta.Profile,
@@ -604,7 +730,9 @@ func runResume(args []string) int {
 		ReasoningEffort: meta.Reasoning,
 		History:         messages,
 		JSON:            input.JSONOutput,
-	})
+	}
+	applySettingsToolPolicy(&runOptions)
+	result, err := taskrun.Run(contextBackground(), runOptions)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
 		return 1
@@ -626,6 +754,7 @@ func runResume(args []string) int {
 }
 
 func runFork(args []string) int {
+	language := currentCatalogLanguage()
 	input, err := parseResumeArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
@@ -635,14 +764,14 @@ func runFork(args []string) int {
 		return runResumeTUI(input, true)
 	}
 	if strings.TrimSpace(input.Prompt) == "" {
-		fmt.Fprintln(os.Stderr, "fork: prompt is required")
+		fmt.Fprintln(os.Stderr, localizedText(language, "fork: prompt is required", "fork: нужен запрос"))
 		return 2
 	}
 
-	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), input.Selector, input.Last)
+	sessionEntry, err := resolveResumeSession(apphome.SessionsDir(), input.Selector, input.Last, input.ShowAll, true)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Println("No sessions found.")
+			fmt.Println(localizedText(language, "No sessions found.", "Сессии не найдены."))
 			return 0
 		}
 		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
@@ -655,7 +784,7 @@ func runFork(args []string) int {
 		return 1
 	}
 
-	result, err := taskrun.Run(contextBackground(), taskrun.Options{
+	runOptions := taskrun.Options{
 		Prompt:          input.Prompt,
 		Model:           meta.Model,
 		Profile:         meta.Profile,
@@ -663,7 +792,9 @@ func runFork(args []string) int {
 		ReasoningEffort: meta.Reasoning,
 		History:         messages,
 		JSON:            input.JSONOutput,
-	})
+	}
+	applySettingsToolPolicy(&runOptions)
+	result, err := taskrun.Run(contextBackground(), runOptions)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
 		return 1
@@ -773,33 +904,49 @@ func looksLikeSessionTarget(value string) bool {
 	if strings.ContainsRune(value, os.PathSeparator) {
 		return true
 	}
+	if strings.HasPrefix(value, "rollout-") {
+		return true
+	}
+	if looksLikeOpaqueSessionSelector(value) {
+		return true
+	}
 	return false
 }
 
-func resolveResumeSession(root string, selector string, last bool) (state.SessionEntry, error) {
+func looksLikeOpaqueSessionSelector(value string) bool {
+	if len(value) < 8 {
+		return false
+	}
+	hasDigit := false
+	for _, r := range value {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r == '-' || r == '_':
+		default:
+			return false
+		}
+	}
+	return hasDigit
+}
+
+func resolveResumeSession(root string, selector string, last bool, showAll bool, fork bool) (state.SessionEntry, error) {
 	if strings.TrimSpace(selector) != "" {
-		candidate := selector
-		if !filepath.IsAbs(candidate) {
-			candidate = filepath.Join(root, candidate)
-		}
-		info, err := os.Stat(candidate)
-		if err == nil && !info.IsDir() {
-			return state.SessionEntry{
-				ID:      strings.TrimSuffix(filepath.Base(candidate), filepath.Ext(candidate)),
-				Name:    filepath.Base(candidate),
-				Path:    candidate,
-				RelPath: selector,
-				ModTime: info.ModTime(),
-				Size:    info.Size(),
-			}, nil
-		}
-		return state.SessionEntry{}, os.ErrNotExist
+		return state.ResolveSessionEntry(root, selector)
 	}
 
 	_ = last
-	sessions, err := state.LoadSessions(root, 1)
+	sessions, err := state.LoadSessions(root, 0)
 	if err != nil {
 		return state.SessionEntry{}, err
+	}
+	if !fork && !showAll {
+		currentCWD, err := os.Getwd()
+		if err == nil {
+			sessions = filterSessionsByWorkingDirectory(sessions, currentCWD)
+		}
 	}
 	if len(sessions) == 0 {
 		return state.SessionEntry{}, os.ErrNotExist
@@ -807,32 +954,37 @@ func resolveResumeSession(root string, selector string, last bool) (state.Sessio
 	return sessions[0], nil
 }
 
+func filterSessionsByWorkingDirectory(sessions []state.SessionEntry, cwd string) []state.SessionEntry {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return sessions
+	}
+	filtered := make([]state.SessionEntry, 0, len(sessions))
+	for _, entry := range sessions {
+		entryCWD := strings.TrimSpace(entry.CWD)
+		if entryCWD == "" || entryCWD == cwd {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
 func shouldRunInteractiveResume(input resumeInput) bool {
-	return isInteractiveTerminal() && !input.JSONOutput && strings.TrimSpace(input.Prompt) == ""
+	return isInteractiveTerminal() && !input.JSONOutput
 }
 
 func runResumeTUI(input resumeInput, fork bool) int {
-	startup := tui.StartupOptions{ShowAll: input.ShowAll}
+	startup := tui.StartupOptions{
+		ShowAll:       input.ShowAll,
+		InitialPrompt: strings.TrimSpace(input.Prompt),
+	}
 	switch {
 	case strings.TrimSpace(input.Selector) != "":
-		entry, err := resolveResumeSession(apphome.SessionsDir(), input.Selector, input.Last)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				fmt.Println("No sessions found.")
-				return 0
-			}
-			label := "resume"
-			if fork {
-				label = "fork"
-			}
-			fmt.Fprintf(os.Stderr, "%s: %v\n", label, err)
-			return 1
-		}
-		startup.SessionPath = entry.Path
+		startup.SessionSelector = input.Selector
 		if fork {
-			startup.Mode = tui.StartupModeForkPath
+			startup.Mode = tui.StartupModeForkSelect
 		} else {
-			startup.Mode = tui.StartupModeResumePath
+			startup.Mode = tui.StartupModeResumeSelect
 		}
 	case input.Last:
 		if fork {
@@ -958,7 +1110,52 @@ func parseRunOptions(args []string) (taskrun.Options, error) {
 	if options.Prompt == "" {
 		return taskrun.Options{}, fmt.Errorf("prompt is required")
 	}
+	applySettingsToolPolicy(&options)
 	return options, nil
+}
+
+func applySettingsToolPolicy(options *taskrun.Options) {
+	if options == nil {
+		return
+	}
+	settings, err := loadSettingsOptional(apphome.SettingsPath())
+	if err != nil {
+		options.ToolPolicy = tooling.NormalizeToolPolicy(options.ToolPolicy)
+		return
+	}
+
+	base := tooling.NormalizeToolPolicy(settings.ToolPolicy)
+	override := options.ToolPolicy
+	if tooling.IsZeroToolPolicy(override) {
+		options.ToolPolicy = base
+		return
+	}
+
+	merged := base
+	if override.ApprovalMode != "" {
+		merged.ApprovalMode = override.ApprovalMode
+	}
+	if len(override.AllowedTools) > 0 {
+		merged.AllowedTools = append([]string(nil), override.AllowedTools...)
+	}
+	if len(override.BlockedTools) > 0 {
+		merged.BlockedTools = append([]string(nil), override.BlockedTools...)
+	}
+	if override.BlockMutatingTools {
+		merged.BlockMutatingTools = true
+	}
+	if override.BlockShellCommands {
+		merged.BlockShellCommands = true
+	}
+	if override.Planning != (tooling.PlanningPolicy{}) {
+		if override.Planning.MaxParallelCalls > 0 {
+			merged.Planning.MaxParallelCalls = override.Planning.MaxParallelCalls
+		}
+		if override.Planning.AllowParallel || override.Planning.MaxParallelCalls == 1 {
+			merged.Planning.AllowParallel = override.Planning.AllowParallel
+		}
+	}
+	options.ToolPolicy = tooling.NormalizeToolPolicy(merged)
 }
 
 func consumeToolPolicyFlag(options *taskrun.Options, args []string, index int) (int, bool, error) {
@@ -998,6 +1195,7 @@ func consumeToolPolicyFlag(options *taskrun.Options, args []string, index int) (
 		return index, true, nil
 	case "--no-parallel-tools":
 		options.ToolPolicy.Planning.AllowParallel = false
+		options.ToolPolicy.Planning.MaxParallelCalls = 1
 		return index, true, nil
 	case "--tool-parallelism":
 		value, next, err := takeFlagValue(args, index, "--tool-parallelism")
@@ -1008,6 +1206,7 @@ func consumeToolPolicyFlag(options *taskrun.Options, args []string, index int) (
 		if err != nil || parallelism < 1 {
 			return index, true, fmt.Errorf("--tool-parallelism requires a positive integer")
 		}
+		options.ToolPolicy.Planning.AllowParallel = parallelism > 1
 		options.ToolPolicy.Planning.MaxParallelCalls = parallelism
 		return next, true, nil
 	default:

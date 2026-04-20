@@ -205,7 +205,7 @@ func TestRunWithToolLoop_PreservesToolTraceInHistory(t *testing.T) {
 		}},
 	}
 
-	history, requestMessages, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), nil, progressReporter{})
+	history, requestMessages, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), nil, nil, progressReporter{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestRunWithToolLoop_RequireApprovalBlocksMutatingTool(t *testing.T) {
 
 	policy := tooling.DefaultToolPolicy()
 	policy.ApprovalMode = tooling.ToolApprovalModeRequire
-	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, nil, progressReporter{})
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, nil, nil, progressReporter{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestRunWithToolLoop_ApprovalHandlerExecutesApprovedTool(t *testing.T) {
 	policy := tooling.DefaultToolPolicy()
 	policy.ApprovalMode = tooling.ToolApprovalModeRequire
 	handlerCalls := 0
-	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, nil, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
 		handlerCalls++
 		if request.Name != "write_file" {
 			t.Fatalf("unexpected approval request: %+v", request)
@@ -459,7 +459,7 @@ func TestRunWithToolLoop_ApprovalHandlerDeniesTool(t *testing.T) {
 
 	policy := tooling.DefaultToolPolicy()
 	policy.ApprovalMode = tooling.ToolApprovalModeRequire
-	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, nil, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
 		if request.Name != "write_file" {
 			t.Fatalf("unexpected approval request: %+v", request)
 		}
@@ -547,7 +547,7 @@ func TestRunWithToolLoop_ApprovalHandlerApproveForSessionCachesEquivalentCalls(t
 	policy := tooling.DefaultToolPolicy()
 	policy.ApprovalMode = tooling.ToolApprovalModeRequire
 	handlerCalls := 0
-	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, nil, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
 		handlerCalls++
 		if request.ApprovalID == "" {
 			t.Fatalf("expected stable approval id: %+v", request)
@@ -574,6 +574,129 @@ func TestRunWithToolLoop_ApprovalHandlerApproveForSessionCachesEquivalentCalls(t
 	}
 	if len(history) < 6 {
 		t.Fatalf("unexpected history length: %d", len(history))
+	}
+}
+
+func TestRunWithToolLoop_RequestPermissionsGrantAllowsLaterWrite(t *testing.T) {
+	tempDir := t.TempDir()
+	targetPath := filepath.Join(tempDir, "granted", "out.txt")
+	client := fakeProviderClient{
+		name: "approval-handler-request-permissions",
+		caps: provider.Capabilities{Streaming: true, Tools: true},
+		streamFn: func(_ context.Context, request runtime.Request) (runtime.Stream, error) {
+			toolMessages := 0
+			for _, message := range request.Messages {
+				if message.Role == runtime.RoleTool {
+					toolMessages++
+				}
+			}
+			switch toolMessages {
+			case 0:
+				return &fakeStream{events: []runtime.StreamEvent{
+					{
+						Type: runtime.StreamEventTypeDelta,
+						Delta: runtime.MessageDelta{
+							Role: runtime.RoleAssistant,
+							ToolCalls: []runtime.ToolCallDelta{{
+								ID:        "call_permissions",
+								Type:      runtime.ToolTypeFunction,
+								NameDelta: "request_permissions",
+								ArgumentsDelta: `{"reason":"need write access","permissions":{"writable_roots":["` +
+									tempDir + `"]}}`,
+							}},
+						},
+					},
+					{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonToolCalls},
+					{Type: runtime.StreamEventTypeDone},
+				}}, nil
+			case 1:
+				return &fakeStream{events: []runtime.StreamEvent{
+					{
+						Type: runtime.StreamEventTypeDelta,
+						Delta: runtime.MessageDelta{
+							Role: runtime.RoleAssistant,
+							ToolCalls: []runtime.ToolCallDelta{{
+								ID:             "call_write_granted",
+								Type:           runtime.ToolTypeFunction,
+								NameDelta:      "write_file",
+								ArgumentsDelta: `{"path":"` + targetPath + `","content":"granted"}`,
+							}},
+						},
+					},
+					{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonToolCalls},
+					{Type: runtime.StreamEventTypeDone},
+				}}, nil
+			default:
+				return &fakeStream{events: []runtime.StreamEvent{
+					{
+						Type: runtime.StreamEventTypeDelta,
+						Delta: runtime.MessageDelta{
+							Role:    runtime.RoleAssistant,
+							Content: []runtime.ContentPartDelta{{Type: runtime.ContentPartTypeText, Text: "permission grant reused"}},
+						},
+					},
+					{Type: runtime.StreamEventTypeChoiceDone, FinishReason: runtime.FinishReasonStop},
+					{Type: runtime.StreamEventTypeDone},
+				}}, nil
+			}
+		},
+	}
+
+	request := runtime.Request{
+		Model: "tool-model",
+		Messages: []runtime.Message{
+			runtime.TextMessage(runtime.RoleSystem, "system"),
+			runtime.TextMessage(runtime.RoleUser, "write after requesting permissions"),
+		},
+		Tools: []runtime.ToolDefinition{
+			{
+				Type:     runtime.ToolTypeFunction,
+				Function: runtime.FunctionDefinition{Name: "request_permissions"},
+			},
+			{
+				Type:     runtime.ToolTypeFunction,
+				Function: runtime.FunctionDefinition{Name: "write_file"},
+			},
+		},
+	}
+
+	policy := tooling.DefaultToolPolicy()
+	policy.ApprovalMode = tooling.ToolApprovalModeRequire
+	handlerCalls := 0
+	_, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, nil, func(_ context.Context, request tooling.ApprovalRequest) (ApprovalDecision, error) {
+		handlerCalls++
+		if request.Name != "request_permissions" {
+			t.Fatalf("unexpected approval request: %+v", request)
+		}
+		return ApprovalDecisionApproveForSession, nil
+	}, progressReporter{})
+	if err != nil {
+		t.Fatalf("runWithToolLoop: %v", err)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("approval handler calls = %d, want 1", handlerCalls)
+	}
+	if assistant.Text() != "permission grant reused" {
+		t.Fatalf("assistant text = %q, want permission grant reused", assistant.Text())
+	}
+	if len(reports) != 2 {
+		t.Fatalf("tool report count = %d, want 2", len(reports))
+	}
+	if reports[0].Results[0].Name != "request_permissions" || reports[0].Results[0].Status != tooling.ResultStatusSucceeded {
+		t.Fatalf("unexpected request_permissions report: %+v", reports[0].Results[0])
+	}
+	if reports[0].Results[0].Metadata.PermissionGrantScope != tooling.PermissionGrantScopeSession {
+		t.Fatalf("request grant scope = %s, want %s", reports[0].Results[0].Metadata.PermissionGrantScope, tooling.PermissionGrantScopeSession)
+	}
+	if reports[1].Results[0].Name != "write_file" || reports[1].Results[0].Metadata.ApprovalState != tooling.ToolApprovalStateSessionApproved {
+		t.Fatalf("write_file should reuse session grant: %+v", reports[1].Results[0])
+	}
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("read granted file: %v", err)
+	}
+	if string(content) != "granted" {
+		t.Fatalf("written content = %q, want granted", string(content))
 	}
 }
 
@@ -674,7 +797,7 @@ func TestRunWithToolLoop_EmitsToolPlanningProgress(t *testing.T) {
 		}},
 	}
 
-	_, _, _, _, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), nil, progressReporter{
+	_, _, _, _, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), nil, nil, progressReporter{
 		fn: func(update ProgressUpdate) {
 			updates = append(updates, update)
 		},

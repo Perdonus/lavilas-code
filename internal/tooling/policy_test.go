@@ -22,7 +22,7 @@ func TestDefinitionsWithPolicyFiltersDeniedTools(t *testing.T) {
 		names = append(names, definition.Function.Name)
 	}
 
-	want := []string{"list_directory", "read_file"}
+	want := []string{"list_directory", "read_file", "request_permissions"}
 	if len(names) != len(want) {
 		t.Fatalf("definition count = %d, want %d (%v)", len(names), len(want), names)
 	}
@@ -88,5 +88,29 @@ func TestExecutePlanDefaultPolicyAutoApprovesMutatingTool(t *testing.T) {
 	}
 	if report.Results[0].Status != ResultStatusSucceeded {
 		t.Fatalf("result status = %s, want %s", report.Results[0].Status, ResultStatusSucceeded)
+	}
+}
+
+func TestExecutePlanRequestPermissionsStillRequiresApprovalUnderAutoMode(t *testing.T) {
+	call := toolCall("perm-request", "request_permissions", jsonArgs(map[string]any{
+		"reason": "need write access",
+		"permissions": map[string]any{
+			"writable_roots": []string{"./sandbox"},
+		},
+	}))
+
+	report := ExecutePlan(context.Background(), BuildExecutionPlanWithToolPolicy([]toolruntime.ToolCall{call}, DefaultToolPolicy()))
+
+	if got, want := report.Summary.ApprovalRequiredCount, 1; got != want {
+		t.Fatalf("approval_required_count = %d, want %d", got, want)
+	}
+	if report.Results[0].Status != ResultStatusApprovalRequired {
+		t.Fatalf("result status = %s, want %s", report.Results[0].Status, ResultStatusApprovalRequired)
+	}
+	if report.Results[0].Metadata.Permission != ToolPermissionApprovalRequired {
+		t.Fatalf("permission = %s, want %s", report.Results[0].Metadata.Permission, ToolPermissionApprovalRequired)
+	}
+	if got := report.Results[0].Metadata.RequestedWritableRoots; len(got) != 1 {
+		t.Fatalf("requested writable roots = %v, want one normalized root", got)
 	}
 }

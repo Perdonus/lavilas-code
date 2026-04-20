@@ -1,7 +1,7 @@
 package version
 
 var (
-	Version = "0.1.0-alpha.26"
+	Version = "0.1.0-alpha.27"
 	Commit  = "dev"
 	Channel = "alpha"
 )

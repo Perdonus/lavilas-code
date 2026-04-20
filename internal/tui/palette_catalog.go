@@ -14,6 +14,7 @@ const (
 	PaletteActionOpenMode     PaletteCommandAction = "open_mode"
 	PaletteActionOpenPalette  PaletteCommandAction = "open_palette"
 	PaletteActionNewSession   PaletteCommandAction = "new_session"
+	PaletteActionForkCurrent  PaletteCommandAction = "fork_current"
 	PaletteActionResumeLatest PaletteCommandAction = "resume_latest"
 	PaletteActionForkLatest   PaletteCommandAction = "fork_latest"
 	PaletteActionBrowseResume PaletteCommandAction = "browse_resume"
@@ -91,17 +92,16 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 		},
 		{
 			Key:               "resume_latest",
-			CatalogCommand:    "resume",
 			PresentationOrder: 50,
 			English: PaletteCommandLocale{
-				Slash:       "resume",
+				Slash:       "resume-latest",
 				Title:       "Resume Latest",
 				Description: "Load the latest saved session",
-				Aliases:     []string{"continue"},
+				Aliases:     []string{"continue-latest"},
 				Keywords:    []string{"latest", "session", "resume"},
 			},
 			Russian: PaletteCommandLocale{
-				Slash:       "продолжить",
+				Slash:       "продолжить-последнюю",
 				Title:       "Продолжить последнюю",
 				Description: "Загрузить последнюю сохранённую сессию",
 				Aliases:     []string{"последняя"},
@@ -113,39 +113,37 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 		},
 		{
 			Key:               "fork_latest",
-			CatalogCommand:    "fork",
 			PresentationOrder: 60,
 			English: PaletteCommandLocale{
 				Slash:       "fork",
-				Title:       "Fork Latest",
-				Description: "Load the latest session as a new branch",
+				Title:       "Fork Current Chat",
+				Description: "Branch from the active chat",
 				Aliases:     []string{"branch"},
-				Keywords:    []string{"fork", "latest", "session", "branch"},
+				Keywords:    []string{"fork", "current", "chat", "branch"},
 			},
 			Russian: PaletteCommandLocale{
 				Slash:       "форк",
-				Title:       "Форк последней",
-				Description: "Загрузить последнюю сессию как новую ветку",
+				Title:       "Форк текущего чата",
+				Description: "Ответвить активный чат",
 				Aliases:     []string{"ветка"},
-				Keywords:    []string{"форк", "последняя", "сессия", "ветка"},
+				Keywords:    []string{"форк", "текущий", "чат", "ветка"},
 			},
-			Action:     PaletteActionForkLatest,
+			Action:     PaletteActionForkCurrent,
 			ShowInRoot: true,
 			ShowInHelp: true,
 		},
 		{
 			Key:               "sessions_resume",
+			CatalogCommand:    "resume",
 			PresentationOrder: 70,
 			English: PaletteCommandLocale{
-				Slash:       "sessions",
-				Title:       "Sessions",
+				Title:       "Resume Session",
 				Description: "Browse saved sessions to resume",
 				Aliases:     []string{"history"},
 				Keywords:    []string{"sessions", "history", "resume"},
 			},
 			Russian: PaletteCommandLocale{
-				Slash:       "сессии",
-				Title:       "Сессии",
+				Title:       "Продолжить сессию",
 				Description: "Открыть сохранённые сессии для продолжения",
 				Aliases:     []string{"история"},
 				Keywords:    []string{"сессии", "история", "продолжить"},
@@ -158,13 +156,17 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			Key:               "sessions_fork",
 			PresentationOrder: 80,
 			English: PaletteCommandLocale{
+				Slash:       "fork-sessions",
 				Title:       "Fork Session",
 				Description: "Browse saved sessions to fork",
+				Aliases:     []string{"branch-history"},
 				Keywords:    []string{"history", "saved", "fork", "branch"},
 			},
 			Russian: PaletteCommandLocale{
+				Slash:       "форк-сессии",
 				Title:       "Форк сессии",
 				Description: "Открыть сохранённые сессии для форка",
+				Aliases:     []string{"ветка-истории"},
 				Keywords:    []string{"история", "сохранённые", "форк", "ветка"},
 			},
 			Action:     PaletteActionBrowseFork,
@@ -203,6 +205,24 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			PresentationOrder: 30,
 			Action:            PaletteActionOpenMode,
 			Mode:              PaletteModeSettings,
+			ShowInRoot:        true,
+			ShowInHelp:        true,
+		},
+		{
+			Key:               "setlang",
+			CatalogCommand:    "setlang",
+			PresentationOrder: 95,
+			Action:            PaletteActionOpenMode,
+			Mode:              PaletteModeLanguage,
+			ShowInRoot:        true,
+			ShowInHelp:        true,
+		},
+		{
+			Key:               "permissions",
+			CatalogCommand:    "permissions",
+			PresentationOrder: 97,
+			Action:            PaletteActionOpenMode,
+			Mode:              PaletteModePermissions,
 			ShowInRoot:        true,
 			ShowInHelp:        true,
 		},
@@ -515,6 +535,19 @@ func fallbackPaletteLabel(value string, fallbackValue string) string {
 		return value
 	}
 	return strings.TrimSpace(fallbackValue)
+}
+
+func paletteCommandVisibilityKey(command PaletteCommandSpec) string {
+	if value := strings.TrimSpace(command.CatalogCommand); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(command.English.Slash); value != "" {
+		return normalizePaletteCommandName(value)
+	}
+	if value := strings.TrimSpace(command.Russian.Slash); value != "" {
+		return normalizePaletteCommandName(value)
+	}
+	return normalizePaletteCommandName(command.Key)
 }
 
 func clonePaletteLocale(locale PaletteCommandLocale) PaletteCommandLocale {

@@ -24,10 +24,13 @@ var replAllowedCommands = map[string]struct{}{
 	"profiles":  {},
 	"providers": {},
 	"settings":  {},
+	"setlang":   {},
+	"permissions": {},
 }
 
 type chatSession struct {
 	options       taskrun.Options
+	approvalStore *taskrun.ApprovalSessionStore
 	history       []runtime.Message
 	sessionPath   string
 	language      CatalogLanguage
@@ -64,6 +67,7 @@ func runChat(args []string) int {
 
 	session := chatSession{
 		options:       options,
+		approvalStore: taskrun.NewApprovalSessionStore(),
 		language:      language,
 		commandPrefix: currentCommandPrefix(),
 		commands:      replCommands(),
@@ -172,6 +176,7 @@ func parseChatOptions(args []string) (taskrun.Options, error) {
 		}
 	}
 
+	applySettingsToolPolicy(&options)
 	return options, nil
 }
 
@@ -281,6 +286,7 @@ func (s *chatSession) runPrompt(prompt string) int {
 	options := s.options
 	options.Prompt = prompt
 	options.History = clonePersistedMessages(s.history)
+	options.ApprovalStore = s.approvalStore
 	printer := newStreamPrinter(s.language)
 	if !options.JSON && !options.DisableStreaming {
 		options.OnProgress = printer.Handle

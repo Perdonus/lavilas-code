@@ -18,6 +18,7 @@ type SessionEntry struct {
 	Path    string    `json:"path"`
 	RelPath string    `json:"rel_path"`
 	CWD     string    `json:"cwd,omitempty"`
+	Created time.Time `json:"created_at,omitempty"`
 	ModTime time.Time `json:"mod_time"`
 	Size    int64     `json:"size"`
 }
@@ -79,6 +80,41 @@ func LoadSessions(root string, limit int) ([]SessionEntry, error) {
 		return nil, err
 	}
 	return index.Limit(limit), nil
+}
+
+func ResolveSessionEntry(root string, selector string) (SessionEntry, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return SessionEntry{}, os.ErrNotExist
+	}
+
+	candidate := selector
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(root, candidate)
+	}
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return loadSessionEntry(root, candidate, info)
+	}
+
+	entries, err := LoadSessions(root, 0)
+	if err != nil {
+		return SessionEntry{}, err
+	}
+	for _, entry := range entries {
+		if sessionEntryMatchesSelector(entry, selector) {
+			return entry, nil
+		}
+	}
+	for _, entry := range entries {
+		meta, err := LoadSessionMeta(entry.Path)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(meta.SessionID), selector) {
+			return entry, nil
+		}
+	}
+	return SessionEntry{}, os.ErrNotExist
 }
 
 func LoadSessionIndex(root string) (SessionIndex, error) {
@@ -191,6 +227,10 @@ func buildSessionEntry(root string, path string, info fs.FileInfo, meta SessionM
 		rel = filepath.Base(path)
 	}
 	name := filepath.Base(path)
+	createdAt := info.ModTime()
+	if !meta.CreatedAt.IsZero() {
+		createdAt = meta.CreatedAt.UTC()
+	}
 	modTime := info.ModTime()
 	if !meta.UpdatedAt.IsZero() {
 		modTime = meta.UpdatedAt.UTC()
@@ -201,6 +241,7 @@ func buildSessionEntry(root string, path string, info fs.FileInfo, meta SessionM
 		Path:    path,
 		RelPath: rel,
 		CWD:     meta.CWD,
+		Created: createdAt,
 		ModTime: modTime,
 		Size:    info.Size(),
 	}
@@ -223,6 +264,10 @@ func hydrateSessionIndexEntries(index *SessionIndex) (bool, error) {
 		}
 		if hydrated.CWD != "" {
 			entry.CWD = hydrated.CWD
+			changed = true
+		}
+		if !hydrated.Created.IsZero() && !entry.Created.Equal(hydrated.Created) {
+			entry.Created = hydrated.Created
 			changed = true
 		}
 		if !hydrated.ModTime.IsZero() && !entry.ModTime.Equal(hydrated.ModTime) {
@@ -250,4 +295,31 @@ func sortSessionEntries(entries []SessionEntry) {
 
 func sessionIndexPath(root string) string {
 	return filepath.Join(root, sessionIndexFileName)
+}
+
+func sessionEntryMatchesSelector(entry SessionEntry, selector string) bool {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return false
+	}
+	normalizedSelector := normalizeSessionSelector(selector)
+	for _, candidate := range []string{
+		entry.Path,
+		entry.RelPath,
+		entry.Name,
+		entry.ID,
+	} {
+		if normalizedSelector == normalizeSessionSelector(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeSessionSelector(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return strings.ToLower(filepath.Clean(value))
 }

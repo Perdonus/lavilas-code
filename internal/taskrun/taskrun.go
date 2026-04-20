@@ -30,6 +30,7 @@ type Options struct {
 	ReasoningEffort  string
 	CWD              string
 	ToolPolicy       tooling.ToolPolicy
+	ApprovalStore    *ApprovalSessionStore
 	OnProgress       func(ProgressUpdate)
 	OnApproval       ApprovalHandler
 	JSON             bool
@@ -190,7 +191,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	})
 
 	if len(request.Tools) > 0 {
-		history, requestMessages, response, assistantMessage, events, toolReports, err := runWithToolLoop(ctx, resolved.Client, request, preferStreaming, toolPolicy, options.OnApproval, reporter)
+		history, requestMessages, response, assistantMessage, events, toolReports, err := runWithToolLoop(ctx, resolved.Client, request, preferStreaming, toolPolicy, options.ApprovalStore, options.OnApproval, reporter)
 		if err != nil {
 			reporter.Emit(ProgressUpdate{Kind: ProgressKindTurnFailed, Err: err})
 			return Result{}, err
@@ -268,12 +269,15 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	return result, nil
 }
 
-func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, toolPolicy tooling.ToolPolicy, approvalHandler ApprovalHandler, reporter progressReporter) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, []tooling.ExecutionReport, error) {
+func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, toolPolicy tooling.ToolPolicy, approvalStore *ApprovalSessionStore, approvalHandler ApprovalHandler, reporter progressReporter) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, []tooling.ExecutionReport, error) {
 	const maxRounds = 8
 
 	messages := cloneMessages(request.Messages)
 	baseRequest := request
-	approvalStore := newApprovalSessionStore()
+	if approvalStore == nil {
+		approvalStore = newApprovalSessionStore()
+	}
+	approvalStore.beginTurn()
 	var events []runtime.StreamEvent
 	var toolReports []tooling.ExecutionReport
 
@@ -355,9 +359,20 @@ func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, appro
 			if call.Metadata.Permission != tooling.ToolPermissionApprovalRequired {
 				continue
 			}
-			if approvalStore != nil && approvalStore.IsApprovedForSession(call) {
-				applyApprovalDecision(&resolved.Batches[batchIndex].Calls[callIndex], ApprovalDecisionApproveForSession)
-				continue
+			if approvalStore != nil {
+				match := approvalStore.match(call)
+				if match.allowed {
+					decision := ApprovalDecisionApprove
+					if match.scope == tooling.PermissionGrantScopeSession {
+						decision = ApprovalDecisionApproveForSession
+					}
+					applyApprovalDecision(&resolved.Batches[batchIndex].Calls[callIndex], decision)
+					if len(match.writableRoots) > 0 {
+						resolved.Batches[batchIndex].Calls[callIndex].Metadata.GrantedWritableRoots = append([]string(nil), match.writableRoots...)
+						resolved.Batches[batchIndex].Calls[callIndex].Metadata.PermissionGrantScope = match.scope
+					}
+					continue
+				}
 			}
 			if approvalHandler == nil {
 				continue
@@ -375,8 +390,8 @@ func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, appro
 				return plan, err
 			}
 			applyApprovalDecision(&resolved.Batches[batchIndex].Calls[callIndex], decision)
-			if decision == ApprovalDecisionApproveForSession && approvalStore != nil {
-				approvalStore.RememberApproved(resolved.Batches[batchIndex].Calls[callIndex])
+			if approvalStore != nil {
+				approvalStore.rememberDecision(resolved.Batches[batchIndex].Calls[callIndex], decision)
 			}
 		}
 	}
@@ -384,6 +399,8 @@ func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, appro
 }
 
 func applyApprovalDecision(call *tooling.ToolCallPlan, decision ApprovalDecision) {
+	call.Metadata.GrantedWritableRoots = nil
+	call.Metadata.PermissionGrantScope = ""
 	switch decision {
 	case ApprovalDecisionApproveForSession:
 		call.Metadata.Permission = tooling.ToolPermissionAllowed
@@ -400,7 +417,19 @@ func applyApprovalDecision(call *tooling.ToolCallPlan, decision ApprovalDecision
 		call.Metadata.ToolEnabled = false
 		call.Metadata.ApprovalState = tooling.ToolApprovalStateDenied
 		call.Metadata.PolicyReason = "tool call denied by user"
+		return
 	}
+
+	grant := tooling.PermissionGrantForApprovedCall(*call)
+	if grant.IsEmpty() {
+		return
+	}
+	call.Metadata.GrantedWritableRoots = append([]string(nil), grant.WritableRoots...)
+	if decision == ApprovalDecisionApproveForSession {
+		call.Metadata.PermissionGrantScope = tooling.PermissionGrantScopeSession
+		return
+	}
+	call.Metadata.PermissionGrantScope = tooling.PermissionGrantScopeTurn
 }
 
 func runSingleTurn(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, round int, reporter progressReporter) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -18,6 +19,7 @@ const (
 	formFieldAPIKey      = "api_key"
 	formFieldBaseURL     = "base_url"
 	formFieldPresetName  = "model_preset_name"
+	formFieldCommandPrefix = "command_prefix"
 )
 
 type formPromptKind string
@@ -25,6 +27,7 @@ type formPromptKind string
 const (
 	formPromptAddAccount formPromptKind = "add_account"
 	formPromptPresetName formPromptKind = "preset_name"
+	formPromptCommandPrefix formPromptKind = "command_prefix"
 )
 
 type formPromptField struct {
@@ -162,6 +165,8 @@ func (m *Model) submitFormPrompt(prompt *formPromptState) tea.Cmd {
 		return m.submitAddAccountPrompt(prompt)
 	case formPromptPresetName:
 		return m.submitPresetNamePrompt(prompt)
+	case formPromptCommandPrefix:
+		return m.submitCommandPrefixPrompt(prompt)
 	default:
 		return m.applyFocusState()
 	}
@@ -260,7 +265,7 @@ func (m *Model) submitAddAccountPrompt(prompt *formPromptState) tea.Cmd {
 	}
 	m.syncConfigState(config)
 	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Account added", "Аккаунт добавлен"), profileKey)
-	return m.openPaletteMode(PaletteModeProfiles, false)
+	return m.reopenProfilesPalette()
 }
 
 func (m *Model) openPresetNamePrompt(providerID string, presetKey string, model string, suggestedName string) tea.Cmd {
@@ -303,5 +308,42 @@ func (m *Model) submitPresetNamePrompt(prompt *formPromptState) tea.Cmd {
 		return nil
 	}
 	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Preset saved", "Пресет сохранён"), name)
-	return m.openCurrentProviderPresetEditor(false)
+	return m.reopenCurrentProviderPresetEditor()
+}
+
+func (m *Model) openCommandPrefixPrompt() tea.Cmd {
+	current := commandPrefixFromSettings(m.settingsForUI())
+	return m.showFormPrompt(&formPromptState{
+		Kind:  formPromptCommandPrefix,
+		Title: m.localize("Command Prefix", "Префикс команд"),
+		Fields: []formPromptField{{
+			ID:          formFieldCommandPrefix,
+			Header:      m.localize("Prefix", "Префикс"),
+			Prompt:      m.localize("Enter a single ASCII character without spaces.", "Введите один ASCII-символ без пробелов."),
+			Suggested:   current,
+			Required:    true,
+			Placeholder: current,
+		}},
+	})
+}
+
+func (m *Model) submitCommandPrefixPrompt(prompt *formPromptState) tea.Cmd {
+	prefix := strings.TrimSpace(prompt.Answers[formFieldCommandPrefix])
+	if prefix == "" {
+		prefix = commandPrefixFromSettings(m.settingsForUI())
+	}
+	if len(prefix) != 1 || !isASCII(prefix) || strings.ContainsAny(prefix, " \t\r\n") {
+		m.state.Footer = m.localize("Prefix must be one ASCII character without spaces", "Префикс должен быть одним ASCII-символом без пробелов")
+		return m.openCommandPrefixPrompt()
+	}
+	return m.setSettingsCommandPrefix(prefix)
+}
+
+func isASCII(value string) bool {
+	for _, r := range value {
+		if r > unicode.MaxASCII {
+			return false
+		}
+	}
+	return true
 }

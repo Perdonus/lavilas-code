@@ -49,19 +49,22 @@ func DefaultPlanningPolicy() PlanningPolicy {
 }
 
 type ToolExecutionMetadata struct {
-	SideEffectKind     SideEffectKind    `json:"side_effect_kind"`
-	SandboxHint        SandboxHint       `json:"sandbox_hint"`
-	ApprovalRequired   bool              `json:"approval_required"`
-	Permission         ToolPermission    `json:"permission"`
-	ApprovalState      ToolApprovalState `json:"approval_state"`
-	ToolEnabled        bool              `json:"tool_enabled"`
-	PolicyReason       string            `json:"policy_reason,omitempty"`
-	SupportsParallel   bool              `json:"supports_parallel"`
-	MutatesWorkspace   bool              `json:"mutates_workspace"`
-	SpawnsSubprocess   bool              `json:"spawns_subprocess"`
-	ResourceKeys       []string          `json:"resource_keys,omitempty"`
-	WorkingDirectory   string            `json:"working_directory,omitempty"`
-	ArgumentParseError string            `json:"argument_parse_error,omitempty"`
+	SideEffectKind        SideEffectKind      `json:"side_effect_kind"`
+	SandboxHint           SandboxHint         `json:"sandbox_hint"`
+	ApprovalRequired      bool                `json:"approval_required"`
+	Permission            ToolPermission      `json:"permission"`
+	ApprovalState         ToolApprovalState   `json:"approval_state"`
+	ToolEnabled           bool                `json:"tool_enabled"`
+	PolicyReason          string              `json:"policy_reason,omitempty"`
+	SupportsParallel      bool                `json:"supports_parallel"`
+	MutatesWorkspace      bool                `json:"mutates_workspace"`
+	SpawnsSubprocess      bool                `json:"spawns_subprocess"`
+	ResourceKeys          []string            `json:"resource_keys,omitempty"`
+	WorkingDirectory      string              `json:"working_directory,omitempty"`
+	RequestedWritableRoots []string           `json:"requested_writable_roots,omitempty"`
+	GrantedWritableRoots   []string           `json:"granted_writable_roots,omitempty"`
+	PermissionGrantScope   PermissionGrantScope `json:"permission_grant_scope,omitempty"`
+	ArgumentParseError    string              `json:"argument_parse_error,omitempty"`
 }
 
 type ToolCallPlan struct {
@@ -417,7 +420,12 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 			OutputJSON: rawJSON(output),
 		}
 	}
-	output := dispatch(ctx, call.Name, call.Arguments)
+	output := ""
+	if normalizeToolName(call.Name) == "request_permissions" {
+		output = marshalRequestPermissionsResult(call)
+	} else {
+		output = dispatch(ctx, call.Name, call.Arguments)
+	}
 	finishedAt := time.Now().UTC()
 	return ToolResultEnvelope{
 		Index:      call.Index,
@@ -519,6 +527,19 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 		}
 		metadata.ResourceKeys = []string{"workspace"}
 		return metadata
+	case "request_permissions":
+		grant, _, err := decodeRequestPermissionsArgs(arguments)
+		if err != nil {
+			metadata.ArgumentParseError = err.Error()
+			metadata.ResourceKeys = []string{"permission_request"}
+			return metadata
+		}
+		metadata.RequestedWritableRoots = append([]string(nil), grant.WritableRoots...)
+		metadata.ResourceKeys = make([]string, 0, len(grant.WritableRoots))
+		for _, root := range grant.WritableRoots {
+			metadata.ResourceKeys = append(metadata.ResourceKeys, "writable_root:"+root)
+		}
+		return metadata
 	default:
 		metadata.ResourceKeys = []string{"tool:" + strings.TrimSpace(name)}
 		return metadata
@@ -537,14 +558,17 @@ func marshalPolicyResult(call ToolCallPlan, status ResultStatus) string {
 		"status":      status,
 		"error":       errorMessage,
 		"policy": map[string]any{
-			"permission":        call.Metadata.Permission,
-			"approval_state":    call.Metadata.ApprovalState,
-			"approval_required": call.Metadata.ApprovalRequired,
-			"tool_enabled":      call.Metadata.ToolEnabled,
-			"side_effect_kind":  call.Metadata.SideEffectKind,
-			"sandbox_hint":      call.Metadata.SandboxHint,
-			"resource_keys":     call.Metadata.ResourceKeys,
-			"working_directory": call.Metadata.WorkingDirectory,
+			"permission":               call.Metadata.Permission,
+			"approval_state":           call.Metadata.ApprovalState,
+			"approval_required":        call.Metadata.ApprovalRequired,
+			"tool_enabled":             call.Metadata.ToolEnabled,
+			"side_effect_kind":         call.Metadata.SideEffectKind,
+			"sandbox_hint":             call.Metadata.SandboxHint,
+			"resource_keys":            call.Metadata.ResourceKeys,
+			"working_directory":        call.Metadata.WorkingDirectory,
+			"requested_writable_roots": call.Metadata.RequestedWritableRoots,
+			"granted_writable_roots":   call.Metadata.GrantedWritableRoots,
+			"permission_grant_scope":   call.Metadata.PermissionGrantScope,
 		},
 	})
 }
@@ -688,6 +712,20 @@ func describeApprovalCall(call ToolCallPlan) (string, string) {
 		var args searchArgs
 		if err := decodeArgs(call.Arguments, &args); err == nil {
 			return fmt.Sprintf("search %q", strings.TrimSpace(args.Query)), fmt.Sprintf("path=%s", normalizeResourcePath(args.Path, "."))
+		}
+	case "request_permissions":
+		grant, reason, err := decodeRequestPermissionsArgs(call.Arguments)
+		if err == nil {
+			summary := fmt.Sprintf("request write access to %d path(s)", len(grant.WritableRoots))
+			details := make([]string, 0, 2)
+			if reason != "" {
+				details = append(details, "reason="+reason)
+			}
+			if len(grant.WritableRoots) > 0 {
+				previewCount := minInt(len(grant.WritableRoots), 3)
+				details = append(details, strings.Join(grant.WritableRoots[:previewCount], ", "))
+			}
+			return summary, strings.Join(details, " | ")
 		}
 	}
 	arguments := strings.TrimSpace(string(call.Arguments))

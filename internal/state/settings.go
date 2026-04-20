@@ -5,6 +5,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/Perdonus/lavilas-code/internal/tooling"
 )
 
 type SettingsSummary struct {
@@ -23,6 +25,13 @@ type SettingsSummary struct {
 	ModelPresetsEnabled      bool     `json:"model_presets_enabled"`
 	ModelPresetProviders     []string `json:"model_preset_providers,omitempty"`
 	ModelPresetCount         int      `json:"model_preset_count"`
+	ToolApprovalMode         string   `json:"tool_approval_mode"`
+	AllowedToolsCount        int      `json:"allowed_tools_count"`
+	BlockedToolsCount        int      `json:"blocked_tools_count"`
+	BlockMutatingTools       bool     `json:"block_mutating_tools"`
+	BlockShellCommands       bool     `json:"block_shell_commands"`
+	ToolParallelEnabled      bool     `json:"tool_parallel_enabled"`
+	ToolParallelism          int      `json:"tool_parallelism"`
 }
 
 type Settings struct {
@@ -33,6 +42,7 @@ type Settings struct {
 	SelectionHighlight SelectionHighlightSettings `json:"-"`
 	Colors             SettingsColors             `json:"-"`
 	ModelPresets       ModelPresetSettings        `json:"-"`
+	ToolPolicy         tooling.ToolPolicy         `json:"-"`
 	Extras             map[string]json.RawMessage `json:"-"`
 }
 
@@ -86,6 +96,7 @@ type settingsFile struct {
 	CommandTextColor         string   `json:"command_text_color"`
 	ReasoningTextColor       string   `json:"reasoning_text_color"`
 	CommandOutputTextColor   string   `json:"command_output_text_color"`
+	ToolPolicy               tooling.ToolPolicy `json:"tool_policy"`
 }
 
 func LoadSettings(path string) (Settings, error) {
@@ -130,6 +141,7 @@ func ParseSettings(data []byte) (Settings, error) {
 		"command_text_color",
 		"reasoning_text_color",
 		"command_output_text_color",
+		"tool_policy",
 		"model_presets_enabled",
 		"model_presets",
 	} {
@@ -166,6 +178,7 @@ func ParseSettings(data []byte) (Settings, error) {
 			CommandOutput: file.CommandOutputTextColor,
 		},
 		ModelPresets: modelPresets,
+		ToolPolicy:   cloneToolPolicy(file.ToolPolicy),
 		Extras:       extras,
 	}, nil
 }
@@ -213,11 +226,13 @@ func (s Settings) Clone() Settings {
 			CommandOutput: s.Colors.CommandOutput,
 		},
 		ModelPresets: s.ModelPresets.Clone(),
+		ToolPolicy:   cloneToolPolicy(s.ToolPolicy),
 		Extras:       extras,
 	}
 }
 
 func (s Settings) Summary() SettingsSummary {
+	policy := tooling.NormalizeToolPolicy(s.ToolPolicy)
 	return SettingsSummary{
 		Language:                 s.Language,
 		CommandPrefix:            s.CommandPrefix,
@@ -234,6 +249,13 @@ func (s Settings) Summary() SettingsSummary {
 		ModelPresetsEnabled:      s.ModelPresets.Enabled,
 		ModelPresetProviders:     s.ModelPresets.ProviderNames(),
 		ModelPresetCount:         s.ModelPresets.Count(),
+		ToolApprovalMode:         string(policy.ApprovalMode),
+		AllowedToolsCount:        len(policy.AllowedTools),
+		BlockedToolsCount:        len(policy.BlockedTools),
+		BlockMutatingTools:       policy.BlockMutatingTools,
+		BlockShellCommands:       policy.BlockShellCommands,
+		ToolParallelEnabled:      policy.Planning.AllowParallel,
+		ToolParallelism:          policy.Planning.MaxParallelCalls,
 	}
 }
 
@@ -273,6 +295,10 @@ func (s *Settings) ShowCommand(name string) {
 
 func (s *Settings) SetModelPresetsEnabled(value bool) {
 	s.ModelPresets.Enabled = value
+}
+
+func (s *Settings) SetToolPolicy(policy tooling.ToolPolicy) {
+	s.ToolPolicy = cloneToolPolicy(policy)
 }
 
 func (s Settings) ModelPreset(provider, key string) (ModelPresetConfig, bool) {
@@ -349,6 +375,7 @@ func (s Settings) marshalMap() map[string]any {
 	result["command_text_color"] = s.Colors.CommandText
 	result["reasoning_text_color"] = s.Colors.ReasoningText
 	result["command_output_text_color"] = s.Colors.CommandOutput
+	result["tool_policy"] = tooling.NormalizeToolPolicy(s.ToolPolicy)
 	result["model_presets"] = map[string]any{
 		"enabled":   s.ModelPresets.Enabled,
 		"providers": s.ModelPresets.marshalMap(),
@@ -531,6 +558,17 @@ func providerPresetSettingsFromStored(stored []storedModelPresetJSON) ProviderPr
 		}
 	}
 	return result
+}
+
+func cloneToolPolicy(policy tooling.ToolPolicy) tooling.ToolPolicy {
+	return tooling.ToolPolicy{
+		Planning:           policy.Planning,
+		ApprovalMode:       policy.ApprovalMode,
+		AllowedTools:       cloneStrings(policy.AllowedTools),
+		BlockedTools:       cloneStrings(policy.BlockedTools),
+		BlockMutatingTools: policy.BlockMutatingTools,
+		BlockShellCommands: policy.BlockShellCommands,
+	}
 }
 
 func orderedPresetKeys(p ProviderPresetSettings) []string {

@@ -58,11 +58,12 @@ type approvalRequestedMsg struct {
 }
 
 type sessionLoadedMsg struct {
-	Entry    appstate.SessionEntry
-	Meta     appstate.SessionMeta
-	Messages []runtimeapi.Message
-	Fork     bool
-	Err      error
+	Entry      appstate.SessionEntry
+	Meta       appstate.SessionMeta
+	Messages   []runtimeapi.Message
+	Fork       bool
+	StartFresh bool
+	Err        error
 }
 
 type paletteItemsMsg struct {
@@ -70,6 +71,7 @@ type paletteItemsMsg struct {
 	Items       []PaletteItem
 	Footer      string
 	PushCurrent bool
+	StartFresh  bool
 	Err         error
 }
 
@@ -85,6 +87,13 @@ const (
 	cwdSelectionCurrent
 )
 
+type sessionSortKey string
+
+const (
+	sessionSortUpdated sessionSortKey = "updated"
+	sessionSortCreated sessionSortKey = "created"
+)
+
 type cwdPromptState struct {
 	Pending    sessionLoadedMsg
 	CurrentCWD string
@@ -93,26 +102,29 @@ type cwdPromptState struct {
 }
 
 type Model struct {
-	state        State
-	keys         KeyMap
-	styles       styles
-	viewport     viewport.Model
-	input        textinput.Model
-	paletteInput textinput.Model
-	width        int
-	height       int
-	ready        bool
-	statusWidth  int
-	mainWidth    int
-	layout       apphome.Layout
-	options      taskrun.Options
-	startup      StartupOptions
-	history      []runtimeapi.Message
-	catalog      PaletteCommandCatalog
-	language     commandcatalog.CatalogLanguage
-	approval     *approvalPromptState
-	cwdPrompt    *cwdPromptState
-	formPrompt   *formPromptState
+	state                         State
+	keys                          KeyMap
+	styles                        styles
+	viewport                      viewport.Model
+	input                         textinput.Model
+	paletteInput                  textinput.Model
+	width                         int
+	height                        int
+	ready                         bool
+	statusWidth                   int
+	mainWidth                     int
+	layout                        apphome.Layout
+	options                       taskrun.Options
+	startup                       StartupOptions
+	history                       []runtimeapi.Message
+	catalog                       PaletteCommandCatalog
+	language                      commandcatalog.CatalogLanguage
+	approval                      *approvalPromptState
+	cwdPrompt                     *cwdPromptState
+	formPrompt                    *formPromptState
+	modelSettingsNavigationOrigin ModelSettingsNavigationOrigin
+	sessionSort                   sessionSortKey
+	approvalStore                 *taskrun.ApprovalSessionStore
 }
 
 func New() *Model {
@@ -146,15 +158,18 @@ func NewModel(state State) *Model {
 	paletteInput.SetValue(clonedState.Palette.Query)
 
 	model := &Model{
-		state:        clonedState,
-		keys:         DefaultKeyMap(),
-		styles:       styles,
-		viewport:     viewport.New(0, 0),
-		input:        input,
-		paletteInput: paletteInput,
-		layout:       apphome.DefaultLayout(),
-		catalog:      defaultPaletteCatalog(),
-		language:     language,
+		state:                         clonedState,
+		keys:                          DefaultKeyMap(),
+		styles:                        styles,
+		viewport:                      viewport.New(0, 0),
+		input:                         input,
+		paletteInput:                  paletteInput,
+		layout:                        apphome.DefaultLayout(),
+		catalog:                       defaultPaletteCatalog(),
+		language:                      language,
+		sessionSort:                   sessionSortUpdated,
+		approvalStore:                 taskrun.NewApprovalSessionStore(),
+		modelSettingsNavigationOrigin: ModelSettingsNavigationOriginCommand,
 	}
 	model.state.Language = string(language)
 	model.state.Palette.Context = normalizePaletteContextForLanguage(model.state.Palette.Context, language)
@@ -169,6 +184,10 @@ func newModel(options Options) (*Model, error) {
 	layout := apphome.DefaultLayout()
 	config, _ := loadConfigOptional(layout.ConfigPath())
 	settings, _ := loadSettingsOptional(layout.SettingsPath())
+	if tooling.IsZeroToolPolicy(options.TaskOptions.ToolPolicy) {
+		options.TaskOptions.ToolPolicy = settings.ToolPolicy
+	}
+	options.TaskOptions.ToolPolicy = tooling.NormalizeToolPolicy(options.TaskOptions.ToolPolicy)
 	language := normalizeTUILanguage(settings.Language)
 	state := defaultStateForLanguage(language)
 	state.Title = fmt.Sprintf("Go Lavilas %s", version.Version)
@@ -252,11 +271,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateStatus()
 			return m, nil
 		}
+		if msg.StartFresh {
+			m.resetConversation()
+			return m, m.consumeStartupPrompt()
+		}
 		if m.beginCWDPrompt(msg) {
 			return m, nil
 		}
 		m.applyLoadedSession(msg)
-		return m, nil
+		return m, m.consumeStartupPrompt()
 	case approvalRequestedMsg:
 		m.approval = &approvalPromptState{Request: msg.Request, DecisionCh: msg.DecisionCh}
 		m.state.Footer = m.localize("Approval required", "Нужно подтверждение")
@@ -267,6 +290,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state.Footer = msg.Err.Error()
 			m.updateStatus()
 			return m, nil
+		}
+		if msg.StartFresh {
+			m.resetConversation()
+			return m, m.consumeStartupPrompt()
 		}
 		return m, m.applyPaletteScreen(msg.Mode, msg.Items, msg.Footer, msg.PushCurrent)
 	case tea.KeyMsg:
@@ -464,6 +491,12 @@ func (m *Model) renderApprovalPane() string {
 	}
 	request := m.approval.Request
 	pane := m.styles.paneActive.Width(m.mainWidth)
+	allowOnce := m.localize("allow once", "разрешить один раз")
+	allowSession := m.localize("allow for session", "разрешить на сессию")
+	if strings.EqualFold(strings.TrimSpace(request.Name), "request_permissions") {
+		allowOnce = m.localize("grant for this turn", "дать доступ на этот ход")
+		allowSession = m.localize("grant for this session", "дать доступ на всю сессию")
+	}
 	content := []string{
 		m.styles.paneTitle.Render(m.localize("Approval Required", "Нужно подтверждение")),
 		m.styles.label.Render(m.localize("tool", "инструмент")) + " " + m.styles.value.Render(request.Name),
@@ -477,10 +510,13 @@ func (m *Model) renderApprovalPane() string {
 	if reason := strings.TrimSpace(request.Reason); reason != "" {
 		content = append(content, m.styles.label.Render(m.localize("reason", "причина"))+" "+m.styles.value.Render(reason))
 	}
+	if len(request.Metadata.RequestedWritableRoots) > 0 {
+		content = append(content, m.styles.label.Render(m.localize("writable roots", "доступные для записи пути"))+" "+m.styles.value.Render(strings.Join(request.Metadata.RequestedWritableRoots, ", ")))
+	}
 	content = append(content,
 		"",
-		m.styles.helpKey.Render("Y")+" "+m.styles.helpDesc.Render(m.localize("allow once", "разрешить один раз")),
-		m.styles.helpKey.Render("A")+" "+m.styles.helpDesc.Render(m.localize("allow for session", "разрешить на сессию")),
+		m.styles.helpKey.Render("Y")+" "+m.styles.helpDesc.Render(allowOnce),
+		m.styles.helpKey.Render("A")+" "+m.styles.helpDesc.Render(allowSession),
 		m.styles.helpKey.Render("N")+" "+m.styles.helpDesc.Render(m.localize("deny", "запретить")),
 	)
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, content...))
@@ -718,6 +754,7 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 	options := m.options
 	options.Prompt = prompt
 	options.History = history
+	options.ApprovalStore = m.approvalStore
 	existingSessionPath := m.state.SessionPath
 	layout := m.layout
 
@@ -775,6 +812,10 @@ func (m *Model) applyTaskResult(msg taskFinishedMsg) {
 	m.state.Profile = fallback(msg.Result.Profile, m.state.Profile)
 	m.state.Reasoning = fallback(msg.Result.Reasoning, m.state.Reasoning)
 	m.state.CWD = fallback(strings.TrimSpace(msg.Result.CWD), m.state.CWD)
+	m.options.Model = m.state.Model
+	m.options.Provider = m.state.Provider
+	m.options.Profile = m.state.Profile
+	m.options.ReasoningEffort = m.state.Reasoning
 	m.options.CWD = m.state.CWD
 	m.state.Footer = m.localize("Turn complete", "Ход завершён")
 	if msg.Warn != nil {
@@ -786,6 +827,7 @@ func (m *Model) applyTaskResult(msg taskFinishedMsg) {
 
 func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 	m.history = cloneRuntimeMessages(msg.Messages)
+	m.approvalStore = taskrun.NewApprovalSessionStore()
 	m.state.LiveTurn = nil
 	m.state.Transcript = transcriptFromMessages(msg.Messages, m.language)
 	m.approval = nil
@@ -794,6 +836,10 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 	m.state.Profile = msg.Meta.Profile
 	m.state.Reasoning = msg.Meta.Reasoning
 	m.state.CWD = fallback(strings.TrimSpace(msg.Meta.CWD), m.state.CWD)
+	m.options.Model = m.state.Model
+	m.options.Provider = m.state.Provider
+	m.options.Profile = m.state.Profile
+	m.options.ReasoningEffort = m.state.Reasoning
 	m.options.CWD = m.state.CWD
 	if msg.Fork {
 		m.state.SessionPath = ""
@@ -878,6 +924,9 @@ func (m *Model) openPaletteMode(mode PaletteMode, pushCurrent bool) tea.Cmd {
 
 func (m *Model) applyPaletteScreen(mode PaletteMode, items []PaletteItem, footer string, pushCurrent bool) tea.Cmd {
 	context := m.nextPaletteContext(mode, pushCurrent)
+	if !pushCurrent && len(m.state.Palette.Stack) == 0 {
+		context = m.directPaletteContext(mode)
+	}
 	if pushCurrent && m.state.Palette.Visible {
 		m.pushPaletteView()
 	}
@@ -914,6 +963,9 @@ func (m *Model) navigatePaletteBack() tea.Cmd {
 		return nil
 	}
 	if len(m.state.Palette.Stack) == 0 {
+		if cmd := m.navigatePaletteBranchBack(); cmd != nil {
+			return cmd
+		}
 		return m.closePalette()
 	}
 	last := m.state.Palette.Stack[len(m.state.Palette.Stack)-1]
@@ -932,10 +984,127 @@ func (m *Model) navigatePaletteBack() tea.Cmd {
 	return m.setFocus(FocusPalette)
 }
 
+func (m *Model) setModelSettingsNavigationOrigin(origin ModelSettingsNavigationOrigin) {
+	m.modelSettingsNavigationOrigin = origin
+}
+
+func (m *Model) replacePaletteRoot(mode PaletteMode, items []PaletteItem, footer string) tea.Cmd {
+	m.state.Palette.Stack = nil
+	return m.applyPaletteScreen(mode, items, footer, false)
+}
+
+func (m *Model) modelSettingsBackName() string {
+	if m.modelSettingsNavigationOrigin == ModelSettingsNavigationOriginSettings {
+		return m.localize("Back to Model Settings", "Назад к настройкам моделей")
+	}
+	return m.localize("Back to Chat", "Назад в чат")
+}
+
+func (m *Model) directPaletteContext(mode PaletteMode) PaletteContext {
+	localize := m.localize
+	switch mode {
+	case PaletteModeModelSettings:
+		if m.modelSettingsNavigationOrigin == ModelSettingsNavigationOriginSettings {
+			return PaletteContext{
+				BackTitle:       localize("Back to Settings", "Назад к настройкам"),
+				BackDescription: localize("Return to settings", "Вернуться к настройкам"),
+				BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
+				ReturnFocus:     FocusInput,
+			}
+		}
+	case PaletteModeModel, PaletteModeModelCatalog, PaletteModeProfiles, PaletteModeProviders, PaletteModeModelPresets:
+		if m.modelSettingsNavigationOrigin == ModelSettingsNavigationOriginSettings {
+			return PaletteContext{
+				BackTitle:       m.modelSettingsBackName(),
+				BackDescription: localize("Return to model settings", "Вернуться к настройкам моделей"),
+				BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
+				ReturnFocus:     FocusInput,
+			}
+		}
+	case PaletteModeReasoning:
+		return PaletteContext{
+			BackTitle:       localize("Back to Model Picker", "Назад к выбору модели"),
+			BackDescription: localize("Return to the model picker", "Вернуться к выбору модели"),
+			BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
+			ReturnFocus:     FocusInput,
+		}
+	case PaletteModeProfileActions, PaletteModeAddAccount:
+		return PaletteContext{
+			BackTitle:       localize("Back to Profiles", "Назад к профилям"),
+			BackDescription: localize("Return to profiles", "Вернуться к профилям"),
+			BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
+			ReturnFocus:     FocusInput,
+		}
+	case PaletteModeProviderActions:
+		return PaletteContext{
+			BackTitle:       localize("Back to Providers", "Назад к провайдерам"),
+			BackDescription: localize("Return to providers", "Вернуться к провайдерам"),
+			BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
+			ReturnFocus:     FocusInput,
+		}
+	case PaletteModePresetEditor:
+		return PaletteContext{
+			BackTitle:       localize("Back to Presets", "Назад к пресетам"),
+			BackDescription: localize("Return to model presets", "Вернуться к пресетам моделей"),
+			BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
+			ReturnFocus:     FocusInput,
+		}
+	case PaletteModePresetActions, PaletteModePresetModels:
+		return PaletteContext{
+			BackTitle:       localize("Back to Preset List", "Назад к списку пресетов"),
+			BackDescription: localize("Return to the preset list", "Вернуться к списку пресетов"),
+			BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
+			ReturnFocus:     FocusInput,
+		}
+	case PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
+		return PaletteContext{
+			BackTitle:       localize("Back to Settings", "Назад к настройкам"),
+			BackDescription: localize("Return to settings", "Вернуться к настройкам"),
+			BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
+			ReturnFocus:     FocusInput,
+		}
+	}
+	return defaultPaletteContextForLanguage(m.language)
+}
+
+func (m *Model) navigatePaletteBranchBack() tea.Cmd {
+	switch m.state.Palette.Mode {
+	case PaletteModeModelSettings:
+		if m.modelSettingsNavigationOrigin == ModelSettingsNavigationOriginSettings {
+			return m.openPaletteMode(PaletteModeSettings, false)
+		}
+	case PaletteModeModel, PaletteModeModelCatalog, PaletteModeProfiles, PaletteModeProviders, PaletteModeModelPresets:
+		if m.modelSettingsNavigationOrigin == ModelSettingsNavigationOriginSettings {
+			return m.reopenModelSettingsPalette()
+		}
+	case PaletteModeReasoning:
+		return m.reopenModelPickerPalette()
+	case PaletteModeProfileActions, PaletteModeAddAccount:
+		return m.reopenProfilesPalette()
+	case PaletteModeProviderActions:
+		return m.reopenProvidersPalette()
+	case PaletteModePresetEditor:
+		return m.reopenModelPresetsSettingsPalette()
+	case PaletteModePresetActions, PaletteModePresetModels:
+		return m.reopenCurrentProviderPresetEditor()
+	case PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
+		return m.openPaletteMode(PaletteModeSettings, false)
+	}
+	return nil
+}
+
 func (m *Model) paletteItemsForMode(mode PaletteMode) []PaletteItem {
 	switch mode {
 	case PaletteModeSettings:
 		return m.settingsPaletteItems()
+	case PaletteModeLanguage:
+		return m.languagePaletteItems()
+	case PaletteModeCommandPrefix:
+		return m.commandPrefixPaletteItems()
+	case PaletteModePopupCommands:
+		return m.popupCommandPaletteItems()
+	case PaletteModePermissions:
+		return m.permissionsPaletteItems()
 	case PaletteModeModel:
 		return nil
 	case PaletteModeModelSettings:
@@ -969,10 +1138,11 @@ func (m *Model) settingsPaletteItems() []PaletteItem {
 	settings, _ := loadSettingsOptional(m.layout.SettingsPath())
 	summary := settings.Summary()
 	return []PaletteItem{
-		{Key: "settings.model_settings", Title: m.localize("Model Settings", "Настройки моделей"), Description: m.localize("Models, profiles, and providers", "Модели, профили и провайдеры"), Aliases: []string{"/model", "/profiles", "/providers", "/модель", "/профили", "/провайдеры"}, Keywords: []string{"reasoning", "provider", "profile", "models", "profiles", "providers", "модель", "провайдер", "профиль"}},
-		{Key: "settings.language", Title: m.localize("Language", "Язык"), Description: fallback(summary.Language, localizedUnsetTUI(m.language)), Keywords: []string{"locale", "translation", "язык"}},
+		{Key: "settings.model_settings", Title: m.localize("Model Settings", "Настройки моделей"), Description: m.localize("Models, profiles, presets", "Модели, профили, пресеты"), Aliases: []string{"/model", "/profiles", "/providers", "/модель", "/профили", "/провайдеры"}, Keywords: []string{"reasoning", "provider", "profile", "models", "profiles", "providers", "модель", "провайдер", "профиль"}},
+		{Key: "settings.language", Title: m.localize("Interface Language", "Язык интерфейса"), Description: fallback(summary.Language, localizedUnsetTUI(m.language)), Keywords: []string{"locale", "translation", "язык", "language"}},
 		{Key: "settings.command_prefix", Title: m.localize("Command Prefix", "Префикс команд"), Description: fallback(summary.CommandPrefix, localizedUnsetTUI(m.language)), Keywords: []string{"slash", "prefix", "commands", "префикс"}},
-		{Key: "settings.hidden_commands", Title: m.localize("Hidden Commands", "Скрытые команды"), Description: fmt.Sprintf("%d", len(summary.HiddenCommands)), Keywords: []string{"visibility", "commands", "скрытые"}},
+		{Key: "settings.hidden_commands", Title: m.localize("Popup Commands", "Команды во всплывающем списке"), Description: fmt.Sprintf("%d %s", len(summary.HiddenCommands), m.localize("hidden", "скрыто")), Keywords: []string{"visibility", "commands", "popup", "hidden", "скрытые"}},
+		{Key: "settings.permissions", Title: m.localize("Permissions and Approvals", "Разрешения и подтверждения"), Description: m.toolPolicySummary(), Keywords: []string{"permissions", "approvals", "tools", "sandbox", "разрешения", "подтверждения"}},
 	}
 }
 
@@ -989,7 +1159,7 @@ func (m *Model) rootPaletteItems() []PaletteItem {
 	if m.catalog == nil {
 		m.catalog = defaultPaletteCatalog()
 	}
-	return m.catalog.RootItems(m.language, "")
+	return m.filterHiddenPaletteCommands(m.catalog.RootItems(m.language, ""))
 }
 
 func (m *Model) decoratePaletteItems(mode PaletteMode, items []PaletteItem) []PaletteItem {
@@ -1032,6 +1202,14 @@ func paletteBackCopyForMode(mode PaletteMode, language commandcatalog.CatalogLan
 	switch mode {
 	case PaletteModeSettings:
 		return localize("Back to Settings", "Назад к настройкам"), localize("Return to settings", "Вернуться к настройкам")
+	case PaletteModeLanguage:
+		return localize("Back to Language", "Назад к языку"), localize("Return to language choices", "Вернуться к выбору языка")
+	case PaletteModeCommandPrefix:
+		return localize("Back to Command Prefix", "Назад к префиксу команд"), localize("Return to prefix choices", "Вернуться к выбору префикса")
+	case PaletteModePopupCommands:
+		return localize("Back to Popup Commands", "Назад к списку команд"), localize("Return to popup commands", "Вернуться к списку команд")
+	case PaletteModePermissions:
+		return localize("Back to Permissions", "Назад к разрешениям"), localize("Return to permissions", "Вернуться к разрешениям")
 	case PaletteModeRoot:
 		return localize("Back to Palette", "Назад к палитре"), localize("Return to command palette", "Вернуться к палитре команд")
 	case PaletteModeModelSettings:
@@ -1205,6 +1383,21 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec) tea.Cmd {
 			return m.closePalette()
 		}
 		return nil
+	case PaletteActionForkCurrent:
+		if len(m.history) == 0 && strings.TrimSpace(m.state.SessionPath) == "" {
+			m.state.Footer = m.localize("No active chat to fork", "Нет активного чата для форка")
+			if m.state.Palette.Visible {
+				return m.closePalette()
+			}
+			return nil
+		}
+		m.state.SessionPath = ""
+		m.approvalStore = taskrun.NewApprovalSessionStore()
+		m.state.Footer = m.localize("Forked current chat", "Текущий чат ответвлён")
+		if m.state.Palette.Visible {
+			return m.closePalette()
+		}
+		return nil
 	case PaletteActionResumeLatest:
 		return m.loadLatestSessionCmd(false)
 	case PaletteActionForkLatest:
@@ -1231,13 +1424,17 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec) tea.Cmd {
 	case PaletteActionOpenMode:
 		switch command.Mode {
 		case PaletteModeModel:
+			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
 			return m.openModelPickerPalette(m.state.Palette.Visible)
 		case PaletteModeProfiles:
-			return m.openPaletteMode(PaletteModeProfiles, m.state.Palette.Visible)
+			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
+			return m.openProfilesPalette(m.state.Palette.Visible)
 		case PaletteModeModelPresets:
+			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
 			return m.openModelPresetsSettingsPalette(m.state.Palette.Visible)
 		case PaletteModeProviders:
-			return m.openPaletteMode(PaletteModeProviders, m.state.Palette.Visible)
+			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
+			return m.openProvidersPalette(m.state.Palette.Visible)
 		case PaletteModeSettings:
 			return m.openPaletteMode(PaletteModeSettings, m.state.Palette.Visible)
 		default:
@@ -1278,6 +1475,8 @@ func (m *Model) updatePalette(msg tea.Msg) tea.Cmd {
 		switch {
 		case key.Matches(keyMsg, m.keys.Close):
 			return m.navigatePaletteBack()
+		case keyMsg.Type == tea.KeyTab && (m.state.Palette.Mode == PaletteModeResume || m.state.Palette.Mode == PaletteModeFork):
+			return m.toggleSessionSort()
 		case key.Matches(keyMsg, m.keys.Up):
 			m.movePaletteSelection(-1)
 			return nil
@@ -1323,11 +1522,56 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 		case "__back":
 			return m.navigatePaletteBack()
 		case "settings.model_settings":
+			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginSettings)
 			return m.openModelSettingsPalette(true)
 		case "settings.language":
-			return m.toggleSettingsLanguage()
+			return m.openPaletteMode(PaletteModeLanguage, true)
 		case "settings.command_prefix":
-			return m.cycleCommandPrefix()
+			return m.openCommandPrefixPrompt()
+		case "settings.hidden_commands":
+			return m.openPaletteMode(PaletteModePopupCommands, true)
+		case "settings.permissions":
+			return m.openPaletteMode(PaletteModePermissions, true)
+		}
+		return nil
+	case PaletteModeLanguage:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "settings.language.option":
+			return m.setSettingsLanguage(item.Value)
+		}
+		return nil
+	case PaletteModeCommandPrefix:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "settings.command_prefix.option":
+			return m.setSettingsCommandPrefix(item.Value)
+		}
+		return nil
+	case PaletteModePopupCommands:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "settings.hidden_commands.entry":
+			return m.togglePopupCommandVisibility(item.Value)
+		}
+		return nil
+	case PaletteModePermissions:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "settings.permissions.approval_mode":
+			return m.cycleApprovalMode()
+		case "settings.permissions.block_mutating":
+			return m.toggleBlockMutatingTools()
+		case "settings.permissions.block_shell":
+			return m.toggleBlockShellCommands()
+		case "settings.permissions.parallel":
+			return m.toggleParallelTools()
+		case "settings.permissions.parallelism":
+			return m.cycleToolParallelism()
 		}
 		return nil
 	case PaletteModeModelSettings:
@@ -1335,13 +1579,17 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 		case "__back":
 			return m.navigatePaletteBack()
 		case "model_settings.models":
+			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginSettings)
 			return m.openModelPickerPalette(true)
 		case "model_settings.profiles":
-			return m.openPaletteMode(PaletteModeProfiles, true)
+			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginSettings)
+			return m.openProfilesPalette(true)
 		case "model_settings.presets":
+			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginSettings)
 			return m.openModelPresetsSettingsPalette(true)
 		case "model_settings.providers":
-			return m.openPaletteMode(PaletteModeProviders, true)
+			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginSettings)
+			return m.openProvidersPalette(true)
 		}
 		return nil
 	case PaletteModeModel:
@@ -1673,6 +1921,14 @@ func (m *Model) paletteTitle() string {
 		return m.localize("Choose Preset Model", "Выбор модели для пресета")
 	case PaletteModeSettings:
 		return m.localize("Settings", "Настройки")
+	case PaletteModeLanguage:
+		return m.localize("Interface Language", "Язык интерфейса")
+	case PaletteModeCommandPrefix:
+		return m.localize("Command Prefix", "Префикс команд")
+	case PaletteModePopupCommands:
+		return m.localize("Popup Commands", "Команды во всплывающем списке")
+	case PaletteModePermissions:
+		return m.localize("Permissions and Approvals", "Разрешения и подтверждения")
 	default:
 		return m.localize("Command Palette", "Палитра команд")
 	}
@@ -1680,15 +1936,18 @@ func (m *Model) paletteTitle() string {
 
 func (m *Model) loadLatestSessionCmd(fork bool) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := appstate.LoadSessions(m.layout.SessionsDir(), 1)
+		entries, err := appstate.LoadSessions(m.layout.SessionsDir(), 0)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return sessionLoadedMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
+				return sessionLoadedMsg{StartFresh: true}
 			}
 			return sessionLoadedMsg{Err: err}
 		}
+		if !fork {
+			entries = m.filterSessionEntries(entries)
+		}
 		if len(entries) == 0 {
-			return sessionLoadedMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
+			return sessionLoadedMsg{StartFresh: true}
 		}
 		entry := entries[0]
 		meta, messages, err := appstate.LoadSession(entry.Path)
@@ -1701,50 +1960,80 @@ func (m *Model) loadSessionCmd(path string, fork bool) tea.Cmd {
 		if strings.TrimSpace(path) == "" {
 			return sessionLoadedMsg{Err: errors.New(m.localize("session path is empty", "путь к сессии пуст"))}
 		}
-		entryInfo, err := os.Stat(path)
+		entry, err := appstate.ResolveSessionEntry(m.layout.SessionsDir(), path)
 		if err != nil {
 			return sessionLoadedMsg{Err: err}
 		}
-		entry := buildSessionEntry(m.layout.SessionsDir(), path, entryInfo)
-		meta, messages, err := appstate.LoadSession(path)
+		meta, messages, err := appstate.LoadSession(entry.Path)
+		return sessionLoadedMsg{Entry: entry, Meta: meta, Messages: messages, Fork: fork, Err: err}
+	}
+}
+
+func (m *Model) loadSelectedSessionCmd(selector string, fork bool) tea.Cmd {
+	return func() tea.Msg {
+		entry, err := appstate.ResolveSessionEntry(m.layout.SessionsDir(), selector)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return sessionLoadedMsg{Err: errors.New(m.localize("saved session not found", "сохранённая сессия не найдена"))}
+			}
+			return sessionLoadedMsg{Err: err}
+		}
+		meta, messages, err := appstate.LoadSession(entry.Path)
 		return sessionLoadedMsg{Entry: entry, Meta: meta, Messages: messages, Fork: fork, Err: err}
 	}
 }
 
 func (m *Model) openSessionsPalette(fork bool, pushCurrent bool) tea.Cmd {
+	return m.openSessionsPaletteWithOptions(fork, pushCurrent, false)
+}
+
+func (m *Model) openStartupSessionsPalette(fork bool) tea.Cmd {
+	return m.openSessionsPaletteWithOptions(fork, false, true)
+}
+
+func (m *Model) openSessionsPaletteWithOptions(fork bool, pushCurrent bool, startFreshOnEmpty bool) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := appstate.LoadSessions(m.layout.SessionsDir(), 20)
+		entries, err := appstate.LoadSessions(m.layout.SessionsDir(), 0)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
+				if startFreshOnEmpty {
+					return paletteItemsMsg{StartFresh: true}
+				}
 				return paletteItemsMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
 			}
 			return paletteItemsMsg{Err: err}
 		}
 		if len(entries) == 0 {
+			if startFreshOnEmpty {
+				return paletteItemsMsg{StartFresh: true}
+			}
 			return paletteItemsMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
 		}
-		entries = m.filterSessionEntries(entries)
+		entries, showingAllDirectories := m.filterSessionEntriesWithFallback(entries)
 		if len(entries) == 0 {
+			if startFreshOnEmpty {
+				return paletteItemsMsg{StartFresh: true}
+			}
 			return paletteItemsMsg{Err: errors.New(m.localize("no saved sessions found", "сохранённые сессии не найдены"))}
+		}
+		m.sortSessionEntries(entries)
+		if len(entries) > 50 {
+			entries = entries[:50]
 		}
 		items := make([]PaletteItem, 0, len(entries))
 		for _, entry := range entries {
-			description := entry.RelPath
-			if m.startup.ShowAll && strings.TrimSpace(entry.CWD) != "" {
-				description = fmt.Sprintf("%s · %s", entry.RelPath, entry.CWD)
-			}
 			items = append(items, PaletteItem{
 				Key:         "session",
 				Title:       entry.Name,
-				Description: description,
+				Description: m.sessionPaletteDescription(entry, showingAllDirectories),
 				Value:       entry.Path,
 			})
 		}
 		mode := PaletteModeResume
-		footer := m.localize("Select a saved session to resume", "Выберите сохранённую сессию для продолжения")
+		footer := m.sessionPaletteFooter(false, showingAllDirectories)
 		if fork {
 			mode = PaletteModeFork
-			footer = m.localize("Select a saved session to fork", "Выберите сохранённую сессию для ответвления")
+			footer = m.sessionPaletteFooter(true, showingAllDirectories)
 		}
 		return paletteItemsMsg{Mode: mode, Items: items, Footer: footer, PushCurrent: pushCurrent}
 	}
@@ -1768,16 +2057,90 @@ func (m *Model) filterSessionEntries(entries []appstate.SessionEntry) []appstate
 	return filtered
 }
 
+func (m *Model) filterSessionEntriesWithFallback(entries []appstate.SessionEntry) ([]appstate.SessionEntry, bool) {
+	filtered := m.filterSessionEntries(entries)
+	if len(filtered) > 0 || m.startup.ShowAll {
+		return filtered, m.startup.ShowAll
+	}
+	currentCWD := strings.TrimSpace(m.effectiveWorkingDirectory())
+	if currentCWD == "" || len(entries) == 0 {
+		return filtered, false
+	}
+	return entries, true
+}
+
+func (m *Model) sortSessionEntries(entries []appstate.SessionEntry) {
+	sort.SliceStable(entries, func(left, right int) bool {
+		lhs := entries[left]
+		rhs := entries[right]
+		switch m.sessionSort {
+		case sessionSortCreated:
+			if lhs.Created.Equal(rhs.Created) {
+				if lhs.ModTime.Equal(rhs.ModTime) {
+					return lhs.RelPath < rhs.RelPath
+				}
+				return lhs.ModTime.After(rhs.ModTime)
+			}
+			return lhs.Created.After(rhs.Created)
+		default:
+			if lhs.ModTime.Equal(rhs.ModTime) {
+				return lhs.RelPath < rhs.RelPath
+			}
+			return lhs.ModTime.After(rhs.ModTime)
+		}
+	})
+}
+
+func (m *Model) sessionPaletteDescription(entry appstate.SessionEntry, showingAllDirectories bool) string {
+	parts := []string{entry.RelPath}
+	switch m.sessionSort {
+	case sessionSortCreated:
+		parts = append(parts, fmt.Sprintf("%s %s", m.localize("created", "создан"), formatSessionPaletteTime(entry.Created)))
+	default:
+		parts = append(parts, fmt.Sprintf("%s %s", m.localize("updated", "обновлён"), formatSessionPaletteTime(entry.ModTime)))
+	}
+	if showingAllDirectories && strings.TrimSpace(entry.CWD) != "" {
+		parts = append(parts, entry.CWD)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (m *Model) sessionPaletteFooter(fork bool, showingAllDirectories bool) string {
+	action := m.localize("Select a saved session to resume", "Выберите сохранённую сессию для продолжения")
+	if fork {
+		action = m.localize("Select a saved session to fork", "Выберите сохранённую сессию для ответвления")
+	}
+	sortLabel := m.localize("updated", "обновление")
+	if m.sessionSort == sessionSortCreated {
+		sortLabel = m.localize("created", "создание")
+	}
+	scope := m.localize("current directory", "текущий каталог")
+	if showingAllDirectories {
+		scope = m.localize("all directories", "все каталоги")
+	}
+	return fmt.Sprintf("%s · %s: %s · Tab %s", action, m.localize("sort", "сортировка"), sortLabel, scope)
+}
+
 func (m *Model) startupCmd() tea.Cmd {
 	switch m.startup.Mode {
 	case StartupModeResumePicker:
-		return m.openSessionsPalette(false, false)
+		return m.openStartupSessionsPalette(false)
 	case StartupModeForkPicker:
-		return m.openSessionsPalette(true, false)
+		return m.openStartupSessionsPalette(true)
 	case StartupModeResumeLatest:
 		return m.loadLatestSessionCmd(false)
 	case StartupModeForkLatest:
 		return m.loadLatestSessionCmd(true)
+	case StartupModeResumeSelect:
+		if strings.TrimSpace(m.startup.SessionSelector) == "" {
+			return nil
+		}
+		return m.loadSelectedSessionCmd(m.startup.SessionSelector, false)
+	case StartupModeForkSelect:
+		if strings.TrimSpace(m.startup.SessionSelector) == "" {
+			return nil
+		}
+		return m.loadSelectedSessionCmd(m.startup.SessionSelector, true)
 	case StartupModeResumePath:
 		if strings.TrimSpace(m.startup.SessionPath) == "" {
 			return nil
@@ -1789,13 +2152,20 @@ func (m *Model) startupCmd() tea.Cmd {
 		}
 		return m.loadSessionCmd(m.startup.SessionPath, true)
 	case StartupModeModel:
+		m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
 		return m.openModelPickerPalette(false)
 	case StartupModeProfiles:
-		return m.openPaletteMode(PaletteModeProfiles, false)
+		m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
+		return m.openProfilesPalette(false)
 	case StartupModeProviders:
-		return m.openPaletteMode(PaletteModeProviders, false)
+		m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
+		return m.openProvidersPalette(false)
 	case StartupModeSettings:
 		return m.openPaletteMode(PaletteModeSettings, false)
+	case StartupModeLanguage:
+		return m.openPaletteMode(PaletteModeLanguage, false)
+	case StartupModePermissions:
+		return m.openPaletteMode(PaletteModePermissions, false)
 	default:
 		return nil
 	}
@@ -1803,12 +2173,24 @@ func (m *Model) startupCmd() tea.Cmd {
 
 func (m *Model) resetConversation() {
 	m.history = nil
+	m.approvalStore = taskrun.NewApprovalSessionStore()
 	m.state.LiveTurn = nil
 	m.state.Transcript = defaultStateForLanguage(m.language).Transcript
 	m.state.SessionPath = ""
 	m.state.Footer = m.localize("Started a new session", "Начата новая сессия")
 	m.updateStatus()
 	m.refreshViewport()
+}
+
+func (m *Model) consumeStartupPrompt() tea.Cmd {
+	prompt := strings.TrimSpace(m.startup.InitialPrompt)
+	if prompt == "" {
+		return nil
+	}
+	m.startup.InitialPrompt = ""
+	m.input.SetValue(prompt)
+	m.state.InputDraft = prompt
+	return m.submitInput()
 }
 
 func (m *Model) updateStatus() {
@@ -1883,6 +2265,8 @@ func (m *Model) settingsSummary() string {
 		fmt.Sprintf("- %s: %s", m.localize("language", "язык"), fallback(summary.Language, localizedUnsetTUI(m.language))),
 		fmt.Sprintf("- %s: %s", m.localize("command prefix", "префикс команд"), fallback(summary.CommandPrefix, localizedUnsetTUI(m.language))),
 		fmt.Sprintf("- %s: %d", m.localize("hidden commands", "скрытые команды"), len(summary.HiddenCommands)),
+		fmt.Sprintf("- %s: %s", m.localize("approval mode", "режим подтверждений"), m.approvalModeLabel(tooling.ToolApprovalMode(summary.ToolApprovalMode))),
+		fmt.Sprintf("- %s: %t", m.localize("parallel tools", "параллельные инструменты"), summary.ToolParallelEnabled),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2218,16 +2602,222 @@ func localizedToolStatusTUI(language commandcatalog.CatalogLanguage, status stri
 	}
 }
 
-func (m *Model) toggleSettingsLanguage() tea.Cmd {
+func (m *Model) refreshCurrentPaletteItems() {
+	if !m.state.Palette.Visible {
+		return
+	}
+	if m.state.Palette.Mode == PaletteModeRoot {
+		m.state.Palette.Items = m.rootPaletteItemsForQuery(m.state.Palette.Query)
+	} else {
+		m.state.Palette.Items = m.decoratePaletteItems(m.state.Palette.Mode, m.paletteItemsForMode(m.state.Palette.Mode))
+	}
+	m.state.Palette.Context = normalizePaletteContextForLanguage(m.state.Palette.Context, m.language)
+	m.syncPaletteSelection()
+	m.resize()
+}
+
+func (m *Model) settingsForUI() appstate.Settings {
+	settings, err := loadSettingsOptional(m.layout.SettingsPath())
+	if err != nil {
+		return appstate.Settings{}
+	}
+	return settings
+}
+
+func (m *Model) filterHiddenPaletteCommands(items []PaletteItem) []PaletteItem {
+	settings := m.settingsForUI()
+	if len(settings.HiddenCommands) == 0 || m.catalog == nil {
+		return items
+	}
+	filtered := make([]PaletteItem, 0, len(items))
+	for _, item := range items {
+		spec, ok := m.catalog.LookupByKey(item.Key)
+		if !ok {
+			filtered = append(filtered, item)
+			continue
+		}
+		if settings.HasHiddenCommand(paletteCommandVisibilityKey(spec)) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func (m *Model) languagePaletteItems() []PaletteItem {
+	current := normalizeTUILanguage(m.settingsForUI().Language)
+	return []PaletteItem{
+		{
+			Key:         "settings.language.option",
+			Title:       "English",
+			Description: m.activeChoiceLabel(current == commandcatalog.CatalogLanguageEnglish),
+			Value:       "en",
+			Keywords:    []string{"english", "en", "language", "английский"},
+		},
+		{
+			Key:         "settings.language.option",
+			Title:       "Русский",
+			Description: m.activeChoiceLabel(current == commandcatalog.CatalogLanguageRussian),
+			Value:       "ru",
+			Keywords:    []string{"russian", "ru", "language", "русский"},
+		},
+	}
+}
+
+func (m *Model) commandPrefixPaletteItems() []PaletteItem {
+	current := commandPrefixFromSettings(m.settingsForUI())
+	return []PaletteItem{
+		{
+			Key:         "settings.command_prefix.option",
+			Title:       "/",
+			Description: m.activeChoiceLabel(current == "/"),
+			Value:       "/",
+			Keywords:    []string{"slash", "/", "prefix", "команды"},
+		},
+		{
+			Key:         "settings.command_prefix.option",
+			Title:       ".",
+			Description: m.activeChoiceLabel(current == "."),
+			Value:       ".",
+			Keywords:    []string{"dot", ".", "prefix", "команды"},
+		},
+	}
+}
+
+func (m *Model) popupCommandPaletteItems() []PaletteItem {
+	if m.catalog == nil {
+		m.catalog = defaultPaletteCatalog()
+	}
+	settings := m.settingsForUI()
+	base := m.catalog.RootItems(m.language, "")
+	items := make([]PaletteItem, 0, len(base))
+	for _, item := range base {
+		spec, ok := m.catalog.LookupByKey(item.Key)
+		if !ok {
+			continue
+		}
+		visibilityKey := paletteCommandVisibilityKey(spec)
+		stateLabel := m.localize("visible", "показана")
+		if settings.HasHiddenCommand(visibilityKey) {
+			stateLabel = m.localize("hidden", "скрыта")
+		}
+		description := strings.TrimSpace(item.Description)
+		if description != "" {
+			description = stateLabel + " · " + description
+		} else {
+			description = stateLabel
+		}
+		keywords := append([]string{visibilityKey, stateLabel}, item.Keywords...)
+		items = append(items, PaletteItem{
+			Key:         "settings.hidden_commands.entry",
+			Title:       item.Title,
+			Description: description,
+			Value:       visibilityKey,
+			Aliases:     append([]string{}, item.Aliases...),
+			Keywords:    keywords,
+		})
+	}
+	return items
+}
+
+func (m *Model) permissionsPaletteItems() []PaletteItem {
+	policy := tooling.NormalizeToolPolicy(m.options.ToolPolicy)
+	items := []PaletteItem{
+		{
+			Key:         "settings.permissions.approval_mode",
+			Title:       m.localize("Approval Mode", "Режим подтверждений"),
+			Description: m.approvalModeLabel(policy.ApprovalMode),
+			Keywords:    []string{"approval", "mode", "approvals", "подтверждения"},
+		},
+		{
+			Key:         "settings.permissions.block_mutating",
+			Title:       m.localize("Mutating Tools", "Изменяющие инструменты"),
+			Description: m.onOffLabel(!policy.BlockMutatingTools, m.localize("allowed", "разрешены"), m.localize("blocked", "запрещены")),
+			Keywords:    []string{"mutating", "write", "tools", "изменение", "запись"},
+		},
+		{
+			Key:         "settings.permissions.block_shell",
+			Title:       m.localize("Shell Commands", "Shell-команды"),
+			Description: m.onOffLabel(!policy.BlockShellCommands, m.localize("allowed", "разрешены"), m.localize("blocked", "запрещены")),
+			Keywords:    []string{"shell", "commands", "bash", "sh"},
+		},
+		{
+			Key:         "settings.permissions.parallel",
+			Title:       m.localize("Parallel Tools", "Параллельные инструменты"),
+			Description: m.onOffLabel(policy.Planning.AllowParallel, m.localize("enabled", "включены"), m.localize("disabled", "выключены")),
+			Keywords:    []string{"parallel", "planning", "tools", "параллельно"},
+		},
+		{
+			Key:         "settings.permissions.parallelism",
+			Title:       m.localize("Parallelism", "Параллелизм"),
+			Description: fmt.Sprintf("%d", maxInt(1, policy.Planning.MaxParallelCalls)),
+			Keywords:    []string{"parallel", "planning", "count", "число", "параллельно"},
+		},
+	}
+	items = append(items, m.toolListPaletteItem("settings.permissions.allowed_tools", m.localize("Allowed Tools", "Разрешённые инструменты"), policy.AllowedTools)...)
+	items = append(items, m.toolListPaletteItem("settings.permissions.blocked_tools", m.localize("Blocked Tools", "Запрещённые инструменты"), policy.BlockedTools)...)
+	return items
+}
+
+func (m *Model) toolListPaletteItem(key string, title string, values []string) []PaletteItem {
+	if len(values) == 0 {
+		return []PaletteItem{{
+			Key:         key,
+			Title:       title,
+			Description: localizedUnsetTUI(m.language),
+			Keywords:    []string{title},
+		}}
+	}
+	return []PaletteItem{{
+		Key:         key,
+		Title:       title,
+		Description: strings.Join(values, ", "),
+		Keywords:    append([]string{title}, values...),
+	}}
+}
+
+func (m *Model) activeChoiceLabel(active bool) string {
+	if active {
+		return m.localize("current", "текущая")
+	}
+	return m.localize("available", "доступна")
+}
+
+func (m *Model) onOffLabel(enabled bool, enabledText string, disabledText string) string {
+	if enabled {
+		return enabledText
+	}
+	return disabledText
+}
+
+func (m *Model) toolPolicySummary() string {
+	policy := tooling.NormalizeToolPolicy(m.options.ToolPolicy)
+	mode := m.approvalModeLabel(policy.ApprovalMode)
+	parts := []string{mode}
+	if policy.BlockMutatingTools {
+		parts = append(parts, m.localize("no writes", "без записи"))
+	}
+	if policy.BlockShellCommands {
+		parts = append(parts, m.localize("no shell", "без shell"))
+	}
+	if !policy.Planning.AllowParallel {
+		parts = append(parts, m.localize("sequential", "без параллели"))
+	} else {
+		parts = append(parts, fmt.Sprintf("%s %d", m.localize("parallel", "параллель"), maxInt(1, policy.Planning.MaxParallelCalls)))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (m *Model) setSettingsLanguage(next string) tea.Cmd {
+	next = strings.ToLower(strings.TrimSpace(next))
+	if next != "ru" {
+		next = "en"
+	}
 	settingsPath := m.layout.SettingsPath()
 	settings, err := loadSettingsOptional(settingsPath)
 	if err != nil {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
 		return nil
-	}
-	next := "ru"
-	if normalizeTUILanguage(settings.Language) == commandcatalog.CatalogLanguageRussian {
-		next = "en"
 	}
 	settings.SetLanguage(next)
 	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
@@ -2239,35 +2829,173 @@ func (m *Model) toggleSettingsLanguage() tea.Cmd {
 	m.state.Title = "Go Lavilas"
 	m.input.Placeholder = localizedTextTUI(m.language, "Send a message to the Go alpha session", "Введите сообщение в Go Lavilas alpha")
 	m.paletteInput.Placeholder = localizedTextTUI(m.language, "Type to filter items", "Введите запрос для фильтрации")
-	m.state.Palette.Items = m.settingsPaletteItems()
-	m.state.Palette.Context = normalizePaletteContextForLanguage(m.state.Palette.Context, m.language)
 	m.state.Footer = localizedTextTUI(m.language, "Language updated", "Язык обновлён")
-	m.syncPaletteSelection()
+	m.refreshCurrentPaletteItems()
 	m.updateStatus()
 	m.refreshViewport()
 	return nil
 }
 
-func (m *Model) cycleCommandPrefix() tea.Cmd {
+func (m *Model) approvalModeLabel(mode tooling.ToolApprovalMode) string {
+	switch tooling.NormalizeToolPolicy(tooling.ToolPolicy{ApprovalMode: mode}).ApprovalMode {
+	case tooling.ToolApprovalModeRequire:
+		return m.localize("require", "требовать")
+	case tooling.ToolApprovalModeDeny:
+		return m.localize("deny", "запретить")
+	default:
+		return m.localize("auto", "авто")
+	}
+}
+
+func (m *Model) saveToolPolicy(policy tooling.ToolPolicy, footer string) tea.Cmd {
+	policy = tooling.NormalizeToolPolicy(policy)
 	settingsPath := m.layout.SettingsPath()
 	settings, err := loadSettingsOptional(settingsPath)
 	if err != nil {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
 		return nil
 	}
-	current := commandPrefixFromSettings(settings)
-	next := "."
-	if current == "." {
+	settings.SetToolPolicy(policy)
+	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
+		return nil
+	}
+	m.options.ToolPolicy = policy
+	if strings.TrimSpace(footer) != "" {
+		m.state.Footer = footer
+	}
+	m.refreshCurrentPaletteItems()
+	m.updateStatus()
+	m.refreshViewport()
+	return nil
+}
+
+func (m *Model) cycleApprovalMode() tea.Cmd {
+	policy := tooling.NormalizeToolPolicy(m.options.ToolPolicy)
+	switch policy.ApprovalMode {
+	case tooling.ToolApprovalModeAuto:
+		policy.ApprovalMode = tooling.ToolApprovalModeRequire
+	case tooling.ToolApprovalModeRequire:
+		policy.ApprovalMode = tooling.ToolApprovalModeDeny
+	default:
+		policy.ApprovalMode = tooling.ToolApprovalModeAuto
+	}
+	return m.saveToolPolicy(policy, fmt.Sprintf("%s: %s", m.localize("Approval mode", "Режим подтверждений"), m.approvalModeLabel(policy.ApprovalMode)))
+}
+
+func (m *Model) toggleBlockMutatingTools() tea.Cmd {
+	policy := tooling.NormalizeToolPolicy(m.options.ToolPolicy)
+	policy.BlockMutatingTools = !policy.BlockMutatingTools
+	footer := m.localize("Mutating tools allowed", "Изменяющие инструменты разрешены")
+	if policy.BlockMutatingTools {
+		footer = m.localize("Mutating tools blocked", "Изменяющие инструменты запрещены")
+	}
+	return m.saveToolPolicy(policy, footer)
+}
+
+func (m *Model) toggleBlockShellCommands() tea.Cmd {
+	policy := tooling.NormalizeToolPolicy(m.options.ToolPolicy)
+	policy.BlockShellCommands = !policy.BlockShellCommands
+	footer := m.localize("Shell commands allowed", "Shell-команды разрешены")
+	if policy.BlockShellCommands {
+		footer = m.localize("Shell commands blocked", "Shell-команды запрещены")
+	}
+	return m.saveToolPolicy(policy, footer)
+}
+
+func (m *Model) toggleParallelTools() tea.Cmd {
+	policy := tooling.NormalizeToolPolicy(m.options.ToolPolicy)
+	policy.Planning.AllowParallel = !policy.Planning.AllowParallel
+	if policy.Planning.MaxParallelCalls < 1 {
+		policy.Planning.MaxParallelCalls = tooling.DefaultPlanningPolicy().MaxParallelCalls
+	}
+	footer := m.localize("Parallel tools enabled", "Параллельные инструменты включены")
+	if !policy.Planning.AllowParallel {
+		footer = m.localize("Parallel tools disabled", "Параллельные инструменты выключены")
+	}
+	return m.saveToolPolicy(policy, footer)
+}
+
+func (m *Model) cycleToolParallelism() tea.Cmd {
+	policy := tooling.NormalizeToolPolicy(m.options.ToolPolicy)
+	current := maxInt(1, policy.Planning.MaxParallelCalls)
+	switch current {
+	case 1:
+		policy.Planning.MaxParallelCalls = 2
+	case 2:
+		policy.Planning.MaxParallelCalls = 4
+	case 4:
+		policy.Planning.MaxParallelCalls = 8
+	default:
+		policy.Planning.MaxParallelCalls = 1
+	}
+	policy.Planning.AllowParallel = policy.Planning.MaxParallelCalls > 1
+	return m.saveToolPolicy(policy, fmt.Sprintf("%s: %d", m.localize("Parallelism", "Параллелизм"), policy.Planning.MaxParallelCalls))
+}
+
+func (m *Model) toggleSettingsLanguage() tea.Cmd {
+	next := "ru"
+	if normalizeTUILanguage(m.settingsForUI().Language) == commandcatalog.CatalogLanguageRussian {
+		next = "en"
+	}
+	return m.setSettingsLanguage(next)
+}
+
+func (m *Model) setSettingsCommandPrefix(next string) tea.Cmd {
+	next = strings.TrimSpace(next)
+	if next == "" {
 		next = "/"
+	}
+	settingsPath := m.layout.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
+		return nil
 	}
 	settings.SetCommandPrefix(next)
 	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
 		return nil
 	}
-	m.state.Palette.Items = m.settingsPaletteItems()
 	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Command prefix updated", "Префикс команд обновлён"), next)
-	m.syncPaletteSelection()
+	m.refreshCurrentPaletteItems()
+	m.updateStatus()
+	m.refreshViewport()
+	return nil
+}
+
+func (m *Model) cycleCommandPrefix() tea.Cmd {
+	current := commandPrefixFromSettings(m.settingsForUI())
+	next := "."
+	if current == "." {
+		next = "/"
+	}
+	return m.setSettingsCommandPrefix(next)
+}
+
+func (m *Model) togglePopupCommandVisibility(name string) tea.Cmd {
+	name = normalizePaletteCommandName(name)
+	if name == "" {
+		return nil
+	}
+	settingsPath := m.layout.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
+		return nil
+	}
+	if settings.HasHiddenCommand(name) {
+		settings.ShowCommand(name)
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Shown in popup", "Показана во всплывающем списке"), name)
+	} else {
+		settings.HideCommand(name)
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Hidden from popup", "Скрыта из всплывающего списка"), name)
+	}
+	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
+		return nil
+	}
+	m.refreshCurrentPaletteItems()
 	m.updateStatus()
 	m.refreshViewport()
 	return nil
@@ -2277,7 +3005,7 @@ func (m *Model) rootPaletteItemsForQuery(query string) []PaletteItem {
 	if m.catalog == nil {
 		m.catalog = defaultPaletteCatalog()
 	}
-	return m.catalog.RootItems(m.language, query)
+	return m.filterHiddenPaletteCommands(m.catalog.RootItems(m.language, query))
 }
 
 func (m *Model) resolveSlashCommand(name string) (PaletteCommandSpec, bool) {
@@ -2297,14 +3025,74 @@ func buildSessionEntry(root string, path string, info os.FileInfo) appstate.Sess
 		relPath = filepath.Base(path)
 	}
 	name := filepath.Base(path)
+	meta, _ := appstate.LoadSessionMeta(path)
+	createdAt := info.ModTime()
+	if !meta.CreatedAt.IsZero() {
+		createdAt = meta.CreatedAt.UTC()
+	}
+	modTime := info.ModTime()
+	if !meta.UpdatedAt.IsZero() {
+		modTime = meta.UpdatedAt.UTC()
+	}
 	return appstate.SessionEntry{
 		ID:      strings.TrimSuffix(name, filepath.Ext(name)),
 		Name:    name,
 		Path:    path,
 		RelPath: relPath,
-		ModTime: info.ModTime(),
+		CWD:     meta.CWD,
+		Created: createdAt,
+		ModTime: modTime,
 		Size:    info.Size(),
 	}
+}
+
+func (m *Model) toggleSessionSort() tea.Cmd {
+	if m.sessionSort == sessionSortUpdated {
+		m.sessionSort = sessionSortCreated
+	} else {
+		m.sessionSort = sessionSortUpdated
+	}
+	items, showingAllDirectories, err := m.currentSessionPaletteItems()
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to refresh sessions", "Не удалось обновить сессии"), err)
+		return nil
+	}
+	currentToken := strings.TrimSpace(m.state.Palette.SelectedToken)
+	m.state.Palette.Items = m.decoratePaletteItems(m.state.Palette.Mode, items)
+	m.state.Palette.SelectedToken = currentToken
+	m.state.Footer = m.sessionPaletteFooter(m.state.Palette.Mode == PaletteModeFork, showingAllDirectories)
+	m.syncPaletteSelection()
+	m.refreshViewport()
+	return nil
+}
+
+func (m *Model) currentSessionPaletteItems() ([]PaletteItem, bool, error) {
+	entries, err := appstate.LoadSessions(m.layout.SessionsDir(), 0)
+	if err != nil {
+		return nil, false, err
+	}
+	entries, showingAllDirectories := m.filterSessionEntriesWithFallback(entries)
+	m.sortSessionEntries(entries)
+	if len(entries) > 50 {
+		entries = entries[:50]
+	}
+	items := make([]PaletteItem, 0, len(entries))
+	for _, entry := range entries {
+		items = append(items, PaletteItem{
+			Key:         "session",
+			Title:       entry.Name,
+			Description: m.sessionPaletteDescription(entry, showingAllDirectories),
+			Value:       entry.Path,
+		})
+	}
+	return items, showingAllDirectories, nil
+}
+
+func formatSessionPaletteTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.Local().Format("2006-01-02 15:04")
 }
 
 func loadConfigOptional(path string) (appstate.Config, error) {

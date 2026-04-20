@@ -124,6 +124,15 @@ func currentCatalogLanguage() CatalogLanguage {
 	}
 }
 
+func valueCatalogLanguage(value string) CatalogLanguage {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(commandcatalog.CatalogLanguageRussian), "русский":
+		return CatalogLanguageRussian
+	default:
+		return CatalogLanguageEnglish
+	}
+}
+
 func localizedText(language CatalogLanguage, english string, russian string) string {
 	if language == CatalogLanguageRussian {
 		return russian

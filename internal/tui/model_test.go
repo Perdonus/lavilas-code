@@ -1,6 +1,30 @@
 package tui
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/Perdonus/lavilas-code/internal/apphome"
+	appstate "github.com/Perdonus/lavilas-code/internal/state"
+)
+
+func newIsolatedModel(t *testing.T) *Model {
+	t.Helper()
+	model := NewModel(DefaultState())
+	model.layout = apphome.NewLayout(t.TempDir())
+	return model
+}
+
+func saveTestSettings(t *testing.T, model *Model, settings appstate.Settings) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(model.layout.SettingsPath()), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir): %v", err)
+	}
+	if err := appstate.SaveSettings(model.layout.SettingsPath(), settings); err != nil {
+		t.Fatalf("SaveSettings(): %v", err)
+	}
+}
 
 func TestPaletteBackContextAndReturnFocus(t *testing.T) {
 	model := NewModel(DefaultState())
@@ -121,4 +145,126 @@ func TestProfilesOpenedFromModelSettingsReturnBackToModelSettings(t *testing.T) 
 	if got := model.state.Palette.Mode; got != PaletteModeModelSettings {
 		t.Fatalf("mode after backing out of profiles = %q, want %q", got, PaletteModeModelSettings)
 	}
+}
+
+func TestProfilesReopenedFromSettingsReturnBackToModelSettings(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginSettings)
+
+	if cmd := model.reopenProfilesPalette(); cmd == nil {
+		t.Fatal("reopenProfilesPalette() returned nil")
+	}
+	if got := model.state.Palette.Mode; got != PaletteModeProfiles {
+		t.Fatalf("mode after reopening profiles = %q, want %q", got, PaletteModeProfiles)
+	}
+	if got := model.paletteBackItem().Title; got != "Back to Model Settings" {
+		t.Fatalf("profiles back title = %q, want %q", got, "Back to Model Settings")
+	}
+
+	if cmd := model.navigatePaletteBack(); cmd == nil {
+		t.Fatal("navigatePaletteBack() returned nil")
+	}
+	if got := model.state.Palette.Mode; got != PaletteModeModelSettings {
+		t.Fatalf("mode after backing out of reopened profiles = %q, want %q", got, PaletteModeModelSettings)
+	}
+}
+
+func TestProfilesOpenedFromCommandReturnBackToChat(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
+
+	if cmd := model.openProfilesPalette(false); cmd == nil {
+		t.Fatal("openProfilesPalette(false) returned nil")
+	}
+	if got := model.paletteBackItem().Title; got != "Back to Chat" {
+		t.Fatalf("profiles back title = %q, want %q", got, "Back to Chat")
+	}
+
+	if cmd := model.navigatePaletteBack(); cmd == nil {
+		t.Fatal("navigatePaletteBack() returned nil")
+	}
+	if model.state.Palette.Visible {
+		t.Fatal("palette should be closed after command-origin profiles back")
+	}
+}
+
+func TestPresetEditorReopenedReturnsToModelPresetsSettings(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginSettings)
+	model.state.Palette.Visible = true
+	model.state.Palette.Mode = PaletteModePresetEditor
+	model.state.Palette.Context = model.directPaletteContext(PaletteModePresetEditor)
+	model.state.Palette.Stack = nil
+
+	if cmd := model.navigatePaletteBack(); cmd == nil {
+		t.Fatal("navigatePaletteBack() returned nil")
+	}
+	if got := model.state.Palette.Mode; got != PaletteModeModelPresets {
+		t.Fatalf("mode after preset editor back = %q, want %q", got, PaletteModeModelPresets)
+	}
+	if got := model.paletteBackItem().Title; got != "Back to Model Settings" {
+		t.Fatalf("model presets back title = %q, want %q", got, "Back to Model Settings")
+	}
+}
+
+func TestSettingsLanguagePaletteUpdatesConfiguredLanguage(t *testing.T) {
+	model := newIsolatedModel(t)
+	saveTestSettings(t, model, appstate.Settings{Language: "en"})
+
+	model.openPaletteMode(PaletteModeSettings, false)
+	model.state.Palette.Selected = 2
+	if cmd := model.activatePaletteSelection(); cmd == nil {
+		t.Fatal("activatePaletteSelection(settings.language) returned nil")
+	}
+	if got := model.state.Palette.Mode; got != PaletteModeLanguage {
+		t.Fatalf("mode after opening language picker = %q, want %q", got, PaletteModeLanguage)
+	}
+
+	model.state.Palette.Selected = 2
+	if cmd := model.activatePaletteSelection(); cmd == nil {
+		t.Fatal("activatePaletteSelection(settings.language.option) returned nil")
+	}
+
+	settings, err := loadSettingsOptional(model.layout.SettingsPath())
+	if err != nil {
+		t.Fatalf("loadSettingsOptional(): %v", err)
+	}
+	if got, want := settings.Language, "ru"; got != want {
+		t.Fatalf("settings.Language = %q, want %q", got, want)
+	}
+	if got, want := model.language, normalizeTUILanguage("ru"); got != want {
+		t.Fatalf("model.language = %q, want %q", got, want)
+	}
+}
+
+func TestRootPaletteFiltersHiddenCommands(t *testing.T) {
+	model := newIsolatedModel(t)
+	saveTestSettings(t, model, appstate.Settings{HiddenCommands: []string{"model"}})
+
+	items := model.rootPaletteItemsForQuery("")
+	for _, item := range items {
+		if item.Key == "model" {
+			t.Fatalf("root palette still contains hidden command: %#v", items)
+		}
+	}
+}
+
+func TestPopupCommandsPaletteShowsHiddenState(t *testing.T) {
+	model := newIsolatedModel(t)
+	saveTestSettings(t, model, appstate.Settings{HiddenCommands: []string{"model"}})
+
+	items := model.popupCommandPaletteItems()
+	for _, item := range items {
+		if item.Value != "model" {
+			continue
+		}
+		if got := item.Key; got != "settings.hidden_commands.entry" {
+			t.Fatalf("popup item key = %q, want %q", got, "settings.hidden_commands.entry")
+		}
+		if got := item.Description; got == "" {
+			t.Fatal("popup command description should expose visibility state")
+		}
+		return
+	}
+	t.Fatal("popup commands palette missing model entry")
 }

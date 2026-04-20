@@ -17,6 +17,10 @@ func (m *Model) openModelSettingsPalette(pushCurrent bool) tea.Cmd {
 	return m.applyPaletteScreen(PaletteModeModelSettings, m.modelSettingsPaletteItems(), "", pushCurrent)
 }
 
+func (m *Model) reopenModelSettingsPalette() tea.Cmd {
+	return m.replacePaletteRoot(PaletteModeModelSettings, m.modelSettingsPaletteItems(), "")
+}
+
 func (m *Model) openModelPickerPalette(pushCurrent bool) tea.Cmd {
 	config, err := loadConfigOptional(m.layout.ConfigPath())
 	if err != nil {
@@ -78,6 +82,61 @@ func (m *Model) openModelPickerPalette(pushCurrent bool) tea.Cmd {
 	return m.applyPaletteScreen(PaletteModeModel, items, "", pushCurrent)
 }
 
+func (m *Model) reopenModelPickerPalette() tea.Cmd {
+	config, err := loadConfigOptional(m.layout.ConfigPath())
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load config", "Не удалось загрузить конфиг"), err)
+		return nil
+	}
+	settings, err := loadSettingsOptional(m.layout.SettingsPath())
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
+		return nil
+	}
+	ctx, err := modelcatalog.ResolveRuntimeContext(config, apphome.CodexHome(), "", "")
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load provider catalog", "Не удалось загрузить каталог провайдера"), err)
+		return nil
+	}
+
+	presets := modelcatalog.EffectivePresetChoices(ctx.Catalog, settings, ctx.ProviderID)
+	if !settings.ModelPresets.Enabled || len(presets) == 0 {
+		return m.reopenAllModelsPalette()
+	}
+
+	items := make([]PaletteItem, 0, len(presets)+1)
+	currentModel := strings.TrimSpace(config.EffectiveModel())
+	for _, preset := range presets {
+		title := firstNonEmpty(strings.TrimSpace(preset.Label), strings.TrimSpace(preset.Model.DisplayName), strings.TrimSpace(preset.Model.Slug))
+		descriptionParts := []string{
+			firstNonEmpty(strings.TrimSpace(preset.Model.DisplayName), strings.TrimSpace(preset.Model.Slug)),
+		}
+		if reasoning := strings.TrimSpace(preset.Reasoning); reasoning != "" {
+			descriptionParts = append(descriptionParts, reasoning)
+		}
+		if preset.Source != "" {
+			descriptionParts = append(descriptionParts, preset.Source)
+		}
+		if currentModel == preset.Model.Slug {
+			descriptionParts = append(descriptionParts, m.localize("current", "текущая"))
+		}
+		items = append(items, PaletteItem{
+			Key:         "model.preset",
+			Title:       title,
+			Description: strings.Join(descriptionParts, " · "),
+			Value:       strings.Join([]string{preset.Model.Slug, preset.Reasoning, ctx.ProviderName}, "\n"),
+			Keywords:    []string{preset.Key, preset.Label, preset.Model.Slug, preset.Model.DisplayName, preset.Reasoning},
+		})
+	}
+	items = append(items, PaletteItem{
+		Key:         "model.catalog",
+		Title:       m.localize("All Models", "Все модели"),
+		Description: m.localize("Open the full provider catalog", "Открыть полный каталог провайдера"),
+		Keywords:    []string{"all", "catalog", "models", "full", "все", "каталог", "модели"},
+	})
+	return m.replacePaletteRoot(PaletteModeModel, items, "")
+}
+
 func (m *Model) openAllModelsPalette(pushCurrent bool) tea.Cmd {
 	config, err := loadConfigOptional(m.layout.ConfigPath())
 	if err != nil {
@@ -134,6 +193,58 @@ func (m *Model) openAllModelsPalette(pushCurrent bool) tea.Cmd {
 		})
 	}
 	return m.applyPaletteScreen(PaletteModeModelCatalog, items, "", pushCurrent)
+}
+
+func (m *Model) reopenAllModelsPalette() tea.Cmd {
+	config, err := loadConfigOptional(m.layout.ConfigPath())
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load config", "Не удалось загрузить конфиг"), err)
+		return nil
+	}
+	ctx, err := modelcatalog.ResolveRuntimeContext(config, apphome.CodexHome(), "", "")
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load provider catalog", "Не удалось загрузить каталог провайдера"), err)
+		return nil
+	}
+	models := ctx.Catalog.Models()
+	if len(models) == 0 {
+		m.state.Footer = m.localize("No models found for the active provider", "Для активного провайдера модели не найдены")
+		return nil
+	}
+	sort.SliceStable(models, func(left, right int) bool {
+		if models[left].Priority == models[right].Priority {
+			return firstNonEmpty(models[left].DisplayName, models[left].Slug) < firstNonEmpty(models[right].DisplayName, models[right].Slug)
+		}
+		if models[left].Priority == 0 {
+			return false
+		}
+		if models[right].Priority == 0 {
+			return true
+		}
+		return models[left].Priority < models[right].Priority
+	})
+	currentModel := strings.TrimSpace(config.EffectiveModel())
+	items := make([]PaletteItem, 0, len(models))
+	for _, model := range models {
+		descriptionParts := []string{}
+		if text := strings.TrimSpace(model.Description); text != "" {
+			descriptionParts = append(descriptionParts, text)
+		}
+		if reasoning := strings.TrimSpace(model.DefaultReasoningLevel); reasoning != "" {
+			descriptionParts = append(descriptionParts, reasoning)
+		}
+		if currentModel == model.Slug {
+			descriptionParts = append(descriptionParts, m.localize("current", "текущая"))
+		}
+		items = append(items, PaletteItem{
+			Key:         "model.catalog.entry",
+			Title:       firstNonEmpty(strings.TrimSpace(model.DisplayName), strings.TrimSpace(model.Slug)),
+			Description: strings.Join(descriptionParts, " · "),
+			Value:       strings.Join([]string{model.Slug, ctx.ProviderName}, "\n"),
+			Keywords:    []string{model.Slug, model.DisplayName, model.Description, model.DefaultReasoningLevel},
+		})
+	}
+	return m.replacePaletteRoot(PaletteModeModelCatalog, items, "")
 }
 
 func (m *Model) openReasoningPalette(model modelcatalog.Model, providerName string, pushCurrent bool) tea.Cmd {
@@ -247,6 +358,14 @@ func (m *Model) profilesManagerItems() []PaletteItem {
 	return items
 }
 
+func (m *Model) openProfilesPalette(pushCurrent bool) tea.Cmd {
+	return m.applyPaletteScreen(PaletteModeProfiles, m.profilesManagerItems(), "", pushCurrent)
+}
+
+func (m *Model) reopenProfilesPalette() tea.Cmd {
+	return m.replacePaletteRoot(PaletteModeProfiles, m.profilesManagerItems(), "")
+}
+
 func (m *Model) openProfileActionsPalette(profileName string, pushCurrent bool) tea.Cmd {
 	recordPath := accountprofiles.StoredProfilePath(apphome.CodexHome(), profileName)
 	stored, err := accountprofiles.LoadStoredProfile(recordPath)
@@ -339,6 +458,14 @@ func (m *Model) providersManagerItems() []PaletteItem {
 	return items
 }
 
+func (m *Model) openProvidersPalette(pushCurrent bool) tea.Cmd {
+	return m.applyPaletteScreen(PaletteModeProviders, m.providersManagerItems(), "", pushCurrent)
+}
+
+func (m *Model) reopenProvidersPalette() tea.Cmd {
+	return m.replacePaletteRoot(PaletteModeProviders, m.providersManagerItems(), "")
+}
+
 func (m *Model) openProviderActionsPalette(providerName string, pushCurrent bool) tea.Cmd {
 	config, err := loadConfigOptional(m.layout.ConfigPath())
 	if err != nil {
@@ -399,6 +526,14 @@ func (m *Model) activateProfile(profileName string) tea.Cmd {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load profile", "Не удалось загрузить профиль"), err)
 		return nil
 	}
+	if !accountprofiles.StoredProfileHasSavedKey(stored) {
+		m.state.Footer = fmt.Sprintf(
+			"%s: %s",
+			m.localize("Profile has no saved API key", "У профиля нет сохранённого API-ключа"),
+			profileName,
+		)
+		return nil
+	}
 	configPath := m.layout.ConfigPath()
 	config, err := loadConfigOptional(configPath)
 	if err != nil {
@@ -439,7 +574,7 @@ func (m *Model) deleteProfile(profileName string) tea.Cmd {
 	}
 	m.syncConfigState(config)
 	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Deleted profile", "Профиль удалён"), profileName)
-	return m.openPaletteMode(PaletteModeProfiles, false)
+	return m.reopenProfilesPalette()
 }
 
 func (m *Model) activateProvider(providerName string) tea.Cmd {

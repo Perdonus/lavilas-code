@@ -186,6 +186,28 @@ func TestBuildExecutionPlanTracksPatchTargetsPerFile(t *testing.T) {
 	}
 }
 
+func TestBuildExecutionPlanTracksRequestPermissionsWritableRoots(t *testing.T) {
+	plan := BuildExecutionPlanWithToolPolicy([]toolruntime.ToolCall{
+		toolCall("perm-a", "request_permissions", jsonArgs(map[string]any{
+			"reason": "need a sandbox root",
+			"permissions": map[string]any{
+				"writable_roots": []string{"./sandbox", "./sandbox/nested"},
+			},
+		})),
+	}, ToolPolicy{ApprovalMode: ToolApprovalModeRequire})
+
+	call := plan.Batches[0].Calls[0]
+	if got, want := len(call.Metadata.RequestedWritableRoots), 2; got != want {
+		t.Fatalf("requested writable roots = %d, want %d (%v)", got, want, call.Metadata.RequestedWritableRoots)
+	}
+	if got, want := len(call.ApprovalKeys), 2; got != want {
+		t.Fatalf("approval key count = %d, want %d (%v)", got, want, call.ApprovalKeys)
+	}
+	if call.Metadata.Permission != ToolPermissionApprovalRequired {
+		t.Fatalf("permission = %s, want %s", call.Metadata.Permission, ToolPermissionApprovalRequired)
+	}
+}
+
 func toolCall(id string, name string, arguments string) toolruntime.ToolCall {
 	return toolruntime.ToolCall{
 		ID:   id,

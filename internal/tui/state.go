@@ -10,12 +10,18 @@ import (
 type PaneFocus string
 
 type PaletteMode string
+type ModelSettingsNavigationOrigin string
 
 const (
 	FocusStatus     PaneFocus = "status"
 	FocusTranscript PaneFocus = "transcript"
 	FocusInput      PaneFocus = "input"
 	FocusPalette    PaneFocus = "palette"
+)
+
+const (
+	ModelSettingsNavigationOriginCommand  ModelSettingsNavigationOrigin = "command"
+	ModelSettingsNavigationOriginSettings ModelSettingsNavigationOrigin = "settings"
 )
 
 const (
@@ -36,6 +42,10 @@ const (
 	PaletteModePresetActions   PaletteMode = "preset_actions"
 	PaletteModePresetModels    PaletteMode = "preset_models"
 	PaletteModeSettings        PaletteMode = "settings"
+	PaletteModeLanguage        PaletteMode = "language"
+	PaletteModeCommandPrefix   PaletteMode = "command_prefix"
+	PaletteModePopupCommands   PaletteMode = "popup_commands"
+	PaletteModePermissions     PaletteMode = "permissions"
 )
 
 type State struct {
@@ -232,7 +242,11 @@ func normalizePaletteMode(value PaletteMode) PaletteMode {
 		PaletteModePresetEditor,
 		PaletteModePresetActions,
 		PaletteModePresetModels,
-		PaletteModeSettings:
+		PaletteModeSettings,
+		PaletteModeLanguage,
+		PaletteModeCommandPrefix,
+		PaletteModePopupCommands,
+		PaletteModePermissions:
 		return value
 	default:
 		return PaletteModeRoot

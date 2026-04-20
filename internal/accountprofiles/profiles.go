@@ -47,6 +47,15 @@ type StoredProfileRecord struct {
 	Profile StoredProfile
 }
 
+type StoredProfileStatus struct {
+	RecordKey       string
+	ConfigProfile   string
+	ProviderKey     string
+	CatalogPath     string
+	HasSavedAPIKey  bool
+	BuiltinProvider bool
+}
+
 var providerSpecs = []ProviderSpec{
 	{
 		ID:                "codex_oauth",
@@ -336,13 +345,16 @@ func DefaultSidecarPath(codexHome, profileKey string) string {
 	return filepath.Join(ProfilesDir(codexHome), strings.TrimSpace(profileKey)+".models.json")
 }
 
-func derivedSidecarPath(profilePath, profileKey string) string {
-	base := filepath.Dir(profilePath)
-	stem := strings.TrimSpace(profileKey)
-	if stem == "" {
-		filename := filepath.Base(profilePath)
-		stem = strings.TrimSuffix(filename, filepath.Ext(filename))
+func derivedSidecarPath(profilePath string) string {
+	if strings.TrimSpace(profilePath) == "" {
+		return ""
 	}
+	base := filepath.Dir(profilePath)
+	filename := filepath.Base(profilePath)
+	if filename == "." {
+		return ""
+	}
+	stem := strings.TrimSpace(strings.TrimSuffix(filename, filepath.Ext(filename)))
 	if strings.TrimSpace(stem) == "" {
 		return ""
 	}
@@ -358,15 +370,102 @@ func ResolveSidecarPath(codexHome, profilePath string, stored StoredProfile) str
 			return filepath.Clean(custom)
 		}
 		base := filepath.Dir(profilePath)
-		if base == "" {
+		if base == "." || base == "" {
 			base = ProfilesDir(codexHome)
 		}
 		return filepath.Clean(filepath.Join(base, custom))
 	}
-	if derived := derivedSidecarPath(profilePath, stored.ConfigProfile); strings.TrimSpace(derived) != "" {
+	if derived := derivedSidecarPath(profilePath); strings.TrimSpace(derived) != "" {
 		return filepath.Clean(derived)
 	}
-	return DefaultSidecarPath(codexHome, stored.ConfigProfile)
+	if configProfile := StoredProfileConfigKey("", stored); configProfile != "" && strings.TrimSpace(codexHome) != "" {
+		return DefaultSidecarPath(codexHome, configProfile)
+	}
+	return ""
+}
+
+func StoredProfileConfigKey(profileKey string, stored StoredProfile) string {
+	return firstNonEmpty(strings.TrimSpace(stored.ConfigProfile), strings.TrimSpace(profileKey))
+}
+
+func StoredProfileProviderKey(profileKey string, stored StoredProfile) string {
+	normalized := normalizeStoredProfile(profileKey, stored)
+	if spec, ok := Provider(normalized.Provider); ok && strings.TrimSpace(spec.BuiltinProviderID) != "" {
+		return spec.BuiltinProviderID
+	}
+	return firstNonEmpty(
+		strings.TrimSpace(normalized.ModelProviderID),
+		strings.TrimSpace(profileKey)+"-provider",
+		StoredProfileConfigKey(profileKey, normalized)+"-provider",
+	)
+}
+
+func StoredProfileCatalogPath(codexHome, profileKey string, stored StoredProfile) string {
+	normalized := normalizeStoredProfile(profileKey, stored)
+	path := ResolveSidecarPath(codexHome, StoredProfilePath(codexHome, profileKey), normalized)
+	if strings.TrimSpace(path) != "" {
+		return path
+	}
+	if strings.TrimSpace(profileKey) != "" {
+		return DefaultSidecarPath(codexHome, profileKey)
+	}
+	return ""
+}
+
+func StoredProfileHasSavedKey(stored StoredProfile) bool {
+	if strings.TrimSpace(stored.ExperimentalBearerToken) != "" {
+		return true
+	}
+	spec, ok := Provider(stored.Provider)
+	return ok && spec.APIKeyOptional
+}
+
+func StoredProfileStatusFor(codexHome, profileKey string, stored StoredProfile) StoredProfileStatus {
+	normalized := normalizeStoredProfile(profileKey, stored)
+	spec, ok := Provider(normalized.Provider)
+	return StoredProfileStatus{
+		RecordKey:       strings.TrimSpace(profileKey),
+		ConfigProfile:   StoredProfileConfigKey(profileKey, normalized),
+		ProviderKey:     StoredProfileProviderKey(profileKey, normalized),
+		CatalogPath:     StoredProfileCatalogPath(codexHome, profileKey, normalized),
+		HasSavedAPIKey:  StoredProfileHasSavedKey(normalized),
+		BuiltinProvider: ok && strings.TrimSpace(spec.BuiltinProviderID) != "",
+	}
+}
+
+func normalizeStoredProfile(profileKey string, stored StoredProfile) StoredProfile {
+	normalized := StoredProfile{
+		Provider:                strings.TrimSpace(stored.Provider),
+		Name:                    strings.TrimSpace(stored.Name),
+		BaseURL:                 strings.TrimSpace(stored.BaseURL),
+		Model:                   strings.TrimSpace(stored.Model),
+		ModelCatalogJSON:        strings.TrimSpace(stored.ModelCatalogJSON),
+		ConfigProfile:           strings.TrimSpace(stored.ConfigProfile),
+		ModelProviderID:         strings.TrimSpace(stored.ModelProviderID),
+		ExperimentalBearerToken: strings.TrimSpace(stored.ExperimentalBearerToken),
+	}
+	if normalized.ConfigProfile == "" {
+		normalized.ConfigProfile = strings.TrimSpace(profileKey)
+	}
+	if normalized.Name == "" {
+		normalized.Name = firstNonEmpty(normalized.ConfigProfile, strings.TrimSpace(profileKey))
+	}
+	if spec, ok := Provider(normalized.Provider); ok {
+		normalized.Provider = spec.ID
+		if normalized.Model == "" {
+			normalized.Model = DefaultProfileModel(firstNonEmpty(spec.BuiltinProviderID, spec.ID))
+		}
+		if strings.TrimSpace(spec.BuiltinProviderID) != "" {
+			normalized.BaseURL = ""
+			normalized.ExperimentalBearerToken = ""
+			normalized.ModelProviderID = spec.BuiltinProviderID
+		}
+		return normalized
+	}
+	if normalized.Model == "" {
+		normalized.Model = DefaultProfileModel(normalized.Provider)
+	}
+	return normalized
 }
 
 func CreateOrUpdateStoredProfile(codexHome, provider, profileName string, baseURL, apiKey *string) (string, StoredProfile, string, error) {
@@ -381,24 +480,22 @@ func CreateOrUpdateStoredProfile(codexHome, provider, profileName string, baseUR
 		return "", StoredProfile{}, "", fmt.Errorf("provider %q requires an API key", provider)
 	}
 	profileKey := SanitizeProfileKey(profileName, spec.ID)
+	modelSeedProvider := firstNonEmpty(strings.TrimSpace(spec.BuiltinProviderID), spec.ID)
 	stored := StoredProfile{
-		Provider:      spec.ID,
-		Name:          strings.TrimSpace(profileName),
-		BaseURL:       strings.TrimSpace(firstNonEmpty(deref(baseURL), spec.BaseURL)),
-		Model:         DefaultProfileModel(spec.ID),
-		ConfigProfile: profileKey,
-	}
-	if stored.Name == "" {
-		stored.Name = profileKey
+		Provider:         spec.ID,
+		Name:             strings.TrimSpace(profileName),
+		Model:            DefaultProfileModel(modelSeedProvider),
+		ModelCatalogJSON: DefaultSidecarPath(codexHome, profileKey),
+		ConfigProfile:    profileKey,
 	}
 	if spec.BuiltinProviderID != "" {
 		stored.ModelProviderID = spec.BuiltinProviderID
-		stored.BaseURL = spec.BaseURL
 	} else {
+		stored.BaseURL = strings.TrimSpace(firstNonEmpty(deref(baseURL), spec.BaseURL))
 		stored.ModelProviderID = profileKey + "-provider"
 		stored.ExperimentalBearerToken = strings.TrimSpace(deref(apiKey))
 	}
-	stored.ModelCatalogJSON = DefaultSidecarPath(codexHome, profileKey)
+	stored = normalizeStoredProfile(profileKey, stored)
 	path, err := SaveStoredProfile(codexHome, profileKey, stored)
 	if err != nil {
 		return "", StoredProfile{}, "", err
@@ -411,6 +508,7 @@ func CreateOrUpdateStoredProfile(codexHome, provider, profileName string, baseUR
 
 func SaveStoredProfile(codexHome, profileKey string, stored StoredProfile) (string, error) {
 	path := StoredProfilePath(codexHome, profileKey)
+	stored = normalizeStoredProfile(profileKey, stored)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
@@ -434,24 +532,10 @@ func LoadStoredProfile(path string) (StoredProfile, error) {
 	if err := json.Unmarshal(data, &stored); err != nil {
 		return StoredProfile{}, err
 	}
-	if strings.TrimSpace(stored.ConfigProfile) == "" {
-		stored.ConfigProfile = strings.TrimSuffix(filepath.Base(path), ".json")
-	}
-	if strings.TrimSpace(stored.Name) == "" {
-		stored.Name = stored.ConfigProfile
-	}
-	if strings.TrimSpace(stored.ModelProviderID) == "" {
-		if spec, ok := Provider(stored.Provider); ok && spec.BuiltinProviderID != "" {
-			stored.ModelProviderID = spec.BuiltinProviderID
-		} else {
-			stored.ModelProviderID = stored.ConfigProfile + "-provider"
-		}
-	}
+	profileKey := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	stored = normalizeStoredProfile(profileKey, stored)
 	if strings.TrimSpace(stored.ModelCatalogJSON) == "" {
 		stored.ModelCatalogJSON = ResolveSidecarPath("", path, stored)
-	}
-	if strings.TrimSpace(stored.Model) == "" {
-		stored.Model = DefaultProfileModel(stored.Provider)
 	}
 	return stored, nil
 }
@@ -506,33 +590,20 @@ func ListStoredProfiles(codexHome string) ([]StoredProfileRecord, error) {
 }
 
 func ApplyStoredProfile(config *state.Config, codexHome string, profileKey string, stored StoredProfile) error {
+	stored = normalizeStoredProfile(profileKey, stored)
 	spec, ok := Provider(stored.Provider)
 	if !ok {
 		return fmt.Errorf("unsupported provider %q", stored.Provider)
 	}
-	providerName := firstNonEmpty(strings.TrimSpace(stored.ModelProviderID), spec.BuiltinProviderID, profileKey+"-provider")
-	profileName := firstNonEmpty(strings.TrimSpace(stored.ConfigProfile), profileKey)
-	catalogPath := ResolveSidecarPath(codexHome, StoredProfilePath(codexHome, profileKey), stored)
-
-	providerConfig, found := config.Provider(providerName)
-	if !found {
-		providerConfig = state.ProviderConfig{Name: providerName}
+	status := StoredProfileStatusFor(codexHome, profileKey, stored)
+	providerName := status.ProviderKey
+	profileName := status.ConfigProfile
+	if profileName == "" {
+		return fmt.Errorf("stored profile %q resolved an empty config profile", profileKey)
 	}
-	providerConfig.Name = providerName
-	providerConfig.BaseURL = firstNonEmpty(strings.TrimSpace(stored.BaseURL), strings.TrimSpace(spec.BaseURL))
-	providerConfig.WireAPI = firstNonEmpty(strings.TrimSpace(spec.WireAPI), "chat_completions")
-	if providerConfig.Fields == nil {
-		providerConfig.Fields = make(state.ConfigFields)
+	if providerName == "" {
+		return fmt.Errorf("stored profile %q resolved an empty provider key", profileKey)
 	}
-	providerConfig.Fields.Set("name", state.StringConfigValue(ProviderDisplayName(spec.ID, false)))
-	providerConfig.Fields.Set("requires_openai_auth", state.BoolConfigValue(false))
-	providerConfig.Fields.Set("supports_websockets", state.BoolConfigValue(false))
-	if token := strings.TrimSpace(stored.ExperimentalBearerToken); token != "" && spec.BuiltinProviderID == "" {
-		providerConfig.Fields.Set("experimental_bearer_token", state.StringConfigValue(token))
-	} else {
-		providerConfig.Fields.Delete("experimental_bearer_token")
-	}
-	config.UpsertProvider(providerConfig)
 
 	profileConfig, found := config.Profile(profileName)
 	if !found {
@@ -542,33 +613,110 @@ func ApplyStoredProfile(config *state.Config, codexHome string, profileKey strin
 	profileConfig.SetProvider(providerName)
 	profileConfig.SetModel(firstNonEmpty(strings.TrimSpace(stored.Model), spec.DefaultModel))
 	profileConfig.SetReasoningEffort(firstNonEmpty(strings.TrimSpace(spec.DefaultReasoning), strings.TrimSpace(profileConfig.ReasoningEffort)))
-	profileConfig.SetCatalogPath(catalogPath)
+	if status.BuiltinProvider {
+		profileConfig.SetCatalogPath("")
+	} else {
+		profileConfig.SetCatalogPath(status.CatalogPath)
+	}
 	config.UpsertProfile(profileConfig)
+
+	if !status.BuiltinProvider {
+		providerConfig, found := config.Provider(providerName)
+		if !found {
+			providerConfig = state.ProviderConfig{Name: providerName}
+		}
+		providerConfig.Name = providerName
+		providerConfig.BaseURL = firstNonEmpty(strings.TrimSpace(stored.BaseURL), strings.TrimSpace(spec.BaseURL))
+		providerConfig.WireAPI = firstNonEmpty(strings.TrimSpace(spec.WireAPI), "chat_completions")
+		providerConfig.APIKeyEnv = ""
+		if providerConfig.Fields == nil {
+			providerConfig.Fields = make(state.ConfigFields)
+		}
+		providerConfig.Fields.Set("name", state.StringConfigValue(ProviderDisplayName(spec.ID, false)))
+		providerConfig.Fields.Set("requires_openai_auth", state.BoolConfigValue(false))
+		providerConfig.Fields.Set("supports_websockets", state.BoolConfigValue(false))
+		providerConfig.Fields.Delete("env_key_instructions")
+		providerConfig.Fields.Delete("auth")
+		if token := strings.TrimSpace(stored.ExperimentalBearerToken); token != "" {
+			providerConfig.Fields.Set("experimental_bearer_token", state.StringConfigValue(token))
+		} else {
+			providerConfig.Fields.Delete("experimental_bearer_token")
+		}
+		config.UpsertProvider(providerConfig)
+	}
+
 	config.SetActiveProfile(profileName)
-	config.SetModelProvider(providerName)
 	config.SetModel(profileConfig.Model)
 	config.SetReasoningEffort(profileConfig.ReasoningEffort)
+	config.Model.Fields.Delete("model_catalog_json")
 	return nil
 }
 
 func CleanStoredProfileFromConfig(config *state.Config, profileKey string) {
-	profileKeys := []string{strings.TrimSpace(profileKey)}
-	if profile, ok := config.Profile(profileKey); ok {
-		profileKeys = append(profileKeys, strings.TrimSpace(profile.Name))
-		providerName := strings.TrimSpace(profile.EffectiveProviderName())
-		if providerName != "" {
-			config.DeleteProvider(providerName)
+	if config == nil {
+		return
+	}
+	profileKey = strings.TrimSpace(profileKey)
+	if profileKey == "" {
+		return
+	}
+
+	matchedProfiles := make(map[string]state.ProfileConfig)
+	for _, profile := range config.Profiles {
+		if profileMatchesStoredProfileKey(profile, profileKey) {
+			matchedProfiles[strings.TrimSpace(profile.Name)] = profile
 		}
 	}
-	for _, key := range profileKeys {
-		if key == "" {
+
+	deletedProfiles := make(map[string]struct{}, len(matchedProfiles))
+	for name := range matchedProfiles {
+		if name == "" {
 			continue
 		}
-		config.DeleteProfile(key)
-		if config.ActiveProfileName() == key {
-			config.SetActiveProfile("")
+		if config.DeleteProfile(name) {
+			deletedProfiles[name] = struct{}{}
 		}
-		config.DeleteProvider(key + "-provider")
+	}
+	if _, ok := deletedProfiles[profileKey]; !ok {
+		clearActiveProfileReference(config, profileKey)
+	}
+	for name := range matchedProfiles {
+		if _, ok := deletedProfiles[name]; ok {
+			continue
+		}
+		clearActiveProfileReference(config, name)
+	}
+
+	providerCandidates := map[string]struct{}{
+		profileKey + "-provider": {},
+	}
+	for name, profile := range matchedProfiles {
+		if name != "" {
+			providerCandidates[name+"-provider"] = struct{}{}
+		}
+		if providerName := strings.TrimSpace(profile.EffectiveProviderName()); providerName != "" {
+			providerCandidates[providerName] = struct{}{}
+		}
+	}
+
+	deletedProviders := make(map[string]struct{})
+	for providerName := range providerCandidates {
+		if !shouldDeleteStoredProfileProvider(*config, providerName, profileKey, deletedProfiles) {
+			continue
+		}
+		if config.DeleteProvider(providerName) {
+			deletedProviders[providerName] = struct{}{}
+			continue
+		}
+		deletedProviders[providerName] = struct{}{}
+	}
+
+	rootProvider := strings.TrimSpace(config.Model.Fields.Text("model_provider"))
+	if _, ok := deletedProviders[rootProvider]; ok {
+		config.Model.Fields.Delete("model_provider")
+	}
+	if catalogPathMatchesProfileKey(config.Model.Fields.Text("model_catalog_json"), profileKey) {
+		config.Model.Fields.Delete("model_catalog_json")
 	}
 }
 
@@ -599,12 +747,70 @@ func ensureSeedSidecar(codexHome, profilePath string, stored StoredProfile, spec
 		return err
 	}
 	snapshot := modelcatalog.Snapshot{
-		ProviderID:   modelcatalog.NormalizeProviderID(spec.ID),
+		ProviderID:   modelcatalog.NormalizeProviderID(firstNonEmpty(strings.TrimSpace(spec.BuiltinProviderID), spec.ID)),
 		ProviderName: ProviderDisplayName(spec.ID, false),
-		ProfileName:  firstNonEmpty(strings.TrimSpace(stored.ConfigProfile), strings.TrimSpace(stored.Name)),
+		ProfileName:  StoredProfileConfigKey("", stored),
 		Models:       append([]modelcatalog.Model(nil), spec.SeedModels...),
 	}
 	return modelcatalog.SaveSnapshot(sidecarPath, snapshot)
+}
+
+func clearActiveProfileReference(config *state.Config, profileName string) {
+	profileName = strings.TrimSpace(profileName)
+	if profileName == "" || strings.TrimSpace(config.ActiveProfileName()) != profileName {
+		return
+	}
+	if _, ok := config.Profile(profileName); !ok {
+		config.UpsertProfile(state.ProfileConfig{Name: profileName})
+	}
+	config.DeleteProfile(profileName)
+}
+
+func profileMatchesStoredProfileKey(profile state.ProfileConfig, profileKey string) bool {
+	profileKey = strings.TrimSpace(profileKey)
+	if profileKey == "" {
+		return false
+	}
+	if strings.TrimSpace(profile.Name) == profileKey {
+		return true
+	}
+	if providerName := strings.TrimSpace(profile.EffectiveProviderName()); providerName != "" {
+		if providerName == profileKey || providerName == profileKey+"-provider" {
+			return true
+		}
+	}
+	return catalogPathMatchesProfileKey(profile.CatalogPath(), profileKey)
+}
+
+func shouldDeleteStoredProfileProvider(config state.Config, providerName, profileKey string, deletedProfiles map[string]struct{}) bool {
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" {
+		return false
+	}
+	for _, profile := range config.Profiles {
+		if strings.TrimSpace(profile.EffectiveProviderName()) == providerName {
+			return false
+		}
+	}
+	if providerName == profileKey+"-provider" {
+		return true
+	}
+	for name := range deletedProfiles {
+		if name != "" && providerName == name+"-provider" {
+			return true
+		}
+	}
+	_, standard := Provider(providerName)
+	return !standard
+}
+
+func catalogPathMatchesProfileKey(path, profileKey string) bool {
+	path = strings.TrimSpace(path)
+	profileKey = strings.TrimSpace(profileKey)
+	if path == "" || profileKey == "" {
+		return false
+	}
+	return filepath.Base(path) == profileKey+".models.json"
 }
 
 func firstNonEmpty(values ...string) string {

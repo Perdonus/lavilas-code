@@ -25,6 +25,10 @@ func (m *Model) openModelPresetsSettingsPalette(pushCurrent bool) tea.Cmd {
 	return m.applyPaletteScreen(PaletteModeModelPresets, m.modelPresetsSettingsItems(), "", pushCurrent)
 }
 
+func (m *Model) reopenModelPresetsSettingsPalette() tea.Cmd {
+	return m.replacePaletteRoot(PaletteModeModelPresets, m.modelPresetsSettingsItems(), "")
+}
+
 func (m *Model) modelPresetsSettingsItems() []PaletteItem {
 	settings, _ := loadSettingsOptional(m.layout.SettingsPath())
 	config, _ := loadConfigOptional(m.layout.ConfigPath())
@@ -69,7 +73,7 @@ func (m *Model) toggleModelPresetsEnabled() tea.Cmd {
 	} else {
 		m.state.Footer = m.localize("Quick presets disabled", "Быстрые пресеты выключены")
 	}
-	return m.openModelPresetsSettingsPalette(false)
+	return m.reopenModelPresetsSettingsPalette()
 }
 
 func (m *Model) openCurrentProviderPresetEditor(pushCurrent bool) tea.Cmd {
@@ -102,6 +106,38 @@ func (m *Model) openCurrentProviderPresetEditor(pushCurrent bool) tea.Cmd {
 	}
 	footer := fmt.Sprintf("%s: %s", m.localize("Provider", "Провайдер"), firstNonEmpty(strings.TrimSpace(ctx.ProviderName), providerID))
 	return m.applyPaletteScreen(PaletteModePresetEditor, items, footer, pushCurrent)
+}
+
+func (m *Model) reopenCurrentProviderPresetEditor() tea.Cmd {
+	_, settings, ctx, providerID, err := m.resolvePresetContext()
+	if err != nil {
+		m.state.Footer = err.Error()
+		return nil
+	}
+	items := []PaletteItem{{
+		Key:         "preset.add",
+		Title:       m.localize("Add Preset", "Добавить пресет"),
+		Description: m.localize("Create a provider preset", "Создать пресет провайдера"),
+		Keywords:    []string{"add", "preset", "create", "добавить", "пресет"},
+	}}
+	for _, preset := range m.currentProviderEditablePresets(ctx, settings, providerID) {
+		descriptionParts := []string{firstNonEmpty(strings.TrimSpace(preset.Model), localizedUnsetTUI(m.language))}
+		if reasoning := strings.TrimSpace(preset.Reasoning); reasoning != "" {
+			descriptionParts = append(descriptionParts, reasoning)
+		}
+		if source := strings.TrimSpace(preset.Source); source != "" {
+			descriptionParts = append(descriptionParts, source)
+		}
+		items = append(items, PaletteItem{
+			Key:         "preset.entry",
+			Title:       firstNonEmpty(strings.TrimSpace(preset.Label), strings.TrimSpace(preset.Key)),
+			Description: strings.Join(descriptionParts, " · "),
+			Value:       preset.Key,
+			Keywords:    []string{preset.Key, preset.Label, preset.Model, preset.Reasoning, preset.Source},
+		})
+	}
+	footer := fmt.Sprintf("%s: %s", m.localize("Provider", "Провайдер"), firstNonEmpty(strings.TrimSpace(ctx.ProviderName), providerID))
+	return m.replacePaletteRoot(PaletteModePresetEditor, items, footer)
 }
 
 func (m *Model) openCurrentProviderPresetActions(presetKey string, pushCurrent bool) tea.Cmd {
@@ -244,7 +280,7 @@ func (m *Model) applyCurrentProviderPresetModelSelection(value string) tea.Cmd {
 		return nil
 	}
 	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Preset model updated", "Модель пресета обновлена"), model.Slug)
-	return m.openCurrentProviderPresetEditor(false)
+	return m.reopenCurrentProviderPresetEditor()
 }
 
 func (m *Model) deleteCurrentProviderPreset(presetKey string) tea.Cmd {
@@ -260,7 +296,7 @@ func (m *Model) deleteCurrentProviderPreset(presetKey string) tea.Cmd {
 		return nil
 	}
 	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Preset deleted", "Пресет удалён"), presetKey)
-	return m.openCurrentProviderPresetEditor(false)
+	return m.reopenCurrentProviderPresetEditor()
 }
 
 func (m *Model) resolvePresetContext() (appstate.Config, appstate.Settings, modelcatalog.RuntimeContext, string, error) {
