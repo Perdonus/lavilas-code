@@ -143,24 +143,24 @@ func ExecuteCalls(ctx context.Context, calls []toolruntime.ToolCall) []toolrunti
 	if len(calls) == 0 {
 		return nil
 	}
-	messages := make([]toolruntime.Message, 0, len(calls))
-	for _, call := range calls {
-		messages = append(messages, ExecuteCall(ctx, call))
-	}
-	return messages
+	report := ExecutePlan(ctx, BuildExecutionPlan(calls))
+	return report.Messages()
 }
 
 func ExecuteCall(ctx context.Context, call toolruntime.ToolCall) toolruntime.Message {
-	callID := strings.TrimSpace(call.ID)
-	if callID == "" {
-		callID = strings.TrimSpace(call.Function.Name)
+	report := ExecutePlan(ctx, BuildExecutionPlan([]toolruntime.ToolCall{call}))
+	if len(report.Results) == 0 {
+		callID := strings.TrimSpace(call.ID)
+		if callID == "" {
+			callID = strings.TrimSpace(call.Function.Name)
+		}
+		return toolruntime.Message{
+			Role:       toolruntime.RoleTool,
+			ToolCallID: callID,
+			Content:    []toolruntime.ContentPart{toolruntime.TextPart(marshalResult(map[string]any{"ok": false, "error": "tool execution produced no result"}))},
+		}
 	}
-	result := dispatch(ctx, call.Function.Name, call.Function.Arguments)
-	return toolruntime.Message{
-		Role:       toolruntime.RoleTool,
-		ToolCallID: callID,
-		Content:    []toolruntime.ContentPart{toolruntime.TextPart(result)},
-	}
+	return report.Results[0].Message()
 }
 
 func functionTool(name string, description string, parameters map[string]any) toolruntime.ToolDefinition {

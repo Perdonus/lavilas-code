@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -35,7 +36,9 @@ type sessionLine struct {
 	Name       string            `json:"name,omitempty"`
 	ToolCallID string            `json:"tool_call_id,omitempty"`
 	Text       string            `json:"text,omitempty"`
+	Content    []sessionContent  `json:"content,omitempty"`
 	ToolCalls  []sessionToolCall `json:"tool_calls,omitempty"`
+	Refusal    string            `json:"refusal,omitempty"`
 }
 
 type sessionToolCall struct {
@@ -45,27 +48,20 @@ type sessionToolCall struct {
 	Arguments string `json:"arguments,omitempty"`
 }
 
+type sessionContent struct {
+	Type        string `json:"type,omitempty"`
+	Text        string `json:"text,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+	AudioData   string `json:"audio_data,omitempty"`
+	AudioFormat string `json:"audio_format,omitempty"`
+	MIMEType    string `json:"mime_type,omitempty"`
+}
+
 func CreateSession(root string, meta SessionMeta, messages []runtime.Message) (SessionEntry, error) {
 	meta = normalizeSessionMeta(meta)
 	path := sessionPath(root, meta)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return SessionEntry{}, err
-	}
-
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return SessionEntry{}, err
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	if err := writeSessionMeta(writer, meta); err != nil {
-		return SessionEntry{}, err
-	}
-	if err := writeSessionMessages(writer, messages); err != nil {
-		return SessionEntry{}, err
-	}
-	if err := writer.Flush(); err != nil {
+	if err := persistSession(path, meta, messages); err != nil {
 		return SessionEntry{}, err
 	}
 
@@ -81,17 +77,32 @@ func AppendSession(path string, messages ...runtime.Message) error {
 		return nil
 	}
 
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	meta, existing, err := LoadSession(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	meta.UpdatedAt = time.Now().UTC()
+	return persistSession(path, meta, append(existing, messages...))
+}
 
-	writer := bufio.NewWriter(file)
-	if err := writeSessionMessages(writer, messages); err != nil {
+func AppendSessionHistory(path string, meta SessionMeta, history []runtime.Message) error {
+	currentMeta, existing, err := LoadSession(path)
+	if err != nil {
 		return err
 	}
-	return writer.Flush()
+	if len(history) < len(existing) {
+		return fmt.Errorf("session history shorter than persisted history: have %d want at least %d", len(history), len(existing))
+	}
+	for idx := range existing {
+		if !sessionMessageEqual(existing[idx], history[idx]) {
+			return fmt.Errorf("session history prefix mismatch at message %d", idx)
+		}
+	}
+	merged := mergeSessionMeta(currentMeta, meta)
+	if meta.UpdatedAt.IsZero() {
+		merged.UpdatedAt = time.Now().UTC()
+	}
+	return persistSession(path, merged, history)
 }
 
 func LoadSession(path string) (SessionMeta, []runtime.Message, error) {
@@ -181,7 +192,9 @@ func writeSessionMessages(writer *bufio.Writer, messages []runtime.Message) erro
 			Name:       message.Name,
 			ToolCallID: message.ToolCallID,
 			Text:       message.Text(),
+			Content:    sessionContentFromRuntime(message.Content),
 			ToolCalls:  sessionToolCallsFromRuntime(message.ToolCalls),
+			Refusal:    message.Refusal,
 		}
 		if err := writeSessionLine(writer, line); err != nil {
 			return err
@@ -227,8 +240,11 @@ func runtimeMessageFromLine(line sessionLine) runtime.Message {
 		Name:       line.Name,
 		ToolCallID: line.ToolCallID,
 		ToolCalls:  runtimeToolCallsFromSession(line.ToolCalls),
+		Refusal:    line.Refusal,
 	}
-	if strings.TrimSpace(line.Text) != "" {
+	if len(line.Content) > 0 {
+		message.Content = runtimeContentFromSession(line.Content)
+	} else if strings.TrimSpace(line.Text) != "" {
 		message.Content = []runtime.ContentPart{runtime.TextPart(line.Text)}
 	}
 	return message
@@ -270,4 +286,117 @@ func runtimeToolCallsFromSession(calls []sessionToolCall) []runtime.ToolCall {
 		})
 	}
 	return result
+}
+
+func sessionContentFromRuntime(parts []runtime.ContentPart) []sessionContent {
+	if len(parts) == 0 {
+		return nil
+	}
+	result := make([]sessionContent, 0, len(parts))
+	for _, part := range parts {
+		result = append(result, sessionContent{
+			Type:        string(part.Type),
+			Text:        part.Text,
+			URL:         part.URL,
+			Detail:      part.Detail,
+			AudioData:   part.AudioData,
+			AudioFormat: part.AudioFormat,
+			MIMEType:    part.MIMEType,
+		})
+	}
+	return result
+}
+
+func runtimeContentFromSession(parts []sessionContent) []runtime.ContentPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	result := make([]runtime.ContentPart, 0, len(parts))
+	for _, part := range parts {
+		result = append(result, runtime.ContentPart{
+			Type:        runtime.ContentPartType(part.Type),
+			Text:        part.Text,
+			URL:         part.URL,
+			Detail:      part.Detail,
+			AudioData:   part.AudioData,
+			AudioFormat: part.AudioFormat,
+			MIMEType:    part.MIMEType,
+		})
+	}
+	return result
+}
+
+func mergeSessionMeta(current SessionMeta, next SessionMeta) SessionMeta {
+	merged := current
+	if strings.TrimSpace(merged.SessionID) == "" {
+		merged.SessionID = next.SessionID
+	}
+	if strings.TrimSpace(next.Model) != "" {
+		merged.Model = next.Model
+	}
+	if strings.TrimSpace(next.Provider) != "" {
+		merged.Provider = next.Provider
+	}
+	if strings.TrimSpace(next.Profile) != "" {
+		merged.Profile = next.Profile
+	}
+	if strings.TrimSpace(next.Reasoning) != "" {
+		merged.Reasoning = next.Reasoning
+	}
+	if merged.CreatedAt.IsZero() {
+		merged.CreatedAt = next.CreatedAt
+	}
+	if !next.UpdatedAt.IsZero() {
+		merged.UpdatedAt = next.UpdatedAt
+	}
+	return normalizeSessionMeta(merged)
+}
+
+func sessionMessageEqual(left runtime.Message, right runtime.Message) bool {
+	return left.Role == right.Role &&
+		left.Name == right.Name &&
+		left.ToolCallID == right.ToolCallID &&
+		left.Refusal == right.Refusal &&
+		reflect.DeepEqual(left.Content, right.Content) &&
+		reflect.DeepEqual(left.ToolCalls, right.ToolCalls)
+}
+
+func persistSession(path string, meta SessionMeta, messages []runtime.Message) (err error) {
+	meta = normalizeSessionMeta(meta)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	file, err := os.CreateTemp(filepath.Dir(path), ".session-*.jsonl")
+	if err != nil {
+		return err
+	}
+	tmpPath := file.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if chmodErr := file.Chmod(0o644); chmodErr != nil {
+		_ = file.Close()
+		return chmodErr
+	}
+
+	writer := bufio.NewWriter(file)
+	if err := writeSessionMeta(writer, meta); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := writeSessionMessages(writer, messages); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := writer.Flush(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }

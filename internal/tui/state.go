@@ -55,6 +55,15 @@ type PaletteState struct {
 	Query    string
 	Items    []PaletteItem
 	Selected int
+	Stack    []PaletteView
+}
+
+type PaletteView struct {
+	Mode     PaletteMode
+	Query    string
+	Items    []PaletteItem
+	Selected int
+	Footer   string
 }
 
 type PaletteItem struct {
@@ -120,6 +129,7 @@ func (s State) clone() State {
 			Query:    s.Palette.Query,
 			Items:    clonePaletteItems(s.Palette.Items),
 			Selected: s.Palette.Selected,
+			Stack:    clonePaletteViews(s.Palette.Stack),
 		},
 	}
 
@@ -174,5 +184,22 @@ func clonePaletteItems(items []PaletteItem) []PaletteItem {
 	}
 	cloned := make([]PaletteItem, len(items))
 	copy(cloned, items)
+	return cloned
+}
+
+func clonePaletteViews(items []PaletteView) []PaletteView {
+	if len(items) == 0 {
+		return nil
+	}
+	cloned := make([]PaletteView, len(items))
+	for index, item := range items {
+		cloned[index] = PaletteView{
+			Mode:     normalizePaletteMode(item.Mode),
+			Query:    item.Query,
+			Items:    clonePaletteItems(item.Items),
+			Selected: item.Selected,
+			Footer:   item.Footer,
+		}
+	}
 	return cloned
 }

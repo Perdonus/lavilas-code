@@ -46,10 +46,11 @@ type sessionLoadedMsg struct {
 }
 
 type paletteItemsMsg struct {
-	Mode   PaletteMode
-	Items  []PaletteItem
-	Footer string
-	Err    error
+	Mode        PaletteMode
+	Items       []PaletteItem
+	Footer      string
+	PushCurrent bool
+	Err         error
 }
 
 type Model struct {
@@ -170,15 +171,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateStatus()
 			return m, nil
 		}
-		m.state.Palette.Visible = true
-		m.state.Palette.Mode = msg.Mode
-		m.state.Palette.Query = ""
-		m.state.Palette.Items = clonePaletteItems(msg.Items)
-		m.state.Palette.Selected = 0
-		m.paletteInput.Reset()
-		m.state.Footer = msg.Footer
-		m.resize()
-		return m, m.setFocus(FocusPalette)
+		return m, m.applyPaletteScreen(msg.Mode, msg.Items, msg.Footer, msg.PushCurrent)
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, m.keys.Quit):
@@ -354,8 +347,13 @@ func (m *Model) renderPalettePane() string {
 	} else {
 		limit := minInt(len(items), 6)
 		selected := clampInt(m.state.Palette.Selected, 0, maxInt(0, len(items)-1))
+		start := 0
+		if selected >= limit {
+			start = selected - limit + 1
+		}
+		end := minInt(len(items), start+limit)
 		entryWidth := maxInt(1, innerWidth(m.styles.pane, m.mainWidth))
-		for index := 0; index < limit; index++ {
+		for index := start; index < end; index++ {
 			entry := fmt.Sprintf("%s  %s", items[index].Title, items[index].Description)
 			style := m.styles.body.Width(entryWidth)
 			if index == selected {
@@ -364,7 +362,7 @@ func (m *Model) renderPalettePane() string {
 			content = append(content, style.Render(entry))
 		}
 	}
-	content = append(content, m.styles.muted.Render("Enter select · Esc close"))
+	content = append(content, m.styles.muted.Render(m.paletteHint()))
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, content...))
 }
 
@@ -476,7 +474,6 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 	options.Prompt = prompt
 	options.History = history
 	existingSessionPath := m.state.SessionPath
-	existingHistoryLen := len(m.history)
 	layout := m.layout
 
 	return func() tea.Msg {
@@ -484,7 +481,7 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 		if err != nil {
 			return taskFinishedMsg{Prompt: prompt, Err: err}
 		}
-		sessionPath, warn := persistTurn(layout, existingSessionPath, existingHistoryLen, result)
+		sessionPath, warn := persistTurn(layout, existingSessionPath, result)
 		return taskFinishedMsg{Prompt: prompt, Result: result, SessionPath: sessionPath, Warn: warn}
 	}
 }
@@ -513,22 +510,18 @@ func (m *Model) dispatchSlash(line string) tea.Cmd {
 	case "fork":
 		return m.loadLatestSessionCmd(true)
 	case "sessions":
-		return m.openSessionsPalette(false)
+		return m.openSessionsPalette(false, false)
 	case "status":
 		m.appendTranscript("system", m.statusSummary())
 		return nil
 	case "model":
-		m.appendTranscript("system", m.modelSummary())
-		return nil
+		return m.openPaletteMode(PaletteModeModel, false)
 	case "profiles":
-		m.appendTranscript("system", m.profilesSummary())
-		return nil
+		return m.openPaletteMode(PaletteModeProfiles, false)
 	case "providers":
-		m.appendTranscript("system", m.providersSummary())
-		return nil
+		return m.openPaletteMode(PaletteModeProviders, false)
 	case "settings":
-		m.appendTranscript("system", m.settingsSummary())
-		return nil
+		return m.openPaletteMode(PaletteModeSettings, false)
 	default:
 		m.appendTranscript("system", fmt.Sprintf("Unknown slash command: /%s", fields[0]))
 		return nil
@@ -536,10 +529,7 @@ func (m *Model) dispatchSlash(line string) tea.Cmd {
 }
 
 func (m *Model) applyTaskResult(msg taskFinishedMsg) {
-	history := cloneRuntimeMessages(msg.Result.RequestMessages)
-	if hasPersistableMessage(msg.Result.AssistantMessage) {
-		history = append(history, msg.Result.AssistantMessage)
-	}
+	history := cloneRuntimeMessages(msg.Result.FullHistory())
 	m.history = history
 	m.state.Transcript = transcriptFromMessages(history)
 	m.state.SessionPath = msg.SessionPath
@@ -573,18 +563,162 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 	m.refreshViewport()
 }
 
+func (m *Model) openPaletteMode(mode PaletteMode, pushCurrent bool) tea.Cmd {
+	if pushCurrent && m.state.Palette.Visible {
+		m.pushPaletteView()
+	}
+	return m.applyPaletteScreen(mode, m.paletteItemsForMode(mode), "", false)
+}
+
+func (m *Model) applyPaletteScreen(mode PaletteMode, items []PaletteItem, footer string, pushCurrent bool) tea.Cmd {
+	if pushCurrent && m.state.Palette.Visible {
+		m.pushPaletteView()
+	}
+	m.state.Palette.Visible = true
+	m.state.Palette.Mode = mode
+	m.state.Palette.Query = ""
+	m.state.Palette.Selected = 0
+	m.state.Palette.Items = clonePaletteItems(items)
+	m.paletteInput.Reset()
+	if strings.TrimSpace(footer) != "" {
+		m.state.Footer = footer
+	}
+	m.resize()
+	return m.setFocus(FocusPalette)
+}
+
+func (m *Model) pushPaletteView() {
+	m.state.Palette.Stack = append(m.state.Palette.Stack, PaletteView{
+		Mode:     m.state.Palette.Mode,
+		Query:    m.state.Palette.Query,
+		Items:    clonePaletteItems(m.state.Palette.Items),
+		Selected: m.state.Palette.Selected,
+		Footer:   m.state.Footer,
+	})
+}
+
+func (m *Model) navigatePaletteBack() tea.Cmd {
+	if !m.state.Palette.Visible {
+		return nil
+	}
+	if len(m.state.Palette.Stack) == 0 {
+		return m.closePalette()
+	}
+	last := m.state.Palette.Stack[len(m.state.Palette.Stack)-1]
+	m.state.Palette.Stack = m.state.Palette.Stack[:len(m.state.Palette.Stack)-1]
+	m.state.Palette.Visible = true
+	m.state.Palette.Mode = last.Mode
+	m.state.Palette.Query = last.Query
+	m.state.Palette.Items = clonePaletteItems(last.Items)
+	m.state.Palette.Selected = last.Selected
+	m.paletteInput.SetValue(last.Query)
+	m.state.Footer = last.Footer
+	m.syncPaletteSelection()
+	m.resize()
+	return m.setFocus(FocusPalette)
+}
+
+func (m *Model) paletteItemsForMode(mode PaletteMode) []PaletteItem {
+	switch mode {
+	case PaletteModeSettings:
+		return m.settingsPaletteItems()
+	case PaletteModeModel:
+		return m.modelPaletteItems()
+	case PaletteModeProfiles:
+		return m.profilesPaletteItems()
+	case PaletteModeProviders:
+		return m.providersPaletteItems()
+	default:
+		return defaultPaletteItems()
+	}
+}
+
+func (m *Model) settingsPaletteItems() []PaletteItem {
+	settings, _ := loadSettingsOptional(m.layout.SettingsPath())
+	summary := settings.Summary()
+	items := []PaletteItem{
+		m.paletteBackItem(),
+		{Key: "model", Title: "Model", Description: "Inspect active model"},
+		{Key: "profiles", Title: "Profiles", Description: "Inspect configured profiles"},
+		{Key: "providers", Title: "Providers", Description: "Inspect configured providers"},
+		{Key: "settings.language", Title: "Language", Description: fallback(summary.Language, "<unset>")},
+		{Key: "settings.command_prefix", Title: "Command Prefix", Description: fallback(summary.CommandPrefix, "<unset>")},
+		{Key: "settings.hidden_commands", Title: "Hidden Commands", Description: fmt.Sprintf("%d", len(summary.HiddenCommands))},
+	}
+	return items
+}
+
+func (m *Model) modelPaletteItems() []PaletteItem {
+	config, _ := loadConfigOptional(m.layout.ConfigPath())
+	return []PaletteItem{
+		m.paletteBackItem(),
+		{Key: "model.value", Title: "Model", Description: fallback(m.state.Model, config.EffectiveModel())},
+		{Key: "model.provider", Title: "Provider", Description: fallback(m.state.Provider, config.EffectiveProviderName())},
+		{Key: "model.profile", Title: "Profile", Description: fallback(m.state.Profile, config.ActiveProfileName())},
+		{Key: "model.reasoning", Title: "Reasoning", Description: fallback(m.state.Reasoning, config.EffectiveReasoningEffort())},
+	}
+}
+
+func (m *Model) profilesPaletteItems() []PaletteItem {
+	config, _ := loadConfigOptional(m.layout.ConfigPath())
+	items := []PaletteItem{m.paletteBackItem()}
+	if len(config.Profiles) == 0 {
+		return append(items, PaletteItem{Key: "profiles.empty", Title: "No Profiles", Description: "No configured profiles found"})
+	}
+	for _, profile := range config.Profiles {
+		description := fmt.Sprintf("model=%s provider=%s reasoning=%s", fallback(profile.Model, "<unset>"), fallback(profile.Provider, "<unset>"), fallback(profile.ReasoningEffort, "<unset>"))
+		if profile.Name == config.ActiveProfileName() {
+			description += " · active"
+		}
+		items = append(items, PaletteItem{Key: "profiles.entry", Title: profile.Name, Description: description})
+	}
+	return items
+}
+
+func (m *Model) providersPaletteItems() []PaletteItem {
+	config, _ := loadConfigOptional(m.layout.ConfigPath())
+	items := []PaletteItem{m.paletteBackItem()}
+	if len(config.ModelProviders) == 0 {
+		return append(items, PaletteItem{Key: "providers.empty", Title: "No Providers", Description: "No configured providers found"})
+	}
+	for _, provider := range config.ModelProviders {
+		items = append(items, PaletteItem{
+			Key:         "providers.entry",
+			Title:       provider.Name,
+			Description: fmt.Sprintf("base_url=%s wire_api=%s", fallback(provider.BaseURL, "<unset>"), fallback(provider.WireAPI, "chat_completions")),
+		})
+	}
+	return items
+}
+
+func (m *Model) paletteBackItem() PaletteItem {
+	title := "Back to Chat"
+	description := "Close this screen"
+	if len(m.state.Palette.Stack) > 0 {
+		previous := m.state.Palette.Stack[len(m.state.Palette.Stack)-1]
+		if previous.Mode == PaletteModeSettings {
+			title = "Back to Settings"
+			description = "Return to settings"
+		} else {
+			title = "Back to Palette"
+			description = "Return to previous menu"
+		}
+	}
+	return PaletteItem{Key: "__back", Title: title, Description: description}
+}
+
+func (m *Model) paletteHint() string {
+	if m.state.Palette.Mode == PaletteModeRoot || len(m.state.Palette.Stack) == 0 {
+		return "Enter select · Esc close"
+	}
+	return "Enter select · Esc back"
+}
+
 func (m *Model) togglePalette() tea.Cmd {
 	if m.state.Palette.Visible {
 		return m.closePalette()
 	}
-	m.state.Palette.Visible = true
-	m.state.Palette.Mode = PaletteModeRoot
-	m.state.Palette.Items = defaultPaletteItems()
-	m.state.Palette.Query = ""
-	m.state.Palette.Selected = 0
-	m.paletteInput.Reset()
-	m.resize()
-	return m.setFocus(FocusPalette)
+	return m.openPaletteMode(PaletteModeRoot, false)
 }
 
 func (m *Model) closePalette() tea.Cmd {
@@ -593,6 +727,7 @@ func (m *Model) closePalette() tea.Cmd {
 	m.state.Palette.Query = ""
 	m.state.Palette.Selected = 0
 	m.state.Palette.Items = defaultPaletteItems()
+	m.state.Palette.Stack = nil
 	m.paletteInput.Reset()
 	m.resize()
 	return m.setFocus(FocusInput)
@@ -602,7 +737,7 @@ func (m *Model) updatePalette(msg tea.Msg) tea.Cmd {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch {
 		case key.Matches(keyMsg, m.keys.Close):
-			return m.closePalette()
+			return m.navigatePaletteBack()
 		case key.Matches(keyMsg, m.keys.Up):
 			m.movePaletteSelection(-1)
 			return nil
@@ -634,6 +769,8 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 		return m.loadSessionCmd(item.Value, true)
 	default:
 		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
 		case "new":
 			m.resetConversation()
 			return m.closePalette()
@@ -642,23 +779,25 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 		case "fork_latest":
 			return m.loadLatestSessionCmd(true)
 		case "sessions_resume":
-			return m.openSessionsPalette(false)
+			return m.openSessionsPalette(false, true)
 		case "sessions_fork":
-			return m.openSessionsPalette(true)
+			return m.openSessionsPalette(true, true)
 		case "model":
-			m.appendTranscript("system", m.modelSummary())
+			return m.openPaletteMode(PaletteModeModel, m.state.Palette.Visible)
 		case "profiles":
-			m.appendTranscript("system", m.profilesSummary())
+			return m.openPaletteMode(PaletteModeProfiles, m.state.Palette.Visible)
 		case "providers":
-			m.appendTranscript("system", m.providersSummary())
+			return m.openPaletteMode(PaletteModeProviders, m.state.Palette.Visible)
 		case "settings":
-			m.appendTranscript("system", m.settingsSummary())
+			return m.openPaletteMode(PaletteModeSettings, m.state.Palette.Visible)
 		case "status":
 			m.appendTranscript("system", m.statusSummary())
+			return m.closePalette()
 		case "help":
 			m.appendTranscript("system", m.helpText())
+			return m.closePalette()
 		}
-		return m.closePalette()
+		return nil
 	}
 }
 
@@ -682,6 +821,15 @@ func (m *Model) filteredPaletteItems() []PaletteItem {
 	}
 	filtered := make([]PaletteItem, 0, len(items))
 	for _, item := range items {
+		if item.Key == "__back" {
+			filtered = append(filtered, item)
+			break
+		}
+	}
+	for _, item := range items {
+		if item.Key == "__back" {
+			continue
+		}
 		candidate := strings.ToLower(item.Title + " " + item.Description + " " + item.Value)
 		if strings.Contains(candidate, query) {
 			filtered = append(filtered, item)
@@ -764,6 +912,14 @@ func (m *Model) paletteTitle() string {
 		return "Resume Session"
 	case PaletteModeFork:
 		return "Fork Session"
+	case PaletteModeModel:
+		return "Model"
+	case PaletteModeProfiles:
+		return "Profiles"
+	case PaletteModeProviders:
+		return "Providers"
+	case PaletteModeSettings:
+		return "Settings"
 	default:
 		return "Command Palette"
 	}
@@ -802,7 +958,7 @@ func (m *Model) loadSessionCmd(path string, fork bool) tea.Cmd {
 	}
 }
 
-func (m *Model) openSessionsPalette(fork bool) tea.Cmd {
+func (m *Model) openSessionsPalette(fork bool, pushCurrent bool) tea.Cmd {
 	return func() tea.Msg {
 		entries, err := appstate.LoadSessions(m.layout.SessionsDir(), 20)
 		if err != nil {
@@ -829,7 +985,7 @@ func (m *Model) openSessionsPalette(fork bool) tea.Cmd {
 			mode = PaletteModeFork
 			footer = "Select a saved session to fork"
 		}
-		return paletteItemsMsg{Mode: mode, Items: items, Footer: footer}
+		return paletteItemsMsg{Mode: mode, Items: items, Footer: footer, PushCurrent: pushCurrent}
 	}
 }
 
@@ -963,34 +1119,27 @@ func transcriptFromMessages(messages []runtimeapi.Message) []TranscriptEntry {
 	return entries
 }
 
-func persistTurn(layout apphome.Layout, sessionPath string, existingHistoryLen int, result taskrun.Result) (string, error) {
+func persistTurn(layout apphome.Layout, sessionPath string, result taskrun.Result) (string, error) {
+	history := cloneRuntimeMessages(result.FullHistory())
 	if strings.TrimSpace(sessionPath) == "" {
-		messages := cloneRuntimeMessages(result.RequestMessages)
-		if hasPersistableMessage(result.AssistantMessage) {
-			messages = append(messages, result.AssistantMessage)
-		}
 		entry, err := appstate.CreateSession(layout.SessionsDir(), appstate.SessionMeta{
 			Model:     result.Model,
 			Provider:  result.ProviderName,
 			Profile:   result.Profile,
 			Reasoning: result.Reasoning,
-		}, messages)
+		}, history)
 		if err != nil {
 			return "", err
 		}
 		return entry.Path, nil
 	}
 
-	delta := cloneRuntimeMessages(result.RequestMessages)
-	if existingHistoryLen < len(delta) {
-		delta = delta[existingHistoryLen:]
-	} else {
-		delta = nil
-	}
-	if hasPersistableMessage(result.AssistantMessage) {
-		delta = append(delta, result.AssistantMessage)
-	}
-	if err := appstate.AppendSession(sessionPath, delta...); err != nil {
+	if err := appstate.AppendSessionHistory(sessionPath, appstate.SessionMeta{
+		Model:     result.Model,
+		Provider:  result.ProviderName,
+		Profile:   result.Profile,
+		Reasoning: result.Reasoning,
+	}, history); err != nil {
 		return sessionPath, err
 	}
 	return sessionPath, nil

@@ -16,30 +16,6 @@ import (
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
 )
 
-func registry() []Command {
-	return []Command{
-		{Name: "chat", Aliases: []string{"interactive", "repl", "чат"}, Description: "Start interactive TUI chat mode", Category: "interactive", Run: runChat},
-		{Name: "resume", Aliases: []string{"r", "continue", "продолжить"}, Description: "Resume or inspect stored sessions", Category: "interactive", Run: runResume},
-		{Name: "fork", Aliases: []string{"branch-chat", "форк"}, Description: "Fork a previous session", Category: "interactive", Run: runFork},
-		{Name: "run", Aliases: []string{"exec", "ask", "запуск"}, Description: "Execute a one-shot task", Category: "interactive", Run: runTask},
-		{Name: "review", Aliases: []string{"rev", "ревью"}, Description: "Run non-interactive review", Category: "interactive", Run: runReview},
-		{Name: "apply", Aliases: []string{"patch", "применить"}, Description: "Apply patch from stdin or file", Category: "interactive", Run: runApply},
-
-		{Name: "login", Aliases: []string{"auth", "вход"}, Description: "Save provider token and profile", Category: "account", Run: runLogin},
-		{Name: "logout", Aliases: []string{"unauth", "выход"}, Description: "Remove saved token/profile", Category: "account", Run: runLogout},
-		{Name: "status", Aliases: []string{"info", "whoami", "статус"}, Description: "Show active runtime/account state", Category: "account", Run: runStatus},
-		{Name: "profiles", Aliases: []string{"accounts", "prof", "профили", "аккаунты"}, Description: "Manage saved profiles", Category: "account", Run: runProfiles},
-		{Name: "providers", Aliases: []string{"provider", "prov", "провайдеры", "провайдер"}, Description: "Manage model providers", Category: "account", Run: runProviders},
-
-		{Name: "model", Aliases: []string{"models", "модель", "модели"}, Description: "Show or update active model", Category: "config", Run: runModel},
-		{Name: "settings", Aliases: []string{"prefs", "config", "настройки"}, Description: "Show saved UI settings", Category: "config", Run: runSettings},
-		{Name: "completion", Aliases: []string{"completions", "автодополнение"}, Description: "Generate shell completions", Category: "config", Run: runCompletion},
-		{Name: "features", Aliases: []string{"flags", "фичи"}, Description: "Show alpha feature matrix", Category: "config", Run: runFeatures},
-
-		{Name: "doctor", Aliases: []string{"diag", "диагностика"}, Description: "Inspect local environment", Category: "runtime", Run: runDoctor},
-	}
-}
-
 func runDoctor(args []string) int {
 	return doctor.Run(hasFlag(args, "--json"))
 }
@@ -512,7 +488,7 @@ func runResume(args []string) int {
 		return 1
 	}
 
-	if err := appendSessionTurn(sessionEntry.Path, prompt, result.AssistantMessage); err != nil {
+	if err := appendSessionTurn(sessionEntry.Path, result); err != nil {
 		fmt.Fprintf(os.Stderr, "resume: warning: failed to append session: %v\n", err)
 	}
 	result.SessionPath = sessionEntry.Path
@@ -586,24 +562,29 @@ func runFork(args []string) int {
 }
 
 func persistNewSession(result taskrun.Result) (state.SessionEntry, error) {
+	return state.CreateSession(apphome.SessionsDir(), sessionMetaFromResult(result), result.FullHistory())
+}
+
+func appendSessionTurn(path string, result taskrun.Result) error {
+	history := result.FullHistory()
+	if len(history) > 0 {
+		return state.AppendSessionHistory(path, sessionMetaFromResult(result), history)
+	}
+
 	messages := clonePersistedMessages(result.RequestMessages)
 	if hasPersistableMessage(result.AssistantMessage) {
 		messages = append(messages, result.AssistantMessage)
 	}
-	return state.CreateSession(apphome.SessionsDir(), state.SessionMeta{
+	return state.AppendSession(path, messages...)
+}
+
+func sessionMetaFromResult(result taskrun.Result) state.SessionMeta {
+	return state.SessionMeta{
 		Model:     result.Model,
 		Provider:  result.ProviderName,
 		Profile:   result.Profile,
 		Reasoning: result.Reasoning,
-	}, messages)
-}
-
-func appendSessionTurn(path string, prompt string, assistant runtime.Message) error {
-	messages := []runtime.Message{runtime.TextMessage(runtime.RoleUser, prompt)}
-	if hasPersistableMessage(assistant) {
-		messages = append(messages, assistant)
 	}
-	return state.AppendSession(path, messages...)
 }
 
 func clonePersistedMessages(messages []runtime.Message) []runtime.Message {

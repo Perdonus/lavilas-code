@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Perdonus/lavilas-code/internal/apphome"
 	"github.com/Perdonus/lavilas-code/internal/provider"
@@ -40,8 +41,20 @@ type Result struct {
 	Response         *runtime.Response     `json:"response,omitempty"`
 	Events           []runtime.StreamEvent `json:"events,omitempty"`
 	Text             string                `json:"text,omitempty"`
+	History          []runtime.Message     `json:"-"`
 	RequestMessages  []runtime.Message     `json:"-"`
 	AssistantMessage runtime.Message       `json:"-"`
+}
+
+func (result Result) FullHistory() []runtime.Message {
+	if len(result.History) > 0 {
+		return cloneMessages(result.History)
+	}
+	history := cloneMessages(result.RequestMessages)
+	if hasPersistableMessage(result.AssistantMessage) {
+		history = append(history, result.AssistantMessage)
+	}
+	return history
 }
 
 func Run(ctx context.Context, options Options) (Result, error) {
@@ -81,14 +94,17 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		Profile:         resolved.ProfileName,
 		RequestMessages: cloneMessages(resolved.Messages),
 	}
+	preferStreaming := !options.JSON && !options.DisableStreaming
 
 	if len(request.Tools) > 0 {
-		requestMessages, response, assistantMessage, err := runWithToolLoop(ctx, resolved.Client, request)
+		history, requestMessages, response, assistantMessage, events, err := runWithToolLoop(ctx, resolved.Client, request, preferStreaming)
 		if err != nil {
 			return Result{}, err
 		}
+		result.History = cloneMessages(history)
 		result.RequestMessages = cloneMessages(requestMessages)
 		result.Response = response
+		result.Events = append(result.Events, events...)
 		result.Text = strings.TrimSpace(assistantMessage.Text())
 		if result.Text == "" {
 			result.Text = responseText(response)
@@ -97,7 +113,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		return result, nil
 	}
 
-	if options.JSON || options.DisableStreaming {
+	if !preferStreaming {
 		response, err := resolved.Client.Create(ctx, request)
 		if err != nil {
 			return Result{}, err
@@ -109,105 +125,253 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		} else if strings.TrimSpace(result.Text) != "" {
 			result.AssistantMessage = runtime.TextMessage(runtime.RoleAssistant, result.Text)
 		}
+		result.History = append(cloneMessages(request.Messages), result.AssistantMessage)
 		return result, nil
 	}
 
-	stream, err := resolved.Client.Stream(ctx, request)
+	response, events, assistantMessage, err := runSingleTurn(ctx, resolved.Client, request, true)
 	if err != nil {
 		return Result{}, err
 	}
-	defer stream.Close()
-
-	var builder strings.Builder
-	assistant := runtime.Message{Role: runtime.RoleAssistant}
-	toolCalls := map[int]*runtime.ToolCall{}
-	toolOrder := []int{}
-	for {
-		event, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return Result{}, err
-		}
-		result.Events = append(result.Events, event)
-		if event.Type == runtime.StreamEventTypeDelta {
-			text := event.Delta.Text()
-			if text != "" {
-				builder.WriteString(text)
-			}
-			for _, toolCall := range event.Delta.ToolCalls {
-				current, ok := toolCalls[toolCall.Index]
-				if !ok {
-					toolType := toolCall.Type
-					if toolType == "" {
-						toolType = runtime.ToolTypeFunction
-					}
-					current = &runtime.ToolCall{Type: toolType}
-					toolCalls[toolCall.Index] = current
-					toolOrder = append(toolOrder, toolCall.Index)
-				}
-				if strings.TrimSpace(toolCall.ID) != "" {
-					current.ID = toolCall.ID
-				}
-				if toolCall.Type != "" {
-					current.Type = toolCall.Type
-				}
-				if toolCall.NameDelta != "" {
-					current.Function.Name += toolCall.NameDelta
-				}
-				if toolCall.ArgumentsDelta != "" {
-					current.Function.Arguments = append(current.Function.Arguments, []byte(toolCall.ArgumentsDelta)...)
-				}
-			}
-		}
-		if event.Type == runtime.StreamEventTypeDone {
-			break
-		}
+	result.Response = response
+	result.Events = append(result.Events, events...)
+	result.AssistantMessage = assistantMessage
+	result.Text = strings.TrimSpace(assistantMessage.Text())
+	if result.Text == "" {
+		result.Text = responseText(response)
 	}
-	result.Text = builder.String()
-	if strings.TrimSpace(result.Text) != "" {
-		assistant.Content = []runtime.ContentPart{runtime.TextPart(result.Text)}
-	}
-	if len(toolOrder) > 0 {
-		for _, index := range toolOrder {
-			if current, ok := toolCalls[index]; ok {
-				assistant.ToolCalls = append(assistant.ToolCalls, *current)
-			}
-		}
-	}
-	result.AssistantMessage = assistant
+	result.History = append(cloneMessages(request.Messages), assistantMessage)
 	return result, nil
 }
 
-func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request) ([]runtime.Message, *runtime.Response, runtime.Message, error) {
+func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, error) {
 	const maxRounds = 8
 
 	messages := cloneMessages(request.Messages)
 	baseRequest := request
+	var events []runtime.StreamEvent
 
 	for round := 0; round < maxRounds; round++ {
 		currentRequest := baseRequest
 		currentRequest.Messages = cloneMessages(messages)
 
-		response, err := client.Create(ctx, currentRequest)
+		response, roundEvents, assistantMessage, err := runSingleTurn(ctx, client, currentRequest, preferStreaming)
 		if err != nil {
-			return nil, nil, runtime.Message{}, err
+			return nil, nil, nil, runtime.Message{}, nil, err
 		}
-		if response == nil || len(response.Choices) == 0 {
-			return nil, nil, runtime.Message{}, fmt.Errorf("provider returned no choices")
-		}
-
-		assistantMessage := response.Choices[0].Message
+		events = append(events, roundEvents...)
 		if len(assistantMessage.ToolCalls) == 0 {
-			return currentRequest.Messages, response, assistantMessage, nil
+			fullHistory := cloneMessages(messages)
+			if hasPersistableMessage(assistantMessage) {
+				fullHistory = append(fullHistory, assistantMessage)
+			}
+			return fullHistory, currentRequest.Messages, response, assistantMessage, events, nil
 		}
 
 		messages = append(messages, assistantMessage)
 		messages = append(messages, tooling.ExecuteCalls(ctx, assistantMessage.ToolCalls)...)
 	}
 
-	return nil, nil, runtime.Message{}, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+	return nil, nil, nil, runtime.Message{}, nil, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+}
+
+func runSingleTurn(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
+	if preferStreaming && client.Capabilities().Streaming {
+		return collectStreamTurn(ctx, client, request)
+	}
+
+	response, err := client.Create(ctx, request)
+	if err != nil {
+		return nil, nil, runtime.Message{}, err
+	}
+	if response == nil || len(response.Choices) == 0 {
+		return nil, nil, runtime.Message{}, fmt.Errorf("provider returned no choices")
+	}
+	return response, nil, response.Choices[0].Message, nil
+}
+
+func collectStreamTurn(ctx context.Context, client provider.Client, request runtime.Request) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
+	stream, err := client.Stream(ctx, request)
+	if err != nil {
+		return nil, nil, runtime.Message{}, err
+	}
+	defer stream.Close()
+
+	events := make([]runtime.StreamEvent, 0, 16)
+	accumulator := newTurnAccumulator(client.Name(), request.Model)
+	for {
+		event, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, nil, runtime.Message{}, err
+		}
+		events = append(events, event)
+		accumulator.Apply(event)
+		if event.Type == runtime.StreamEventTypeDone {
+			break
+		}
+	}
+
+	response := accumulator.Response()
+	if response == nil || len(response.Choices) == 0 {
+		return nil, nil, runtime.Message{}, fmt.Errorf("provider returned no streamed choices")
+	}
+	return response, events, response.Choices[0].Message, nil
+}
+
+type turnAccumulator struct {
+	provider      string
+	fallbackModel string
+	responseID    string
+	model         string
+	createdAt     time.Time
+	message       runtime.Message
+	finishReason  runtime.FinishReason
+	usage         runtime.Usage
+	toolOrder     []string
+	toolCalls     map[string]*runtime.ToolCall
+}
+
+func newTurnAccumulator(providerName string, fallbackModel string) *turnAccumulator {
+	return &turnAccumulator{
+		provider:      providerName,
+		fallbackModel: strings.TrimSpace(fallbackModel),
+		message:       runtime.Message{Role: runtime.RoleAssistant},
+		toolCalls:     map[string]*runtime.ToolCall{},
+	}
+}
+
+func (a *turnAccumulator) Apply(event runtime.StreamEvent) {
+	if strings.TrimSpace(event.ResponseID) != "" {
+		a.responseID = event.ResponseID
+	}
+	if strings.TrimSpace(event.Model) != "" {
+		a.model = event.Model
+	}
+	if !event.CreatedAt.IsZero() {
+		a.createdAt = event.CreatedAt
+	}
+
+	switch event.Type {
+	case runtime.StreamEventTypeDelta:
+		if event.Delta.Role != "" {
+			a.message.Role = event.Delta.Role
+		}
+		for _, part := range event.Delta.Content {
+			if part.Type == runtime.ContentPartTypeText && part.Text != "" {
+				a.appendText(part.Text)
+			}
+		}
+		for _, toolCall := range event.Delta.ToolCalls {
+			a.applyToolCallDelta(toolCall)
+		}
+	case runtime.StreamEventTypeChoiceDone:
+		if event.FinishReason != "" {
+			a.finishReason = event.FinishReason
+		}
+	case runtime.StreamEventTypeUsage:
+		if event.Usage != nil {
+			a.usage = *event.Usage
+		}
+	}
+}
+
+func (a *turnAccumulator) Response() *runtime.Response {
+	if a.message.Role == "" {
+		a.message.Role = runtime.RoleAssistant
+	}
+	if len(a.toolOrder) > 0 {
+		a.message.ToolCalls = make([]runtime.ToolCall, 0, len(a.toolOrder))
+		for _, key := range a.toolOrder {
+			if current, ok := a.toolCalls[key]; ok {
+				a.message.ToolCalls = append(a.message.ToolCalls, *current)
+			}
+		}
+	}
+
+	finishReason := a.finishReason
+	if finishReason == "" {
+		if len(a.message.ToolCalls) > 0 {
+			finishReason = runtime.FinishReasonToolCalls
+		} else {
+			finishReason = runtime.FinishReasonStop
+		}
+	}
+
+	model := a.model
+	if strings.TrimSpace(model) == "" {
+		model = a.fallbackModel
+	}
+	createdAt := a.createdAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+
+	return &runtime.Response{
+		ID:        a.responseID,
+		Model:     model,
+		Provider:  a.provider,
+		CreatedAt: createdAt,
+		Choices: []runtime.Choice{{
+			Index:        0,
+			Message:      a.message,
+			FinishReason: finishReason,
+		}},
+		Usage: a.usage,
+	}
+}
+
+func (a *turnAccumulator) appendText(text string) {
+	if text == "" {
+		return
+	}
+	if len(a.message.Content) > 0 {
+		last := &a.message.Content[len(a.message.Content)-1]
+		if last.Type == runtime.ContentPartTypeText {
+			last.Text += text
+			return
+		}
+	}
+	a.message.Content = append(a.message.Content, runtime.TextPart(text))
+}
+
+func (a *turnAccumulator) applyToolCallDelta(delta runtime.ToolCallDelta) {
+	key := streamToolKey(delta)
+	current, ok := a.toolCalls[key]
+	if !ok {
+		toolType := delta.Type
+		if toolType == "" {
+			toolType = runtime.ToolTypeFunction
+		}
+		current = &runtime.ToolCall{Type: toolType}
+		a.toolCalls[key] = current
+		a.toolOrder = append(a.toolOrder, key)
+	}
+	if strings.TrimSpace(delta.ID) != "" {
+		current.ID = delta.ID
+	}
+	if delta.Type != "" {
+		current.Type = delta.Type
+	}
+	if delta.NameDelta != "" {
+		current.Function.Name += delta.NameDelta
+	}
+	if delta.ArgumentsDelta != "" {
+		current.Function.Arguments = append(current.Function.Arguments, []byte(delta.ArgumentsDelta)...)
+	}
+}
+
+func streamToolKey(delta runtime.ToolCallDelta) string {
+	if strings.TrimSpace(delta.ID) != "" {
+		return "id:" + strings.TrimSpace(delta.ID)
+	}
+	return fmt.Sprintf("index:%d", delta.Index)
+}
+
+func hasPersistableMessage(message runtime.Message) bool {
+	return strings.TrimSpace(message.Text()) != "" || len(message.ToolCalls) > 0 || strings.TrimSpace(message.Refusal) != ""
 }
 
 func Print(result Result) error {

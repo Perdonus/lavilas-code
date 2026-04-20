@@ -1,0 +1,499 @@
+package tooling
+
+import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	toolruntime "github.com/Perdonus/lavilas-code/internal/runtime"
+)
+
+type ExecutionMode string
+
+const (
+	ExecutionModeSequential ExecutionMode = "sequential"
+	ExecutionModeParallel   ExecutionMode = "parallel"
+)
+
+type SideEffectKind string
+
+const (
+	SideEffectKindReadOnly       SideEffectKind = "read_only"
+	SideEffectKindWorkspaceWrite SideEffectKind = "workspace_write"
+	SideEffectKindShell          SideEffectKind = "shell"
+	SideEffectKindUnknown        SideEffectKind = "unknown"
+)
+
+type SandboxHint string
+
+const (
+	SandboxHintInherited      SandboxHint = "inherited"
+	SandboxHintWorkspaceWrite SandboxHint = "workspace_write"
+	SandboxHintDangerous      SandboxHint = "dangerous"
+)
+
+type PlanningPolicy struct {
+	AllowParallel    bool
+	MaxParallelCalls int
+}
+
+func DefaultPlanningPolicy() PlanningPolicy {
+	return PlanningPolicy{
+		AllowParallel:    true,
+		MaxParallelCalls: 4,
+	}
+}
+
+type ToolExecutionMetadata struct {
+	SideEffectKind     SideEffectKind `json:"side_effect_kind"`
+	SandboxHint        SandboxHint    `json:"sandbox_hint"`
+	ApprovalRequired   bool           `json:"approval_required"`
+	SupportsParallel   bool           `json:"supports_parallel"`
+	MutatesWorkspace   bool           `json:"mutates_workspace"`
+	SpawnsSubprocess   bool           `json:"spawns_subprocess"`
+	ResourceKeys       []string       `json:"resource_keys,omitempty"`
+	WorkingDirectory   string         `json:"working_directory,omitempty"`
+	ArgumentParseError string         `json:"argument_parse_error,omitempty"`
+}
+
+type ToolCallPlan struct {
+	Index     int
+	Call      toolruntime.ToolCall
+	CallID    string
+	Name      string
+	Arguments json.RawMessage
+	Metadata  ToolExecutionMetadata
+}
+
+type ExecutionBatch struct {
+	Index  int
+	Mode   ExecutionMode
+	Calls  []ToolCallPlan
+	Reason string
+}
+
+type ExecutionPlanSummary struct {
+	CallCount            int
+	BatchCount           int
+	ParallelBatchCount   int
+	SequentialBatchCount int
+	ReadOnlyCallCount    int
+	MutatingCallCount    int
+}
+
+type ExecutionPlan struct {
+	Policy    PlanningPolicy
+	CreatedAt time.Time
+	Batches   []ExecutionBatch
+	Summary   ExecutionPlanSummary
+}
+
+type ResultStatus string
+
+const (
+	ResultStatusSucceeded ResultStatus = "succeeded"
+	ResultStatusFailed    ResultStatus = "failed"
+)
+
+type ToolResultEnvelope struct {
+	Index      int
+	BatchIndex int
+	Mode       ExecutionMode
+	CallID     string
+	Name       string
+	Metadata   ToolExecutionMetadata
+	Status     ResultStatus
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Duration   time.Duration
+	OutputText string
+	OutputJSON json.RawMessage
+}
+
+type BatchResultEnvelope struct {
+	Index      int
+	Mode       ExecutionMode
+	Reason     string
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Results    []ToolResultEnvelope
+}
+
+type ExecutionReport struct {
+	Plan       ExecutionPlan
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Batches    []BatchResultEnvelope
+	Results    []ToolResultEnvelope
+}
+
+func BuildExecutionPlan(calls []toolruntime.ToolCall) ExecutionPlan {
+	return BuildExecutionPlanWithPolicy(calls, DefaultPlanningPolicy())
+}
+
+func BuildExecutionPlanWithPolicy(calls []toolruntime.ToolCall, policy PlanningPolicy) ExecutionPlan {
+	policy = normalizePlanningPolicy(policy)
+	plan := ExecutionPlan{
+		Policy:    policy,
+		CreatedAt: time.Now().UTC(),
+	}
+	if len(calls) == 0 {
+		return plan
+	}
+
+	plannedCalls := make([]ToolCallPlan, 0, len(calls))
+	for index, call := range calls {
+		plannedCalls = append(plannedCalls, buildCallPlan(index, call))
+	}
+
+	var currentCalls []ToolCallPlan
+	currentMode := ExecutionModeSequential
+	flush := func() {
+		if len(currentCalls) == 0 {
+			return
+		}
+		batchMode := currentMode
+		if batchMode == ExecutionModeParallel && len(currentCalls) == 1 {
+			batchMode = ExecutionModeSequential
+		}
+		batch := ExecutionBatch{
+			Index: len(plan.Batches),
+			Mode:  batchMode,
+			Calls: append([]ToolCallPlan(nil), currentCalls...),
+		}
+		batch.Reason = batchReason(batch)
+		plan.Batches = append(plan.Batches, batch)
+		currentCalls = nil
+	}
+
+	for _, call := range plannedCalls {
+		desiredMode := desiredExecutionMode(call, policy)
+		if len(currentCalls) == 0 {
+			currentMode = desiredMode
+			currentCalls = append(currentCalls, call)
+			continue
+		}
+		if desiredMode != currentMode {
+			flush()
+			currentMode = desiredMode
+			currentCalls = append(currentCalls, call)
+			continue
+		}
+		if currentMode == ExecutionModeParallel && len(currentCalls) >= policy.MaxParallelCalls {
+			flush()
+			currentMode = desiredMode
+		}
+		currentCalls = append(currentCalls, call)
+	}
+	flush()
+
+	plan.Summary = summarizePlan(plan.Batches)
+	return plan
+}
+
+func ExecutePlan(ctx context.Context, plan ExecutionPlan) ExecutionReport {
+	report := ExecutionReport{
+		Plan:      plan,
+		StartedAt: time.Now().UTC(),
+	}
+	if len(plan.Batches) == 0 {
+		report.FinishedAt = report.StartedAt
+		return report
+	}
+
+	results := make([]ToolResultEnvelope, 0, plan.Summary.CallCount)
+	batches := make([]BatchResultEnvelope, 0, len(plan.Batches))
+	for _, batch := range plan.Batches {
+		batchReport := executeBatch(ctx, batch)
+		batches = append(batches, batchReport)
+		results = append(results, batchReport.Results...)
+	}
+	report.Batches = batches
+	report.Results = results
+	report.FinishedAt = time.Now().UTC()
+	return report
+}
+
+func (r ExecutionReport) Messages() []toolruntime.Message {
+	if len(r.Results) == 0 {
+		return nil
+	}
+	messages := make([]toolruntime.Message, 0, len(r.Results))
+	for _, result := range r.Results {
+		messages = append(messages, result.Message())
+	}
+	return messages
+}
+
+func (r ToolResultEnvelope) Message() toolruntime.Message {
+	callID := strings.TrimSpace(r.CallID)
+	if callID == "" {
+		callID = strings.TrimSpace(r.Name)
+	}
+	return toolruntime.Message{
+		Role:       toolruntime.RoleTool,
+		ToolCallID: callID,
+		Content:    []toolruntime.ContentPart{toolruntime.TextPart(r.OutputText)},
+	}
+}
+
+func normalizePlanningPolicy(policy PlanningPolicy) PlanningPolicy {
+	if policy.MaxParallelCalls <= 0 {
+		policy.MaxParallelCalls = DefaultPlanningPolicy().MaxParallelCalls
+	}
+	if policy.MaxParallelCalls < 1 {
+		policy.MaxParallelCalls = 1
+	}
+	return policy
+}
+
+func buildCallPlan(index int, call toolruntime.ToolCall) ToolCallPlan {
+	name := strings.TrimSpace(call.Function.Name)
+	callID := strings.TrimSpace(call.ID)
+	if callID == "" {
+		callID = name
+	}
+	arguments := cloneRawMessage(call.Function.Arguments)
+	return ToolCallPlan{
+		Index:     index,
+		Call:      call,
+		CallID:    callID,
+		Name:      name,
+		Arguments: arguments,
+		Metadata:  inspectToolCall(name, arguments),
+	}
+}
+
+func desiredExecutionMode(call ToolCallPlan, policy PlanningPolicy) ExecutionMode {
+	if !policy.AllowParallel {
+		return ExecutionModeSequential
+	}
+	if call.Metadata.SupportsParallel {
+		return ExecutionModeParallel
+	}
+	return ExecutionModeSequential
+}
+
+func batchReason(batch ExecutionBatch) string {
+	if batch.Mode == ExecutionModeParallel {
+		return "adjacent read-only tools can run together"
+	}
+	if len(batch.Calls) == 1 {
+		return "serialized for safety"
+	}
+	return "serialized to preserve ordering and side effects"
+}
+
+func summarizePlan(batches []ExecutionBatch) ExecutionPlanSummary {
+	summary := ExecutionPlanSummary{
+		BatchCount: len(batches),
+	}
+	for _, batch := range batches {
+		if batch.Mode == ExecutionModeParallel {
+			summary.ParallelBatchCount++
+		} else {
+			summary.SequentialBatchCount++
+		}
+		for _, call := range batch.Calls {
+			summary.CallCount++
+			if call.Metadata.MutatesWorkspace || call.Metadata.SideEffectKind == SideEffectKindShell {
+				summary.MutatingCallCount++
+			} else {
+				summary.ReadOnlyCallCount++
+			}
+		}
+	}
+	return summary
+}
+
+func executeBatch(ctx context.Context, batch ExecutionBatch) BatchResultEnvelope {
+	report := BatchResultEnvelope{
+		Index:     batch.Index,
+		Mode:      batch.Mode,
+		Reason:    batch.Reason,
+		StartedAt: time.Now().UTC(),
+	}
+	if batch.Mode == ExecutionModeParallel && len(batch.Calls) > 1 {
+		results := make([]ToolResultEnvelope, len(batch.Calls))
+		var wg sync.WaitGroup
+		wg.Add(len(batch.Calls))
+		for index, call := range batch.Calls {
+			index := index
+			call := call
+			go func() {
+				defer wg.Done()
+				results[index] = executePlannedCall(ctx, batch.Index, batch.Mode, call)
+			}()
+		}
+		wg.Wait()
+		report.Results = results
+		report.FinishedAt = time.Now().UTC()
+		return report
+	}
+
+	results := make([]ToolResultEnvelope, 0, len(batch.Calls))
+	for _, call := range batch.Calls {
+		results = append(results, executePlannedCall(ctx, batch.Index, ExecutionModeSequential, call))
+	}
+	report.Results = results
+	report.FinishedAt = time.Now().UTC()
+	return report
+}
+
+func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode, call ToolCallPlan) ToolResultEnvelope {
+	startedAt := time.Now().UTC()
+	output := dispatch(ctx, call.Name, call.Arguments)
+	finishedAt := time.Now().UTC()
+	return ToolResultEnvelope{
+		Index:      call.Index,
+		BatchIndex: batchIndex,
+		Mode:       mode,
+		CallID:     call.CallID,
+		Name:       call.Name,
+		Metadata:   call.Metadata,
+		Status:     detectResultStatus(output),
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+		Duration:   finishedAt.Sub(startedAt),
+		OutputText: output,
+		OutputJSON: rawJSON(output),
+	}
+}
+
+func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetadata {
+	metadata := ToolExecutionMetadata{
+		SideEffectKind:   SideEffectKindUnknown,
+		SandboxHint:      SandboxHintInherited,
+		ApprovalRequired: true,
+	}
+
+	switch strings.TrimSpace(name) {
+	case "run_shell_command":
+		metadata.SideEffectKind = SideEffectKindShell
+		metadata.SandboxHint = SandboxHintDangerous
+		metadata.MutatesWorkspace = true
+		metadata.SpawnsSubprocess = true
+		var args shellArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			metadata.ArgumentParseError = err.Error()
+			return metadata
+		}
+		metadata.WorkingDirectory = normalizeResourcePath(args.Cwd, ".")
+		metadata.ResourceKeys = []string{"cwd:" + metadata.WorkingDirectory}
+		return metadata
+	case "list_directory":
+		metadata.SideEffectKind = SideEffectKindReadOnly
+		metadata.SandboxHint = SandboxHintInherited
+		metadata.ApprovalRequired = false
+		metadata.SupportsParallel = true
+		var args listArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			metadata.ArgumentParseError = err.Error()
+			return metadata
+		}
+		resource := normalizeResourcePath(args.Path, ".")
+		metadata.ResourceKeys = []string{"dir:" + resource}
+		return metadata
+	case "read_file":
+		metadata.SideEffectKind = SideEffectKindReadOnly
+		metadata.SandboxHint = SandboxHintInherited
+		metadata.ApprovalRequired = false
+		metadata.SupportsParallel = true
+		var args readArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			metadata.ArgumentParseError = err.Error()
+			return metadata
+		}
+		resource := normalizeResourcePath(args.Path, ".")
+		metadata.ResourceKeys = []string{"file:" + resource}
+		return metadata
+	case "search_text":
+		metadata.SideEffectKind = SideEffectKindReadOnly
+		metadata.SandboxHint = SandboxHintInherited
+		metadata.ApprovalRequired = false
+		metadata.SupportsParallel = true
+		var args searchArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			metadata.ArgumentParseError = err.Error()
+			return metadata
+		}
+		resource := normalizeResourcePath(args.Path, ".")
+		metadata.ResourceKeys = []string{"tree:" + resource}
+		return metadata
+	case "write_file":
+		metadata.SideEffectKind = SideEffectKindWorkspaceWrite
+		metadata.SandboxHint = SandboxHintWorkspaceWrite
+		metadata.MutatesWorkspace = true
+		var args writeArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			metadata.ArgumentParseError = err.Error()
+			return metadata
+		}
+		resource := normalizeResourcePath(args.Path, ".")
+		metadata.ResourceKeys = []string{"file:" + resource}
+		return metadata
+	case "apply_patch":
+		metadata.SideEffectKind = SideEffectKindWorkspaceWrite
+		metadata.SandboxHint = SandboxHintWorkspaceWrite
+		metadata.MutatesWorkspace = true
+		metadata.ResourceKeys = []string{"workspace"}
+		var args patchArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			metadata.ArgumentParseError = err.Error()
+		}
+		return metadata
+	default:
+		metadata.ResourceKeys = []string{"tool:" + strings.TrimSpace(name)}
+		return metadata
+	}
+}
+
+func normalizeResourcePath(path string, fallback string) string {
+	candidate := strings.TrimSpace(path)
+	if candidate == "" {
+		candidate = fallback
+	}
+	if candidate == "" {
+		candidate = "."
+	}
+	resolved, err := filepath.Abs(candidate)
+	if err != nil {
+		return candidate
+	}
+	return resolved
+}
+
+func cloneRawMessage(value json.RawMessage) json.RawMessage {
+	if len(value) == 0 {
+		return nil
+	}
+	return append(json.RawMessage(nil), value...)
+}
+
+func rawJSON(value string) json.RawMessage {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || !json.Valid([]byte(trimmed)) {
+		return nil
+	}
+	return json.RawMessage([]byte(trimmed))
+}
+
+func detectResultStatus(output string) ResultStatus {
+	payload := rawJSON(output)
+	if len(payload) == 0 {
+		return ResultStatusFailed
+	}
+	var parsed struct {
+		OK *bool `json:"ok"`
+	}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return ResultStatusFailed
+	}
+	if parsed.OK != nil && *parsed.OK {
+		return ResultStatusSucceeded
+	}
+	return ResultStatusFailed
+}

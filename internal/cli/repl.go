@@ -243,7 +243,7 @@ func (s *chatSession) runPrompt(prompt string) int {
 	}
 
 	s.captureResult(result)
-	s.persistTurn(prompt, result)
+	s.persistTurn(result)
 
 	if err := taskrun.Print(result); err != nil {
 		fmt.Fprintf(os.Stderr, "chat: %v\n", err)
@@ -253,10 +253,7 @@ func (s *chatSession) runPrompt(prompt string) int {
 }
 
 func (s *chatSession) captureResult(result taskrun.Result) {
-	s.history = clonePersistedMessages(result.RequestMessages)
-	if hasPersistableMessage(result.AssistantMessage) {
-		s.history = append(s.history, result.AssistantMessage)
-	}
+	s.history = clonePersistedMessages(result.FullHistory())
 
 	if strings.TrimSpace(s.options.Model) == "" {
 		s.options.Model = result.Model
@@ -272,7 +269,7 @@ func (s *chatSession) captureResult(result taskrun.Result) {
 	}
 }
 
-func (s *chatSession) persistTurn(prompt string, result taskrun.Result) {
+func (s *chatSession) persistTurn(result taskrun.Result) {
 	if strings.TrimSpace(s.sessionPath) == "" {
 		entry, err := persistNewSession(result)
 		if err != nil {
@@ -283,7 +280,7 @@ func (s *chatSession) persistTurn(prompt string, result taskrun.Result) {
 		return
 	}
 
-	if err := appendSessionTurn(s.sessionPath, prompt, result.AssistantMessage); err != nil {
+	if err := appendSessionTurn(s.sessionPath, result); err != nil {
 		fmt.Fprintf(os.Stderr, "chat: warning: failed to append session: %v\n", err)
 	}
 }
