@@ -1,0 +1,59 @@
+name: nv-go-alpha
+
+on:
+  push:
+    branches:
+      - nv-go-alpha
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.24.2'
+  NV_SERVER_URL: https://sosiskibot.ru/nv/api
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build release artifacts
+        run: |
+          LAVILAS_VERSION=0.1.0-alpha.${GITHUB_RUN_NUMBER} \
+          LAVILAS_COMMIT=${GITHUB_SHA} \
+          ./scripts/build-release.sh
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: lavilas-go-dist
+          path: dist/
+
+  publish-nv:
+    needs: build
+    if: ${{ secrets.NV_PUBLISH_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dist
+        uses: actions/download-artifact@v4
+        with:
+          name: lavilas-go-dist
+          path: dist/
+
+      - name: Install NV CLI
+        run: curl -fsSL https://sosiskibot.ru/install/nv.sh | sh
+
+      - name: Publish alpha to NV
+        env:
+          NV_PUBLISH_TOKEN: ${{ secrets.NV_PUBLISH_TOKEN }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          nv publish --manifest ./nv.package.json --tag alpha --server "${NV_SERVER_URL}"

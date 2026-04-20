@@ -1,0 +1,37 @@
+{
+  "name": "lavilas",
+  "version": "0.1.0-alpha.1",
+  "title": "Lavilas Go Alpha",
+  "description": "Go alpha rewrite of Lavilas Codex for NV.",
+  "homepage": "https://github.com/Perdonus/lavilas-code/tree/nv-go-alpha",
+  "aliases": [
+    "lavilas-go",
+    "lavilas-alpha"
+  ],
+  "dist_tags": [
+    "alpha"
+  ],
+  "readme": "README.md",
+  "variants": [
+    {
+      "id": "lavilas-linux-amd64",
+      "label": "Linux amd64",
+      "os": "linux",
+      "default": true,
+      "artifact": "dist/lavilas-linux-amd64.tar.gz",
+      "file_name": "lavilas-linux-amd64.tar.gz",
+      "install_strategy": "linux-portable-tar"
+    },
+    {
+      "id": "lavilas-windows-amd64",
+      "label": "Windows amd64",
+      "os": "windows",
+      "default": true,
+      "artifact": "dist/lavilas-windows-amd64.exe",
+      "file_name": "lavilas-windows-amd64.exe",
+      "install_strategy": "windows-self-binary",
+      "install_root": "%LOCALAPPDATA%/Lavilas",
+      "binary_name": "lavilas.exe"
+    }
+  ]
+}
