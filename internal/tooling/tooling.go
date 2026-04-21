@@ -72,7 +72,7 @@ func Definitions() []toolruntime.ToolDefinition {
 					"cwd":             map[string]any{"type": "string", "description": "Optional working directory. Defaults to the current directory."},
 					"timeout_seconds": map[string]any{"type": "integer", "description": "Optional timeout in seconds. Defaults to 20, max 120."},
 				},
-				"required": []string{"cmd"},
+				"required": []string{"cmd", "cwd", "timeout_seconds"},
 			},
 		),
 		functionTool(
@@ -83,6 +83,7 @@ func Definitions() []toolruntime.ToolDefinition {
 				"properties": map[string]any{
 					"path": map[string]any{"type": "string", "description": "Directory path. Defaults to the current directory."},
 				},
+				"required": []string{"path"},
 			},
 		),
 		functionTool(
@@ -95,7 +96,7 @@ func Definitions() []toolruntime.ToolDefinition {
 					"start_line": map[string]any{"type": "integer", "description": "Optional 1-based start line."},
 					"end_line":   map[string]any{"type": "integer", "description": "Optional 1-based end line, inclusive."},
 				},
-				"required": []string{"path"},
+				"required": []string{"path", "start_line", "end_line"},
 			},
 		),
 		functionTool(
@@ -109,7 +110,7 @@ func Definitions() []toolruntime.ToolDefinition {
 					"case_sensitive": map[string]any{"type": "boolean", "description": "Whether the search is case-sensitive."},
 					"max_results":    map[string]any{"type": "integer", "description": "Optional max number of matches. Defaults to 128."},
 				},
-				"required": []string{"query"},
+				"required": []string{"path", "query", "case_sensitive", "max_results"},
 			},
 		),
 		functionTool(
@@ -133,7 +134,7 @@ func Definitions() []toolruntime.ToolDefinition {
 					"patch":      map[string]any{"type": "string", "description": "Patch content to apply."},
 					"check_only": map[string]any{"type": "boolean", "description": "If true, validate the patch without applying it."},
 				},
-				"required": []string{"patch"},
+				"required": []string{"patch", "check_only"},
 			},
 		),
 		functionTool(
@@ -156,7 +157,7 @@ func Definitions() []toolruntime.ToolDefinition {
 						"required": []string{"writable_roots"},
 					},
 				},
-				"required": []string{"permissions"},
+				"required": []string{"permissions", "reason"},
 			},
 		),
 	}

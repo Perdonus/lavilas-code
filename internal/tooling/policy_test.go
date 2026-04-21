@@ -33,6 +33,77 @@ func TestDefinitionsWithPolicyFiltersDeniedTools(t *testing.T) {
 	}
 }
 
+func TestDefinitionsExposeStrictSchemasForOpenAIProviders(t *testing.T) {
+	definitions := Definitions()
+
+	findDefinition := func(name string) toolruntime.ToolDefinition {
+		t.Helper()
+		for _, definition := range definitions {
+			if definition.Function.Name == name {
+				return definition
+			}
+		}
+		t.Fatalf("definition %q not found", name)
+		return toolruntime.ToolDefinition{}
+	}
+
+	runShell := findDefinition("run_shell_command")
+	root := runShell.Function.Parameters
+	if got, ok := root["additionalProperties"].(bool); !ok || got {
+		t.Fatalf("run_shell_command additionalProperties = %#v, want false", root["additionalProperties"])
+	}
+	required, ok := root["required"].([]string)
+	if !ok {
+		t.Fatalf("run_shell_command required = %#v, want []string", root["required"])
+	}
+	wantRoot := []string{"cmd", "cwd", "timeout_seconds"}
+	if len(required) != len(wantRoot) {
+		t.Fatalf("run_shell_command required len = %d, want %d (%v)", len(required), len(wantRoot), required)
+	}
+	for index, value := range wantRoot {
+		if required[index] != value {
+			t.Fatalf("run_shell_command required[%d] = %q, want %q", index, required[index], value)
+		}
+	}
+
+	requestPermissions := findDefinition("request_permissions")
+	root = requestPermissions.Function.Parameters
+	if got, ok := root["additionalProperties"].(bool); !ok || got {
+		t.Fatalf("request_permissions additionalProperties = %#v, want false", root["additionalProperties"])
+	}
+	required, ok = root["required"].([]string)
+	if !ok {
+		t.Fatalf("request_permissions required = %#v, want []string", root["required"])
+	}
+	wantRoot = []string{"permissions", "reason"}
+	if len(required) != len(wantRoot) {
+		t.Fatalf("request_permissions required len = %d, want %d (%v)", len(required), len(wantRoot), required)
+	}
+	for index, value := range wantRoot {
+		if required[index] != value {
+			t.Fatalf("request_permissions required[%d] = %q, want %q", index, required[index], value)
+		}
+	}
+	properties, ok := root["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_permissions properties missing: %+v", root)
+	}
+	permissions, ok := properties["permissions"].(map[string]any)
+	if !ok {
+		t.Fatalf("permissions schema missing: %+v", properties)
+	}
+	if got, ok := permissions["additionalProperties"].(bool); !ok || got {
+		t.Fatalf("permissions additionalProperties = %#v, want false", permissions["additionalProperties"])
+	}
+	nestedRequired, ok := permissions["required"].([]string)
+	if !ok {
+		t.Fatalf("permissions required = %#v, want []string", permissions["required"])
+	}
+	if len(nestedRequired) != 1 || nestedRequired[0] != "writable_roots" {
+		t.Fatalf("permissions required = %#v, want [writable_roots]", nestedRequired)
+	}
+}
+
 func TestExecutePlanRequireApprovalSkipsMutatingTool(t *testing.T) {
 	tempDir := t.TempDir()
 	targetPath := filepath.Join(tempDir, "blocked.txt")

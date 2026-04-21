@@ -100,7 +100,7 @@ func (m *Model) renderSessionHeaderBox() string {
 	return lipgloss.NewStyle().
 		Width(cardWidth).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#5D6675")).
+		BorderForeground(lipgloss.Color("8")).
 		Padding(0, 1).
 		Render(strings.Join(rows, "\n"))
 }
@@ -271,7 +271,7 @@ func (m *Model) statusCardBox(width int) string {
 	return lipgloss.NewStyle().
 		Width(width).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#5D6675")).
+		BorderForeground(lipgloss.Color("8")).
 		Padding(0, 1).
 		Render(strings.Join(lines, "\n"))
 }
@@ -380,7 +380,7 @@ func (m *Model) renderFramedScreen(title string, bodyLines []string, footer stri
 	pane := lipgloss.NewStyle().
 		Width(maxInt(40, m.width)).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#5D6675")).
+		BorderForeground(lipgloss.Color("8")).
 		Padding(0, 1)
 	content := []string{title}
 	content = append(content, bodyLines...)
@@ -409,7 +409,8 @@ func (m *Model) paletteSubtitle() string {
 		}
 		return fmt.Sprintf("Profiles folder: %s. Quick command: %sprofiles", m.layout.ProfilesDir(), prefix)
 	case PaletteModeCustomization:
-		return m.localize("Colors and formatting", "Цвета и форматирование")
+	case PaletteModeCustomizationColor:
+	case PaletteModeCustomizationFormatting:
 	default:
 		return ""
 	}
@@ -438,6 +439,14 @@ func (m *Model) paletteSearchPlaceholder() string {
 		return m.localize("Find a settings section", "Найти раздел настроек")
 	case PaletteModeCustomization:
 		return m.localize("Find a customization section", "Найти раздел кастомизации")
+	case PaletteModeCustomizationColor:
+		return m.localize("Find a text color target", "Найти цель цвета текста")
+	case PaletteModeCustomizationColorChoice:
+		return m.localize("Find a color or HEX", "Найти цвет или HEX")
+	case PaletteModeCustomizationFormatting:
+		return m.localize("Find a formatting target", "Найти цель форматирования")
+	case PaletteModeCustomizationFormattingTarget:
+		return m.localize("Find a formatting option", "Найти форматирование")
 	case PaletteModeModelSettings:
 		return m.localize("Find model settings", "Найти раздел моделей")
 	case PaletteModeProviders:
@@ -514,24 +523,32 @@ func (m *Model) renderPaletteRowLines(item PaletteItem, selected bool, width int
 	if selected {
 		prefix = "› "
 	}
-	compact := mode == PaletteModeSettings || mode == PaletteModeCustomization || mode == PaletteModeModelSettings || mode == PaletteModeLanguage || mode == PaletteModeCommandPrefix || mode == PaletteModePopupCommands || mode == PaletteModePermissions || mode == PaletteModeRoot
+	compact := mode == PaletteModeSettings || mode == PaletteModeCustomization || mode == PaletteModeCustomizationColor || mode == PaletteModeCustomizationColorChoice || mode == PaletteModeCustomizationFormatting || mode == PaletteModeCustomizationFormattingTarget || mode == PaletteModeModelSettings || mode == PaletteModeLanguage || mode == PaletteModeCommandPrefix || mode == PaletteModePopupCommands || mode == PaletteModePermissions || mode == PaletteModeRoot
 	style := m.styles.body
+	descStyle := m.styles.muted
 	if selected {
 		style = m.styles.selected
+		descStyle = m.styles.selectedSecondary
 	}
+	title := pickerDisplayText(item.DisplayTitle, item.Title)
+	description := pickerDisplayText(item.DisplayDescription, item.Description)
 	if compact {
-		line := padBetween(strings.TrimSpace(item.Title), strings.TrimSpace(item.Description), maxInt(10, width-lipgloss.Width(prefix)))
+		left := title
+		if description != "" {
+			left = padBetween(title, description, maxInt(10, width-lipgloss.Width(prefix)-maxInt(0, lipgloss.Width(item.Meta)+1)))
+		}
+		line := padBetween(left, strings.TrimSpace(item.Meta), maxInt(10, width-lipgloss.Width(prefix)))
 		return []string{style.Render(prefix + line)}
 	}
-	left := strings.TrimSpace(item.Title)
+	left := title
 	if subtitle := strings.TrimSpace(item.Subtitle); subtitle != "" {
 		left = left + "  " + subtitle
 	}
 	lineOne := padBetween(left, strings.TrimSpace(item.Meta), maxInt(10, width-lipgloss.Width(prefix)))
 	lines := []string{style.Render(prefix + lineOne)}
-	if description := strings.TrimSpace(item.Description); description != "" {
+	if description != "" {
 		descPrefix := strings.Repeat(" ", lipgloss.Width(prefix)) + "  "
-		lines = append(lines, style.Render(descPrefix+truncateForPicker(description, maxInt(10, width-lipgloss.Width(descPrefix)))))
+		lines = append(lines, descStyle.Render(descPrefix+truncateForPicker(description, maxInt(10, width-lipgloss.Width(descPrefix)))))
 	}
 	return lines
 }
@@ -581,8 +598,8 @@ func (m *Model) renderSessionPickerRows(entries []appstate.SessionEntry, err err
 }
 
 func padBetween(left string, right string, width int) string {
-	left = strings.TrimSpace(left)
-	right = strings.TrimSpace(right)
+	left = normalizePickerText(left)
+	right = normalizePickerText(right)
 	if width <= 0 {
 		if right == "" {
 			return left
@@ -656,7 +673,7 @@ func formatSessionPickerTime(value time.Time) string {
 }
 
 func truncateForPicker(value string, width int) string {
-	value = strings.TrimSpace(value)
+	value = normalizePickerText(value)
 	if width <= 0 {
 		return ""
 	}
@@ -667,4 +684,19 @@ func truncateForPicker(value string, width int) string {
 		return "…"
 	}
 	return lipgloss.NewStyle().MaxWidth(width - 1).Render(value) + "…"
+}
+
+func pickerDisplayText(display string, fallback string) string {
+	display = normalizePickerText(display)
+	if display != "" {
+		return display
+	}
+	return normalizePickerText(fallback)
+}
+
+func normalizePickerText(value string) string {
+	if strings.Contains(value, "\x1b[") {
+		return value
+	}
+	return strings.TrimSpace(value)
 }

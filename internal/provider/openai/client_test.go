@@ -125,6 +125,13 @@ func TestRequestFromRuntimeNormalizesStrictToolSchema(t *testing.T) {
 	if got, ok := root["additionalProperties"].(bool); !ok || got {
 		t.Fatalf("root additionalProperties = %#v, want false", root["additionalProperties"])
 	}
+	required, ok := root["required"].([]string)
+	if !ok {
+		t.Fatalf("root required = %#v, want []string", root["required"])
+	}
+	if len(required) != 2 || required[0] != "cmd" || required[1] != "permissions" {
+		t.Fatalf("root required = %#v, want [cmd permissions]", required)
+	}
 	properties, ok := root["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("properties missing from normalized schema: %+v", root)
@@ -135,6 +142,13 @@ func TestRequestFromRuntimeNormalizesStrictToolSchema(t *testing.T) {
 	}
 	if got, ok := permissions["additionalProperties"].(bool); !ok || got {
 		t.Fatalf("nested additionalProperties = %#v, want false", permissions["additionalProperties"])
+	}
+	nestedRequired, ok := permissions["required"].([]string)
+	if !ok {
+		t.Fatalf("nested required = %#v, want []string", permissions["required"])
+	}
+	if len(nestedRequired) != 1 || nestedRequired[0] != "writable_roots" {
+		t.Fatalf("nested required = %#v, want [writable_roots]", nestedRequired)
 	}
 }
 

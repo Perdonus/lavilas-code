@@ -13,6 +13,7 @@ type styles struct {
 	muted         lipgloss.Style
 	body          lipgloss.Style
 	selected      lipgloss.Style
+	selectedSecondary lipgloss.Style
 	helpKey       lipgloss.Style
 	helpDesc      lipgloss.Style
 	roleUser      lipgloss.Style
@@ -24,17 +25,13 @@ type styles struct {
 
 func newStyles() styles {
 	const (
-		borderColor = "#4A5565"
-		activeColor = "#8FB8FF"
-		titleColor  = "#F4EBD0"
-		textColor   = "#E7ECEF"
-		mutedColor  = "#9AA4B2"
-		userColor   = "#F6C177"
-		assistColor = "#8BD5CA"
-		systemColor = "#F28FAD"
-		toolColor   = "#B7BDF8"
-		selectBG    = "#8FB8FF"
-		busyColor   = "#FFD166"
+		borderColor = "8"
+		activeColor = "8"
+		selectBG    = "15"
+		busyColor   = "3"
+		mutedColor  = "8"
+		textColor   = "7"
+		secondaryOnSelection = "8"
 	)
 
 	pane := lipgloss.NewStyle().
@@ -48,19 +45,20 @@ func newStyles() styles {
 		app:           lipgloss.NewStyle(),
 		pane:          pane,
 		paneActive:    paneActive,
-		paneTitle:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(titleColor)),
-		sectionTitle:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(activeColor)),
+		paneTitle:     lipgloss.NewStyle().Bold(true),
+		sectionTitle:  lipgloss.NewStyle().Bold(true),
 		label:         lipgloss.NewStyle().Foreground(lipgloss.Color(mutedColor)),
 		value:         lipgloss.NewStyle().Foreground(lipgloss.Color(textColor)),
 		muted:         lipgloss.NewStyle().Foreground(lipgloss.Color(mutedColor)),
 		body:          lipgloss.NewStyle().Foreground(lipgloss.Color(textColor)),
-		selected:      lipgloss.NewStyle().Background(lipgloss.Color(selectBG)).Foreground(lipgloss.Color("#111111")).Bold(true),
-		helpKey:       lipgloss.NewStyle().Foreground(lipgloss.Color(titleColor)).Bold(true),
+		selected:      lipgloss.NewStyle().Background(lipgloss.Color(selectBG)).Foreground(lipgloss.Color("0")),
+		selectedSecondary: lipgloss.NewStyle().Background(lipgloss.Color(selectBG)).Foreground(lipgloss.Color(secondaryOnSelection)),
+		helpKey:       lipgloss.NewStyle().Bold(true),
 		helpDesc:      lipgloss.NewStyle().Foreground(lipgloss.Color(mutedColor)),
-		roleUser:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(userColor)),
-		roleAssistant: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(assistColor)),
-		roleSystem:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(systemColor)),
-		roleTool:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(toolColor)),
+		roleUser:      lipgloss.NewStyle().Foreground(lipgloss.Color(textColor)),
+		roleAssistant: lipgloss.NewStyle().Foreground(lipgloss.Color(textColor)),
+		roleSystem:    lipgloss.NewStyle().Foreground(lipgloss.Color(mutedColor)).Italic(true),
+		roleTool:      lipgloss.NewStyle().Foreground(lipgloss.Color(mutedColor)),
 		busy:          lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(busyColor)),
 	}
 }

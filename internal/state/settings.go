@@ -41,6 +41,7 @@ type Settings struct {
 	HiddenCommands     []string                   `json:"-"`
 	SelectionHighlight SelectionHighlightSettings `json:"-"`
 	Colors             SettingsColors             `json:"-"`
+	TextFormats        SettingsTextFormats        `json:"-"`
 	ModelPresets       ModelPresetSettings        `json:"-"`
 	ToolPolicy         tooling.ToolPolicy         `json:"-"`
 	Extras             map[string]json.RawMessage `json:"-"`
@@ -59,6 +60,73 @@ type SettingsColors struct {
 	CommandText   string
 	ReasoningText string
 	CommandOutput string
+}
+
+type SettingsTextFormats struct {
+	SelectionHighlight TextFormats
+	ListPrimary        TextFormats
+	ListSecondary      TextFormats
+	Reply              TextFormats
+	Reasoning          TextFormats
+	Command            TextFormats
+	CommandOutput      TextFormats
+}
+
+type TextFormats struct {
+	Bold        bool
+	Italic      bool
+	Underlined  bool
+	CrossedOut  bool
+}
+
+func (f TextFormats) IsEmpty() bool {
+	return !f.Bold && !f.Italic && !f.Underlined && !f.CrossedOut
+}
+
+func (f TextFormats) Contains(code string) bool {
+	switch normalizeTextFormatCode(code) {
+	case "bold":
+		return f.Bold
+	case "italic":
+		return f.Italic
+	case "underlined":
+		return f.Underlined
+	case "crossed_out":
+		return f.CrossedOut
+	default:
+		return false
+	}
+}
+
+func (f TextFormats) Toggle(code string) TextFormats {
+	switch normalizeTextFormatCode(code) {
+	case "bold":
+		f.Bold = !f.Bold
+	case "italic":
+		f.Italic = !f.Italic
+	case "underlined":
+		f.Underlined = !f.Underlined
+	case "crossed_out":
+		f.CrossedOut = !f.CrossedOut
+	}
+	return f
+}
+
+func (f TextFormats) SettingValue() []string {
+	values := make([]string, 0, 4)
+	if f.Bold {
+		values = append(values, "bold")
+	}
+	if f.Italic {
+		values = append(values, "italic")
+	}
+	if f.Underlined {
+		values = append(values, "underlined")
+	}
+	if f.CrossedOut {
+		values = append(values, "crossed_out")
+	}
+	return values
 }
 
 type ModelPresetSettings struct {
@@ -97,6 +165,21 @@ type settingsFile struct {
 	ReasoningTextColor       string   `json:"reasoning_text_color"`
 	CommandOutputTextColor   string   `json:"command_output_text_color"`
 	ToolPolicy               tooling.ToolPolicy `json:"tool_policy"`
+}
+
+func DefaultSettings() Settings {
+	return Settings{
+		Language:      "ru",
+		CommandPrefix: ".",
+		SelectionHighlight: SelectionHighlightSettings{
+			Preset: "light",
+			Fill:   true,
+			Color:  "light",
+		},
+		ModelPresets: ModelPresetSettings{Enabled: true},
+		ToolPolicy:   cloneToolPolicy(tooling.DefaultToolPolicy()),
+		Extras:       map[string]json.RawMessage{},
+	}
 }
 
 func LoadSettings(path string) (Settings, error) {
@@ -141,11 +224,49 @@ func ParseSettings(data []byte) (Settings, error) {
 		"command_text_color",
 		"reasoning_text_color",
 		"command_output_text_color",
+		"selection_highlight_text_formats",
+		"list_text_formats",
+		"list_primary_text_formats",
+		"list_secondary_text_formats",
+		"reply_text_formats",
+		"reasoning_text_formats",
+		"command_text_formats",
+		"command_output_text_formats",
 		"tool_policy",
 		"model_presets_enabled",
 		"model_presets",
 	} {
 		delete(extras, key)
+	}
+
+	selectionHighlightPreset := "light"
+	if rawValue, ok := raw["selection_highlight_preset"]; ok {
+		var value string
+		if err := json.Unmarshal(rawValue, &value); err == nil {
+			if normalized := normalizeSelectionPreset(value); normalized != "" {
+				selectionHighlightPreset = normalized
+			}
+		}
+	}
+
+	selectionHighlightFill := true
+	if rawValue, ok := raw["selection_highlight_fill"]; ok {
+		_ = json.Unmarshal(rawValue, &selectionHighlightFill)
+	}
+
+	selectionHighlightColor := selectionHighlightPreset
+	if rawValue, ok := raw["selection_highlight_color"]; ok {
+		_ = json.Unmarshal(rawValue, &selectionHighlightColor)
+	}
+
+	legacyListFormats := parseTextFormatsRaw(raw["list_text_formats"])
+	listPrimaryFormats := parseTextFormatsRaw(raw["list_primary_text_formats"])
+	if listPrimaryFormats.IsEmpty() {
+		listPrimaryFormats = legacyListFormats
+	}
+	listSecondaryFormats := parseTextFormatsRaw(raw["list_secondary_text_formats"])
+	if listSecondaryFormats.IsEmpty() {
+		listSecondaryFormats = legacyListFormats
 	}
 
 	modelPresets := ModelPresetSettings{Enabled: true}
@@ -160,27 +281,36 @@ func ParseSettings(data []byte) (Settings, error) {
 		}
 	}
 
-	return Settings{
-		Language:       file.Language,
-		CommandPrefix:  file.CommandPrefix,
-		HiddenCommands: cloneStrings(file.HiddenCommands),
-		SelectionHighlight: SelectionHighlightSettings{
-			Preset: file.SelectionHighlightPreset,
-			Fill:   file.SelectionHighlightFill,
-			Color:  file.SelectionHighlightColor,
-		},
-		Colors: SettingsColors{
-			ListPrimary:   file.ListPrimaryColor,
-			ListSecondary: file.ListSecondaryColor,
-			ReplyText:     file.ReplyTextColor,
-			CommandText:   file.CommandTextColor,
-			ReasoningText: file.ReasoningTextColor,
-			CommandOutput: file.CommandOutputTextColor,
-		},
-		ModelPresets: modelPresets,
-		ToolPolicy:   cloneToolPolicy(file.ToolPolicy),
-		Extras:       extras,
-	}, nil
+	settings := DefaultSettings()
+	settings.Language = firstNonEmptyTrimmed(file.Language, settings.Language)
+	settings.CommandPrefix = firstNonEmptyTrimmed(file.CommandPrefix, settings.CommandPrefix)
+	settings.HiddenCommands = cloneStrings(file.HiddenCommands)
+	settings.SelectionHighlight = SelectionHighlightSettings{
+		Preset: selectionHighlightPreset,
+		Fill:   selectionHighlightFill,
+		Color:  firstNonEmptyTrimmed(selectionHighlightColor, selectionHighlightPreset),
+	}
+	settings.Colors = SettingsColors{
+		ListPrimary:   file.ListPrimaryColor,
+		ListSecondary: file.ListSecondaryColor,
+		ReplyText:     file.ReplyTextColor,
+		CommandText:   file.CommandTextColor,
+		ReasoningText: file.ReasoningTextColor,
+		CommandOutput: file.CommandOutputTextColor,
+	}
+	settings.TextFormats = SettingsTextFormats{
+		SelectionHighlight: parseTextFormatsRaw(raw["selection_highlight_text_formats"]),
+		ListPrimary:        listPrimaryFormats,
+		ListSecondary:      listSecondaryFormats,
+		Reply:              parseTextFormatsRaw(raw["reply_text_formats"]),
+		Reasoning:          parseTextFormatsRaw(raw["reasoning_text_formats"]),
+		Command:            parseTextFormatsRaw(raw["command_text_formats"]),
+		CommandOutput:      parseTextFormatsRaw(raw["command_output_text_formats"]),
+	}
+	settings.ModelPresets = modelPresets
+	settings.ToolPolicy = cloneToolPolicy(file.ToolPolicy)
+	settings.Extras = extras
+	return settings, nil
 }
 
 func LoadSettingsSummary(path string) (SettingsSummary, error) {
@@ -224,6 +354,15 @@ func (s Settings) Clone() Settings {
 			CommandText:   s.Colors.CommandText,
 			ReasoningText: s.Colors.ReasoningText,
 			CommandOutput: s.Colors.CommandOutput,
+		},
+		TextFormats: SettingsTextFormats{
+			SelectionHighlight: s.TextFormats.SelectionHighlight,
+			ListPrimary:        s.TextFormats.ListPrimary,
+			ListSecondary:      s.TextFormats.ListSecondary,
+			Reply:              s.TextFormats.Reply,
+			Reasoning:          s.TextFormats.Reasoning,
+			Command:            s.TextFormats.Command,
+			CommandOutput:      s.TextFormats.CommandOutput,
 		},
 		ModelPresets: s.ModelPresets.Clone(),
 		ToolPolicy:   cloneToolPolicy(s.ToolPolicy),
@@ -375,10 +514,80 @@ func (s Settings) marshalMap() map[string]any {
 	result["command_text_color"] = s.Colors.CommandText
 	result["reasoning_text_color"] = s.Colors.ReasoningText
 	result["command_output_text_color"] = s.Colors.CommandOutput
+	result["selection_highlight_text_formats"] = s.TextFormats.SelectionHighlight.SettingValue()
+	result["list_primary_text_formats"] = s.TextFormats.ListPrimary.SettingValue()
+	result["list_secondary_text_formats"] = s.TextFormats.ListSecondary.SettingValue()
+	result["reply_text_formats"] = s.TextFormats.Reply.SettingValue()
+	result["reasoning_text_formats"] = s.TextFormats.Reasoning.SettingValue()
+	result["command_text_formats"] = s.TextFormats.Command.SettingValue()
+	result["command_output_text_formats"] = s.TextFormats.CommandOutput.SettingValue()
 	result["tool_policy"] = tooling.NormalizeToolPolicy(s.ToolPolicy)
 	result["model_presets"] = map[string]any{
 		"enabled":   s.ModelPresets.Enabled,
 		"providers": s.ModelPresets.marshalMap(),
+	}
+	return result
+}
+
+func normalizeSelectionPreset(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "graphite":
+		return "graphite"
+	case "amber":
+		return "amber"
+	case "mint":
+		return "mint"
+	case "rose":
+		return "rose"
+	default:
+		return "light"
+	}
+}
+
+func normalizeTextFormatCode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "bold":
+		return "bold"
+	case "italic":
+		return "italic"
+	case "underlined":
+		return "underlined"
+	case "crossed_out", "crossedout":
+		return "crossed_out"
+	default:
+		return ""
+	}
+}
+
+func parseTextFormatsRaw(raw json.RawMessage) TextFormats {
+	if len(raw) == 0 {
+		return TextFormats{}
+	}
+
+	var array []string
+	if err := json.Unmarshal(raw, &array); err == nil {
+		return parseTextFormatsStrings(array)
+	}
+
+	var object map[string]bool
+	if err := json.Unmarshal(raw, &object); err == nil {
+		var result TextFormats
+		for key, enabled := range object {
+			if !enabled {
+				continue
+			}
+			result = result.Toggle(key)
+		}
+		return result
+	}
+
+	return TextFormats{}
+}
+
+func parseTextFormatsStrings(values []string) TextFormats {
+	var result TextFormats
+	for _, value := range values {
+		result = result.Toggle(value)
 	}
 	return result
 }
@@ -569,6 +778,15 @@ func cloneToolPolicy(policy tooling.ToolPolicy) tooling.ToolPolicy {
 		BlockMutatingTools: policy.BlockMutatingTools,
 		BlockShellCommands: policy.BlockShellCommands,
 	}
+}
+
+func firstNonEmptyTrimmed(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func orderedPresetKeys(p ProviderPresetSettings) []string {

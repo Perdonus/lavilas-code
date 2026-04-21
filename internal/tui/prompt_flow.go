@@ -20,6 +20,7 @@ const (
 	formFieldBaseURL     = "base_url"
 	formFieldPresetName  = "model_preset_name"
 	formFieldCommandPrefix = "command_prefix"
+	formFieldColorHex    = "color_hex"
 )
 
 type formPromptKind string
@@ -28,6 +29,7 @@ const (
 	formPromptAddAccount formPromptKind = "add_account"
 	formPromptPresetName formPromptKind = "preset_name"
 	formPromptCommandPrefix formPromptKind = "command_prefix"
+	formPromptCustomColor formPromptKind = "custom_color"
 )
 
 type formPromptField struct {
@@ -167,6 +169,8 @@ func (m *Model) submitFormPrompt(prompt *formPromptState) tea.Cmd {
 		return m.submitPresetNamePrompt(prompt)
 	case formPromptCommandPrefix:
 		return m.submitCommandPrefixPrompt(prompt)
+	case formPromptCustomColor:
+		return m.submitCustomColorPrompt(prompt)
 	default:
 		return m.applyFocusState()
 	}
@@ -337,6 +341,35 @@ func (m *Model) submitCommandPrefixPrompt(prompt *formPromptState) tea.Cmd {
 		return m.openCommandPrefixPrompt()
 	}
 	return m.setSettingsCommandPrefix(prefix)
+}
+
+func (m *Model) openCustomColorPrompt(target popupColorTarget) tea.Cmd {
+	label := popupColorTargetLabel(target, m.language)
+	return m.showFormPrompt(&formPromptState{
+		Kind:     formPromptCustomColor,
+		Title:    localizedTextTUI(m.language, "Custom color", "Свой цвет"),
+		Subtitle: label,
+		Fields: []formPromptField{{
+			ID:          formFieldColorHex,
+			Header:      label,
+			Prompt:      localizedTextTUI(m.language, "Enter a HEX color like #f7dce5.", "Введите HEX-цвет, например #f7dce5."),
+			Required:    true,
+			Placeholder: "#f7dce5",
+		}},
+		Meta: map[string]string{
+			"target": string(target),
+		},
+	})
+}
+
+func (m *Model) submitCustomColorPrompt(prompt *formPromptState) tea.Cmd {
+	target := popupColorTarget(strings.TrimSpace(prompt.Meta["target"]))
+	value := normalizeHexColor(prompt.Answers[formFieldColorHex])
+	if value == "" {
+		m.state.Footer = localizedTextTUI(m.language, "Invalid HEX color", "Некорректный HEX-цвет")
+		return m.openCustomColorPrompt(target)
+	}
+	return m.setPopupColorChoice(target, value)
 }
 
 func isASCII(value string) bool {

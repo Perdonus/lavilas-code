@@ -127,6 +127,8 @@ type Model struct {
 	sessionSort                   sessionSortKey
 	sessionPaletteStartup         bool
 	approvalStore                 *taskrun.ApprovalSessionStore
+	customizationColorTarget      popupColorTarget
+	customizationFormatTarget     popupFormatTarget
 }
 
 var composerPlaceholders = map[commandcatalog.CatalogLanguage][]string{
@@ -671,16 +673,16 @@ func (m *Model) renderTranscriptEntry(entry TranscriptEntry, width int) string {
 	switch role {
 	case "user":
 		prefix = "›"
-		style = m.styles.value
+		style = m.styles.roleUser
 	case "assistant":
 		prefix = "•"
-		style = m.styles.body
+		style = m.styles.roleAssistant
 	case "tool":
 		prefix = "•"
-		style = m.styles.muted
+		style = m.styles.roleTool
 	case "system":
 		prefix = "■"
-		style = m.styles.muted
+		style = m.styles.roleSystem
 	}
 	bodyWidth := maxInt(1, width-lipgloss.Width(prefix)-1)
 	rendered := style.Width(bodyWidth).Render(body)
@@ -1172,7 +1174,7 @@ func (m *Model) directPaletteContext(mode PaletteMode) PaletteContext {
 			BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
 			ReturnFocus:     FocusInput,
 		}
-	case PaletteModeCustomization, PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
+	case PaletteModeCustomization, PaletteModeCustomizationColor, PaletteModeCustomizationFormatting, PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
 		return PaletteContext{
 			BackTitle:       localize("Back to Settings", "Назад к настройкам"),
 			BackDescription: localize("Return to settings", "Вернуться к настройкам"),
@@ -1210,7 +1212,7 @@ func (m *Model) navigatePaletteBranchBack() tea.Cmd {
 		return m.reopenModelPresetsSettingsPalette()
 	case PaletteModePresetActions, PaletteModePresetModels:
 		return m.reopenCurrentProviderPresetEditor()
-	case PaletteModeCustomization, PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
+	case PaletteModeCustomization, PaletteModeCustomizationColor, PaletteModeCustomizationFormatting, PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
 		return m.openPaletteMode(PaletteModeSettings, false)
 	case PaletteModeStatus:
 		return m.closePalette()
@@ -1224,6 +1226,14 @@ func (m *Model) paletteItemsForMode(mode PaletteMode) []PaletteItem {
 		return m.settingsPaletteItems()
 	case PaletteModeCustomization:
 		return m.customizationPaletteItems()
+	case PaletteModeCustomizationColor:
+		return m.customizationColorItems()
+	case PaletteModeCustomizationColorChoice:
+		return m.customizationColorChoiceItems()
+	case PaletteModeCustomizationFormatting:
+		return m.customizationFormattingItems()
+	case PaletteModeCustomizationFormattingTarget:
+		return m.customizationFormattingTargetItems()
 	case PaletteModeStatus:
 		return nil
 	case PaletteModeLanguage:
@@ -1282,27 +1292,195 @@ func (m *Model) customizationPaletteItems() []PaletteItem {
 	if !effectiveSelectionHighlightFill(settings) {
 		fillValue = m.localize("Text", "Текст")
 	}
-	colorValue := fallback(strings.TrimSpace(settings.SelectionHighlight.Color), "#8FB8FF")
 	return []PaletteItem{
 		{
 			Key:         "customization.fill",
 			Title:       m.localize("Fill", "Заливка"),
 			Description: fillValue,
+			Meta:        renderStateTag(effectiveSelectionHighlightFill(settings)),
 			Keywords:    []string{"fill", "background", "selection", "заливка", "фон", "выделение"},
 		},
 		{
-			Key:         "customization.color",
-			Title:       m.localize("Color", "Цвет"),
-			Description: colorValue,
-			Keywords:    []string{"color", "palette", "reply", "command", "цвет", "палитра", "ответ", "команда"},
+			Key:      "customization.color",
+			Title:    m.localize("Color", "Цвет"),
+			Keywords: []string{"color", "palette", "reply", "command", "цвет", "палитра", "ответ", "команда"},
 		},
 		{
-			Key:         "customization.formatting",
-			Title:       m.localize("Formatting", "Форматирование"),
-			Description: m.localize("Alpha preview", "Alpha-превью"),
-			Keywords:    []string{"formatting", "bold", "italic", "underline", "strike", "форматирование", "жирный", "курсив", "подчёркивание"},
+			Key:      "customization.formatting",
+			Title:    m.localize("Formatting", "Форматирование"),
+			Keywords: []string{"formatting", "bold", "italic", "underline", "strike", "форматирование", "жирный", "курсив", "подчёркивание"},
 		},
 	}
+}
+
+func (m *Model) selectionHighlightColorSummary(settings appstate.Settings) string {
+	return colorChoiceSummary(settings.SelectionHighlight.Color, settings.SelectionHighlight.Preset, m.language)
+}
+
+func (m *Model) selectionPresetLabel(preset string) string {
+	return selectionPresetDisplayName(preset, m.language)
+}
+
+func (m *Model) selectionHighlightFormattingSummary(settings appstate.Settings) string {
+	return formatValueSummary(settings.TextFormats.SelectionHighlight, m.language)
+}
+
+func (m *Model) popupColorTargetSummary(settings appstate.Settings, target popupColorTarget) string {
+	switch target {
+	case popupColorTargetSelection:
+		return m.selectionHighlightColorSummary(settings)
+	default:
+		return colorChoiceSummary(popupColorTargetChoice(settings, target), settings.SelectionHighlight.Preset, m.language)
+	}
+}
+
+func (m *Model) popupFormatTargetSummary(settings appstate.Settings, target popupFormatTarget) string {
+	return formatValueSummary(popupFormatTargetValue(settings, target), m.language)
+}
+
+func (m *Model) customizationColorItems() []PaletteItem {
+	settings := m.settingsForUI()
+	items := []PaletteItem{m.paletteBackItem()}
+	for _, target := range popupColorTargets() {
+		label := popupColorTargetLabel(target, m.language)
+		items = append(items, PaletteItem{
+			Key:                "customization.color.target",
+			Title:              label,
+			DisplayTitle:       label,
+			Description:        m.popupColorTargetSummary(settings, target),
+			DisplayDescription: m.popupColorTargetSummary(settings, target),
+			Value:              string(target),
+			Keywords:           []string{label, "color", "цвет"},
+		})
+	}
+	return items
+}
+
+func (m *Model) customizationColorChoiceItems() []PaletteItem {
+	settings := m.settingsForUI()
+	target := m.customizationColorTarget
+	if target == "" {
+		target = popupColorTargetSelection
+	}
+	items := []PaletteItem{m.paletteBackItem()}
+	currentChoice := parseUIColorChoice(popupColorTargetChoice(settings, target), settings.SelectionHighlight.Preset)
+	if target != popupColorTargetSelection {
+		label := localizedTextTUI(m.language, "Auto", "Авто")
+		items = append(items, PaletteItem{
+			Key:                "customization.color.choice",
+			Title:              label,
+			DisplayTitle:       label,
+			Description:        colorPreviewDescriptionChoice(uiColorChoice{kind: uiColorChoiceAuto, preset: normalizedSelectionPreset(settings.SelectionHighlight.Preset)}, settings.SelectionHighlight.Preset, m.language),
+			DisplayDescription: colorPreviewDescriptionChoice(uiColorChoice{kind: uiColorChoiceAuto, preset: normalizedSelectionPreset(settings.SelectionHighlight.Preset)}, settings.SelectionHighlight.Preset, m.language),
+			Value:              "auto",
+			Keywords:           []string{"auto", "system", "авто", "системный"},
+			Meta:               renderStateTag(currentChoice.kind == uiColorChoiceAuto),
+		})
+	}
+	if target == popupColorTargetSelection {
+		for _, preset := range []string{"light", "graphite", "amber", "mint", "rose"} {
+			items = append(items, PaletteItem{
+				Key:                "customization.color.choice",
+				Title:              m.selectionPresetLabel(preset),
+				DisplayTitle:       renderPresetChoiceLabel(preset, m.language),
+				Description:        colorPreviewDescriptionChoice(uiColorChoice{kind: uiColorChoicePreset, preset: preset}, settings.SelectionHighlight.Preset, m.language),
+				DisplayDescription: colorPreviewDescriptionChoice(uiColorChoice{kind: uiColorChoicePreset, preset: preset}, settings.SelectionHighlight.Preset, m.language),
+				Value:              preset,
+				Keywords:           []string{preset, "preset", "color", "пресет", "цвет"},
+				Meta:               renderStateTag(currentChoice.kind == uiColorChoicePreset && normalizedSelectionPreset(currentChoice.preset) == normalizedSelectionPreset(preset)),
+			})
+		}
+	}
+	for _, named := range allNamedColors {
+		if target == popupColorTargetSelection && strings.EqualFold(named.Hex, selectionPresetHex("light")) {
+			continue
+		}
+		if target == popupColorTargetSelection && strings.EqualFold(named.Hex, selectionPresetHex("graphite")) {
+			continue
+		}
+		if target == popupColorTargetSelection && strings.EqualFold(named.Hex, selectionPresetHex("amber")) {
+			continue
+		}
+		if target == popupColorTargetSelection && strings.EqualFold(named.Hex, selectionPresetHex("mint")) {
+			continue
+		}
+		if target == popupColorTargetSelection && strings.EqualFold(named.Hex, selectionPresetHex("rose")) {
+			continue
+		}
+		items = append(items, PaletteItem{
+			Key:                "customization.color.choice",
+			Title:              namedColorLabel(named, m.language),
+			DisplayTitle:       renderNamedColorChoiceLabel(named, m.language),
+			Description:        colorPreviewDescriptionChoice(uiColorChoice{kind: uiColorChoiceCustom, hex: strings.ToLower(named.Hex)}, settings.SelectionHighlight.Preset, m.language),
+			DisplayDescription: colorPreviewDescriptionChoice(uiColorChoice{kind: uiColorChoiceCustom, hex: strings.ToLower(named.Hex)}, settings.SelectionHighlight.Preset, m.language),
+			Value:              named.Hex,
+			Keywords:           []string{namedColorLabel(named, m.language), named.Hex, "color", "цвет"},
+			Meta:               renderStateTag(currentChoice.kind == uiColorChoiceCustom && strings.EqualFold(currentChoice.hex, named.Hex)),
+		})
+	}
+	customHex := popupColorTargetChoice(settings, target)
+	if parseUIColorChoice(customHex, settings.SelectionHighlight.Preset).kind != uiColorChoiceCustom {
+		customHex = "#f7dce5"
+	}
+	items = append(items, PaletteItem{
+		Key:                "customization.color.custom",
+		Title:              localizedTextTUI(m.language, "Custom color", "Свой цвет"),
+		DisplayTitle:       renderColoredLabel(localizedTextTUI(m.language, "Custom color", "Свой цвет"), customHex),
+		Description:        localizedTextTUI(m.language, "Enter HEX", "Введите HEX"),
+		DisplayDescription: func() string {
+			parsed := parseUIColorChoice(popupColorTargetChoice(settings, target), settings.SelectionHighlight.Preset)
+			if parsed.kind == uiColorChoiceCustom {
+				return colorPreviewDescriptionChoice(parsed, settings.SelectionHighlight.Preset, m.language)
+			}
+			return localizedTextTUI(m.language, "Enter HEX", "Введите HEX")
+		}(),
+		Value:              string(target),
+		Keywords:           []string{"custom", "hex", "свой", "hex"},
+		Meta:               renderStateTag(parseUIColorChoice(popupColorTargetChoice(settings, target), settings.SelectionHighlight.Preset).kind == uiColorChoiceCustom && !strings.EqualFold(customHex, "#f7dce5")),
+	})
+	return items
+}
+
+func (m *Model) customizationFormattingItems() []PaletteItem {
+	settings := m.settingsForUI()
+	items := []PaletteItem{m.paletteBackItem()}
+	for _, target := range popupFormatTargets() {
+		label := popupFormatTargetLabel(target, m.language)
+		formats := popupFormatTargetValue(settings, target)
+		items = append(items, PaletteItem{
+			Key:                "customization.format.target",
+			Title:              label,
+			DisplayTitle:       label,
+			Description:        m.popupFormatTargetSummary(settings, target),
+			DisplayDescription: m.popupFormatTargetSummary(settings, target),
+			Value:              string(target),
+			Keywords:           []string{label, "format", "formatting", "формат", "форматирование"},
+			Meta:               renderStateTag(!formats.IsEmpty()),
+		})
+	}
+	return items
+}
+
+func (m *Model) customizationFormattingTargetItems() []PaletteItem {
+	settings := m.settingsForUI()
+	target := m.customizationFormatTarget
+	if target == "" {
+		target = popupFormatTargetSelection
+	}
+	formats := popupFormatTargetValue(settings, target)
+	items := []PaletteItem{m.paletteBackItem()}
+	for _, code := range []string{"bold", "italic", "underlined", "crossed_out"} {
+		label := formatCodeLabel(code, m.language)
+		items = append(items, PaletteItem{
+			Key:                "customization.format.option",
+			Title:              label,
+			DisplayTitle:       renderFormatChoiceLabel(code, m.language),
+			Value:              code,
+			Keywords:           []string{code, label, "formatting", "форматирование"},
+			Meta:               renderStateTag(formats.Contains(code)),
+		})
+	}
+	return items
 }
 
 func (m *Model) paletteBackItem() PaletteItem {
@@ -1370,7 +1548,7 @@ func paletteBackCopyForMode(mode PaletteMode, language commandcatalog.CatalogLan
 	case PaletteModePermissions:
 		return localize("Back to Permissions", "Назад к разрешениям"), localize("Return to permissions", "Вернуться к разрешениям")
 	case PaletteModeRoot:
-		return localize("Back to Palette", "Назад к палитре"), localize("Return to command palette", "Вернуться к палитре команд")
+		return localize("Back to Commands", "Назад к командам"), localize("Return to commands", "Вернуться к командам")
 	case PaletteModeModelSettings:
 		return localize("Back to Model Settings", "Назад к настройкам моделей"), localize("Return to model settings", "Вернуться к настройкам моделей")
 	case PaletteModeModel:
@@ -1398,7 +1576,15 @@ func paletteBackCopyForMode(mode PaletteMode, language commandcatalog.CatalogLan
 	case PaletteModePresetModels:
 		return localize("Back to Preset Models", "Назад к моделям пресета"), localize("Return to the preset model picker", "Вернуться к выбору модели пресета")
 	case PaletteModeCustomization:
-		return localize("Back to Settings", "Назад к настройкам"), localize("Return to settings", "Вернуться к настройкам")
+		return localize("Back to Customization", "Назад к кастомизации"), localize("Return to customization", "Вернуться к кастомизации")
+	case PaletteModeCustomizationColor:
+		return localize("Back to Customization", "Назад к кастомизации"), localize("Return to customization", "Вернуться к кастомизации")
+	case PaletteModeCustomizationColorChoice:
+		return localize("Back to Color", "Назад к цвету"), localize("Return to color targets", "Вернуться к целям цвета")
+	case PaletteModeCustomizationFormatting:
+		return localize("Back to Customization", "Назад к кастомизации"), localize("Return to customization", "Вернуться к кастомизации")
+	case PaletteModeCustomizationFormattingTarget:
+		return localize("Back to Formatting", "Назад к форматированию"), localize("Return to formatting targets", "Вернуться к целям форматирования")
 	case PaletteModeResume:
 		return localize("Back to Resume", "Назад к продолжению"), localize("Return to saved sessions", "Вернуться к сохранённым сессиям")
 	case PaletteModeFork:
@@ -1820,10 +2006,45 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 		case "customization.fill":
 			return m.toggleSelectionHighlightFill()
 		case "customization.color":
-			return m.cycleSelectionHighlightColor()
+			return m.openPaletteMode(PaletteModeCustomizationColor, true)
 		case "customization.formatting":
-			m.state.Footer = m.localize("Formatting preview is not wired yet", "Превью форматирования пока не подключено")
-			return nil
+			return m.openPaletteMode(PaletteModeCustomizationFormatting, true)
+		}
+		return nil
+	case PaletteModeCustomizationColor:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "customization.color.target":
+			m.customizationColorTarget = popupColorTarget(item.Value)
+			return m.openPaletteMode(PaletteModeCustomizationColorChoice, true)
+		}
+		return nil
+	case PaletteModeCustomizationColorChoice:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "customization.color.choice":
+			return m.setPopupColorChoice(m.customizationColorTarget, item.Value)
+		case "customization.color.custom":
+			return m.openCustomColorPrompt(m.customizationColorTarget)
+		}
+		return nil
+	case PaletteModeCustomizationFormatting:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "customization.format.target":
+			m.customizationFormatTarget = popupFormatTarget(item.Value)
+			return m.openPaletteMode(PaletteModeCustomizationFormattingTarget, true)
+		}
+		return nil
+	case PaletteModeCustomizationFormattingTarget:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "customization.format.option":
+			return m.togglePopupTextFormat(m.customizationFormatTarget, item.Value)
 		}
 		return nil
 	case PaletteModeLanguage:
@@ -2215,6 +2436,14 @@ func (m *Model) paletteTitle() string {
 		return m.localize("Settings", "Настройки")
 	case PaletteModeCustomization:
 		return m.localize("Customization", "Кастомизация")
+	case PaletteModeCustomizationColor:
+		return m.localize("Color", "Цвет")
+	case PaletteModeCustomizationColorChoice:
+		return popupColorTargetLabel(m.customizationColorTarget, m.language)
+	case PaletteModeCustomizationFormatting:
+		return m.localize("Formatting", "Форматирование")
+	case PaletteModeCustomizationFormattingTarget:
+		return popupFormatTargetLabel(m.customizationFormatTarget, m.language)
 	case PaletteModeLanguage:
 		return m.localize("Interface Language", "Язык интерфейса")
 	case PaletteModeCommandPrefix:
@@ -2224,7 +2453,7 @@ func (m *Model) paletteTitle() string {
 	case PaletteModePermissions:
 		return m.localize("Access and Approvals", "Доступ и подтверждения")
 	default:
-		return m.localize("Command Palette", "Палитра команд")
+		return m.localize("Commands", "Команды")
 	}
 }
 
@@ -3030,7 +3259,7 @@ func (m *Model) refreshCurrentPaletteItems() {
 func (m *Model) settingsForUI() appstate.Settings {
 	settings, err := loadSettingsOptional(m.layout.SettingsPath())
 	if err != nil {
-		return appstate.Settings{}
+		return appstate.DefaultSettings()
 	}
 	return settings
 }
@@ -3385,6 +3614,97 @@ func (m *Model) cycleCommandPrefix() tea.Cmd {
 	return m.setSettingsCommandPrefix(next)
 }
 
+func (m *Model) setSelectionHighlightPreset(preset string) tea.Cmd {
+	return m.setPopupColorChoice(popupColorTargetSelection, preset)
+}
+
+func (m *Model) setPopupColorChoice(target popupColorTarget, raw string) tea.Cmd {
+	settingsPath := m.layout.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
+		return nil
+	}
+	choice := parseUIColorChoice(raw, settings.SelectionHighlight.Preset)
+	value := strings.TrimSpace(raw)
+	switch choice.kind {
+	case uiColorChoicePreset:
+		value = normalizedSelectionPreset(choice.preset)
+	case uiColorChoiceCustom:
+		value = choice.hex
+	default:
+		value = "auto"
+	}
+	switch target {
+	case popupColorTargetSelection:
+		if choice.kind == uiColorChoicePreset {
+			settings.SelectionHighlight.Preset = normalizedSelectionPreset(choice.preset)
+		}
+		settings.SelectionHighlight.Color = value
+	case popupColorTargetListPrimary:
+		settings.Colors.ListPrimary = value
+	case popupColorTargetListSecondary:
+		settings.Colors.ListSecondary = value
+	case popupColorTargetReply:
+		settings.Colors.ReplyText = value
+	case popupColorTargetReasoning:
+		settings.Colors.ReasoningText = value
+	case popupColorTargetCommand:
+		settings.Colors.CommandText = value
+	case popupColorTargetCommandOutput:
+		settings.Colors.CommandOutput = value
+	}
+	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
+		return nil
+	}
+	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Color updated", "Цвет обновлён"), m.popupColorTargetSummary(settings, target))
+	m.reloadStyleSettings()
+	m.refreshCurrentPaletteItems()
+	m.updateStatus()
+	m.refreshViewport()
+	return nil
+}
+
+func (m *Model) toggleSelectionHighlightTextFormat(code string) tea.Cmd {
+	return m.togglePopupTextFormat(popupFormatTargetSelection, code)
+}
+
+func (m *Model) togglePopupTextFormat(target popupFormatTarget, code string) tea.Cmd {
+	settingsPath := m.layout.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
+		return nil
+	}
+	switch target {
+	case popupFormatTargetSelection:
+		settings.TextFormats.SelectionHighlight = settings.TextFormats.SelectionHighlight.Toggle(code)
+	case popupFormatTargetListPrimary:
+		settings.TextFormats.ListPrimary = settings.TextFormats.ListPrimary.Toggle(code)
+	case popupFormatTargetListSecondary:
+		settings.TextFormats.ListSecondary = settings.TextFormats.ListSecondary.Toggle(code)
+	case popupFormatTargetReply:
+		settings.TextFormats.Reply = settings.TextFormats.Reply.Toggle(code)
+	case popupFormatTargetReasoning:
+		settings.TextFormats.Reasoning = settings.TextFormats.Reasoning.Toggle(code)
+	case popupFormatTargetCommand:
+		settings.TextFormats.Command = settings.TextFormats.Command.Toggle(code)
+	case popupFormatTargetCommandOutput:
+		settings.TextFormats.CommandOutput = settings.TextFormats.CommandOutput.Toggle(code)
+	}
+	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
+		return nil
+	}
+	m.state.Footer = fmt.Sprintf("%s: %s", popupFormatTargetLabel(target, m.language), m.popupFormatTargetSummary(settings, target))
+	m.reloadStyleSettings()
+	m.refreshCurrentPaletteItems()
+	m.updateStatus()
+	m.refreshViewport()
+	return nil
+}
+
 func (m *Model) toggleSelectionHighlightFill() tea.Cmd {
 	settingsPath := m.layout.SettingsPath()
 	settings, err := loadSettingsOptional(settingsPath)
@@ -3392,13 +3712,7 @@ func (m *Model) toggleSelectionHighlightFill() tea.Cmd {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
 		return nil
 	}
-	if effectiveSelectionHighlightFill(settings) {
-		settings.SelectionHighlight.Fill = false
-		settings.SelectionHighlight.Preset = "text"
-	} else {
-		settings.SelectionHighlight.Fill = true
-		settings.SelectionHighlight.Preset = "fill"
-	}
+	settings.SelectionHighlight.Fill = !effectiveSelectionHighlightFill(settings)
 	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
 		return nil
@@ -3416,14 +3730,13 @@ func (m *Model) toggleSelectionHighlightFill() tea.Cmd {
 }
 
 func (m *Model) cycleSelectionHighlightColor() tea.Cmd {
-	settingsPath := m.layout.SettingsPath()
-	settings, err := loadSettingsOptional(settingsPath)
+	settings, err := loadSettingsOptional(m.layout.SettingsPath())
 	if err != nil {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
 		return nil
 	}
-	palette := []string{"#8FB8FF", "#FFD166", "#8BD5CA", "#F28FAD", "#C4B5FD", "#F4EBD0"}
-	current := strings.TrimSpace(settings.SelectionHighlight.Color)
+	palette := []string{"light", "graphite", "amber", "mint", "rose"}
+	current := normalizedSelectionPreset(settings.SelectionHighlight.Preset)
 	index := 0
 	for i, candidate := range palette {
 		if strings.EqualFold(candidate, current) {
@@ -3431,20 +3744,7 @@ func (m *Model) cycleSelectionHighlightColor() tea.Cmd {
 			break
 		}
 	}
-	if current == "" {
-		index = 0
-	}
-	settings.SelectionHighlight.Color = palette[index]
-	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
-		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
-		return nil
-	}
-	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Selection color updated", "Цвет выделения обновлён"), settings.SelectionHighlight.Color)
-	m.reloadStyleSettings()
-	m.refreshCurrentPaletteItems()
-	m.updateStatus()
-	m.refreshViewport()
-	return nil
+	return m.setPopupColorChoice(popupColorTargetSelection, palette[index])
 }
 
 func (m *Model) togglePopupCommandVisibility(name string) tea.Cmd {
@@ -3596,7 +3896,7 @@ func loadSettingsOptional(path string) (appstate.Settings, error) {
 		return settings, nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		return appstate.Settings{}, nil
+		return appstate.DefaultSettings(), nil
 	}
 	return appstate.Settings{}, err
 }

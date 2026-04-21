@@ -44,6 +44,10 @@ const (
 	PaletteModePresetModels    PaletteMode = "preset_models"
 	PaletteModeSettings        PaletteMode = "settings"
 	PaletteModeCustomization   PaletteMode = "customization"
+	PaletteModeCustomizationColor PaletteMode = "customization_color"
+	PaletteModeCustomizationColorChoice PaletteMode = "customization_color_choice"
+	PaletteModeCustomizationFormatting PaletteMode = "customization_formatting"
+	PaletteModeCustomizationFormattingTarget PaletteMode = "customization_formatting_target"
 	PaletteModeLanguage        PaletteMode = "language"
 	PaletteModeCommandPrefix   PaletteMode = "command_prefix"
 	PaletteModePopupCommands   PaletteMode = "popup_commands"
@@ -118,8 +122,10 @@ type PaletteContext struct {
 type PaletteItem struct {
 	Key         string
 	Title       string
+	DisplayTitle string
 	Subtitle    string
 	Description string
+	DisplayDescription string
 	Meta        string
 	Value       string
 	Aliases     []string
@@ -127,9 +133,9 @@ type PaletteItem struct {
 }
 
 func DefaultState() State {
-	language := commandcatalog.CatalogLanguageEnglish
+	language := commandcatalog.CatalogLanguageRussian
 	return State{
-		Language: "en",
+		Language: "ru",
 		Title:    "Go Lavilas",
 		Status: []StatusItem{
 			{Label: "Mode", Value: "alpha"},
@@ -246,6 +252,10 @@ func normalizePaletteMode(value PaletteMode) PaletteMode {
 		PaletteModePresetModels,
 		PaletteModeSettings,
 		PaletteModeCustomization,
+		PaletteModeCustomizationColor,
+		PaletteModeCustomizationColorChoice,
+		PaletteModeCustomizationFormatting,
+		PaletteModeCustomizationFormattingTarget,
 		PaletteModeLanguage,
 		PaletteModeCommandPrefix,
 		PaletteModePopupCommands,
@@ -308,14 +318,16 @@ func clonePaletteItems(items []PaletteItem) []PaletteItem {
 	cloned := make([]PaletteItem, len(items))
 	for index, item := range items {
 		cloned[index] = PaletteItem{
-			Key:         item.Key,
-			Title:       item.Title,
-			Subtitle:    item.Subtitle,
-			Description: item.Description,
-			Meta:        item.Meta,
-			Value:       item.Value,
-			Aliases:     cloneStrings(item.Aliases),
-			Keywords:    cloneStrings(item.Keywords),
+			Key:                item.Key,
+			Title:              item.Title,
+			DisplayTitle:       item.DisplayTitle,
+			Subtitle:           item.Subtitle,
+			Description:        item.Description,
+			DisplayDescription: item.DisplayDescription,
+			Meta:               item.Meta,
+			Value:              item.Value,
+			Aliases:            cloneStrings(item.Aliases),
+			Keywords:           cloneStrings(item.Keywords),
 		}
 	}
 	return cloned
