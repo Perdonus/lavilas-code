@@ -126,55 +126,18 @@ func parseChatOptions(args []string) (taskrun.Options, error) {
 	var options taskrun.Options
 
 	for index := 0; index < len(args); index++ {
-		if next, handled, err := consumeToolPolicyFlag(&options, args, index); handled {
+		arg := args[index]
+		if next, handled, err := consumeCommonTaskFlag(&options, args, index, arg, false); handled {
 			if err != nil {
 				return taskrun.Options{}, err
 			}
 			index = next
 			continue
 		}
-		switch args[index] {
-		case "--model":
-			value, next, err := takeFlagValue(args, index, "--model")
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.Model = value
-			index = next
-		case "--profile":
-			value, next, err := takeFlagValue(args, index, "--profile")
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.Profile = value
-			index = next
-		case "--provider":
-			value, next, err := takeFlagValue(args, index, "--provider")
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.Provider = value
-			index = next
-		case "--reasoning":
-			value, next, err := takeFlagValue(args, index, "--reasoning")
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.ReasoningEffort = value
-			index = next
-		case "--system":
-			value, next, err := takeFlagValue(args, index, "--system")
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.SystemPrompt = value
-			index = next
-		default:
-			if strings.HasPrefix(args[index], "--") {
-				return taskrun.Options{}, fmt.Errorf(localizedText(currentCatalogLanguage(), "unknown flag %q", "неизвестный флаг %q"), args[index])
-			}
-			return taskrun.Options{}, fmt.Errorf(localizedText(currentCatalogLanguage(), "unexpected argument %q", "неожиданный аргумент %q"), args[index])
+		if strings.HasPrefix(arg, "--") {
+			return taskrun.Options{}, fmt.Errorf(localizedText(currentCatalogLanguage(), "unknown flag %q", "неизвестный флаг %q"), arg)
 		}
+		return taskrun.Options{}, fmt.Errorf(localizedText(currentCatalogLanguage(), "unexpected argument %q", "неожиданный аргумент %q"), arg)
 	}
 
 	applySettingsToolPolicy(&options)
@@ -327,8 +290,11 @@ func promptApprovalDecisionCLI(ctx context.Context, language CatalogLanguage, re
 
 	reader := bufio.NewReader(tty)
 	for {
-		fmt.Fprintln(os.Stdout, localizedText(language, "[approval] tool call requires confirmation", "[подтверждение] вызов инструмента требует подтверждения"))
+		fmt.Fprintln(os.Stdout, cliApprovalTitle(language, request))
 		fmt.Fprintf(os.Stdout, "  %s: %s\n", localizedText(language, "tool", "инструмент"), request.Name)
+		if hint := cliApprovalHint(language, request); hint != "" {
+			fmt.Fprintf(os.Stdout, "  %s\n", hint)
+		}
 		if strings.TrimSpace(request.Summary) != "" {
 			fmt.Fprintf(os.Stdout, "  %s: %s\n", localizedText(language, "summary", "сводка"), request.Summary)
 		}
@@ -338,7 +304,14 @@ func promptApprovalDecisionCLI(ctx context.Context, language CatalogLanguage, re
 		if strings.TrimSpace(request.Reason) != "" {
 			fmt.Fprintf(os.Stdout, "  %s: %s\n", localizedText(language, "reason", "причина"), request.Reason)
 		}
-		fmt.Fprint(os.Stdout, localizedText(language, "Allow? [y] once / [a] session / [n] deny: ", "Разрешить? [y] один раз / [a] на сессию / [n] запретить: "))
+		if cwd := strings.TrimSpace(request.Metadata.WorkingDirectory); cwd != "" {
+			fmt.Fprintf(os.Stdout, "  cwd: %s\n", cwd)
+		}
+		if targets := cliApprovalTargets(request); targets != "" {
+			fmt.Fprintf(os.Stdout, "  %s: %s\n", localizedText(language, "targets", "цели"), targets)
+		}
+		allowOnce, allowSession, denyLabel := cliApprovalLabels(language, request)
+		fmt.Fprintf(os.Stdout, localizedText(language, "Decision: [y] %s / [a] %s / [n] %s: ", "Решение: [y] %s / [a] %s / [n] %s: "), allowOnce, allowSession, denyLabel)
 		lineCh := make(chan string, 1)
 		errCh := make(chan error, 1)
 		go func() {
@@ -365,6 +338,78 @@ func promptApprovalDecisionCLI(ctx context.Context, language CatalogLanguage, re
 			}
 		}
 	}
+}
+
+func cliApprovalTitle(language CatalogLanguage, request tooling.ApprovalRequest) string {
+	switch tooling.ApprovalKindForRequest(request) {
+	case tooling.ApprovalKindPermissionRequest:
+		return localizedText(language, "[approval] additional permissions requested", "[подтверждение] запрошены дополнительные разрешения")
+	case tooling.ApprovalKindShellCommand:
+		return localizedText(language, "[approval] shell command requires confirmation", "[подтверждение] команда shell требует подтверждения")
+	case tooling.ApprovalKindApplyPatch:
+		return localizedText(language, "[approval] patch requires confirmation", "[подтверждение] патч требует подтверждения")
+	case tooling.ApprovalKindWorkspaceWrite:
+		return localizedText(language, "[approval] write requires confirmation", "[подтверждение] запись требует подтверждения")
+	default:
+		return localizedText(language, "[approval] tool call requires confirmation", "[подтверждение] вызов инструмента требует подтверждения")
+	}
+}
+
+func cliApprovalHint(language CatalogLanguage, request tooling.ApprovalRequest) string {
+	switch tooling.ApprovalKindForRequest(request) {
+	case tooling.ApprovalKindPermissionRequest:
+		return localizedText(language, "  The model needs extra write access before it can continue.", "  Модели нужен дополнительный доступ на запись перед продолжением.")
+	case tooling.ApprovalKindShellCommand:
+		return localizedText(language, "  This will run a subprocess and may change the workspace.", "  Это запустит подпроцесс и может изменить рабочую папку.")
+	case tooling.ApprovalKindApplyPatch:
+		return localizedText(language, "  This will edit files through an inline patch.", "  Это изменит файлы через встроенный патч.")
+	case tooling.ApprovalKindWorkspaceWrite:
+		return localizedText(language, "  This tool writes directly into the workspace.", "  Этот инструмент пишет прямо в рабочую папку.")
+	default:
+		return ""
+	}
+}
+
+func cliApprovalLabels(language CatalogLanguage, request tooling.ApprovalRequest) (string, string, string) {
+	switch tooling.ApprovalKindForRequest(request) {
+	case tooling.ApprovalKindPermissionRequest:
+		return localizedText(language, "grant this turn", "дать доступ на этот ход"), localizedText(language, "grant this session", "дать доступ на всю сессию"), localizedText(language, "deny", "запретить")
+	case tooling.ApprovalKindShellCommand:
+		return localizedText(language, "run once", "запустить один раз"), localizedText(language, "allow shell for session", "разрешить shell на сессию"), localizedText(language, "deny", "запретить")
+	case tooling.ApprovalKindApplyPatch:
+		return localizedText(language, "apply once", "применить один раз"), localizedText(language, "allow patches for session", "разрешить патчи на сессию"), localizedText(language, "deny", "запретить")
+	case tooling.ApprovalKindWorkspaceWrite:
+		return localizedText(language, "write once", "записать один раз"), localizedText(language, "allow writes for session", "разрешить запись на сессию"), localizedText(language, "deny", "запретить")
+	default:
+		return localizedText(language, "approve once", "разрешить один раз"), localizedText(language, "approve for session", "разрешить на сессию"), localizedText(language, "deny", "запретить")
+	}
+}
+
+func cliApprovalTargets(request tooling.ApprovalRequest) string {
+	if len(request.Metadata.RequestedWritableRoots) > 0 {
+		return strings.Join(request.Metadata.RequestedWritableRoots, ", ")
+	}
+	if len(request.Metadata.ResourceKeys) == 0 {
+		return ""
+	}
+	preview := make([]string, 0, 3)
+	for _, value := range request.Metadata.ResourceKeys {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		for _, prefix := range []string{"file:", "dir:", "tree:", "cwd:", "tool:", "writable_root:"} {
+			value = strings.TrimPrefix(value, prefix)
+		}
+		if value == "" {
+			continue
+		}
+		preview = append(preview, value)
+		if len(preview) == 3 {
+			break
+		}
+	}
+	return strings.Join(preview, ", ")
 }
 
 func newStreamPrinter(language CatalogLanguage) *streamPrinter {

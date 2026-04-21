@@ -213,6 +213,17 @@ func sanitizeSessionCWD(cwd string) string {
 	return filepath.Clean(cwd)
 }
 
+func ComparableSessionCWD(cwd string) string {
+	cwd = sanitizeSessionCWD(cwd)
+	if cwd == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(cwd); err == nil {
+		return filepath.Clean(abs)
+	}
+	return cwd
+}
+
 func sessionWorkingDirectory() string {
 	cwd, err := os.Getwd()
 	if err != nil {

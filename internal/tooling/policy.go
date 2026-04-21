@@ -35,6 +35,17 @@ const (
 	ToolApprovalStateDenied          ToolApprovalState = "denied"
 )
 
+type ApprovalKind string
+
+const (
+	ApprovalKindUnknown           ApprovalKind = "unknown"
+	ApprovalKindPermissionRequest ApprovalKind = "permission_request"
+	ApprovalKindShellCommand      ApprovalKind = "shell_command"
+	ApprovalKindApplyPatch        ApprovalKind = "apply_patch"
+	ApprovalKindWorkspaceWrite    ApprovalKind = "workspace_write"
+	ApprovalKindReadOnly          ApprovalKind = "read_only"
+)
+
 type ToolPolicy struct {
 	Planning           PlanningPolicy   `json:"planning"`
 	ApprovalMode       ToolApprovalMode `json:"approval_mode"`
@@ -45,6 +56,7 @@ type ToolPolicy struct {
 }
 
 type ApprovalRequest struct {
+	Kind       ApprovalKind          `json:"kind,omitempty"`
 	Index      int                   `json:"index"`
 	Batch      int                   `json:"batch"`
 	ApprovalID string                `json:"approval_id,omitempty"`
@@ -55,6 +67,38 @@ type ApprovalRequest struct {
 	Details    string                `json:"details,omitempty"`
 	Reason     string                `json:"reason,omitempty"`
 	Metadata   ToolExecutionMetadata `json:"metadata"`
+}
+
+func ApprovalKindForRequest(request ApprovalRequest) ApprovalKind {
+	if request.Kind != "" {
+		return request.Kind
+	}
+	return ClassifyApprovalKind(request.Name, request.Metadata)
+}
+
+func ClassifyApprovalKind(name string, metadata ToolExecutionMetadata) ApprovalKind {
+	switch normalizeToolName(name) {
+	case "request_permissions":
+		return ApprovalKindPermissionRequest
+	case "run_shell_command":
+		return ApprovalKindShellCommand
+	case "apply_patch":
+		return ApprovalKindApplyPatch
+	case "write_file":
+		return ApprovalKindWorkspaceWrite
+	case "read_file", "list_directory", "search_text":
+		return ApprovalKindReadOnly
+	}
+	switch metadata.SideEffectKind {
+	case SideEffectKindShell:
+		return ApprovalKindShellCommand
+	case SideEffectKindWorkspaceWrite:
+		return ApprovalKindWorkspaceWrite
+	case SideEffectKindReadOnly:
+		return ApprovalKindReadOnly
+	default:
+		return ApprovalKindUnknown
+	}
 }
 
 type ExecutionReportSummary struct {

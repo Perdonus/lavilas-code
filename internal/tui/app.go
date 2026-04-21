@@ -42,6 +42,7 @@ type StartupOptions struct {
 	SessionSelector string
 	InitialPrompt   string
 	ShowAll         bool
+	TaskOptions     taskrun.Options
 }
 
 func Run(options Options) int {

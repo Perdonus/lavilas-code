@@ -125,6 +125,7 @@ type Model struct {
 	formPrompt                    *formPromptState
 	modelSettingsNavigationOrigin ModelSettingsNavigationOrigin
 	sessionSort                   sessionSortKey
+	sessionPaletteStartup         bool
 	approvalStore                 *taskrun.ApprovalSessionStore
 }
 
@@ -492,15 +493,13 @@ func (m *Model) renderApprovalPane() string {
 	}
 	request := m.approval.Request
 	pane := m.styles.paneActive.Width(m.mainWidth)
-	allowOnce := m.localize("allow once", "разрешить один раз")
-	allowSession := m.localize("allow for session", "разрешить на сессию")
-	if strings.EqualFold(strings.TrimSpace(request.Name), "request_permissions") {
-		allowOnce = m.localize("grant for this turn", "дать доступ на этот ход")
-		allowSession = m.localize("grant for this session", "дать доступ на всю сессию")
-	}
+	allowOnce, allowSession, denyLabel := m.approvalActionLabels(request)
 	content := []string{
-		m.styles.paneTitle.Render(m.localize("Approval Required", "Нужно подтверждение")),
+		m.styles.paneTitle.Render(m.approvalTitle(request)),
 		m.styles.label.Render(m.localize("tool", "инструмент")) + " " + m.styles.value.Render(request.Name),
+	}
+	if hint := m.approvalKindHint(request); hint != "" {
+		content = append(content, m.styles.muted.Render(hint))
 	}
 	if summary := strings.TrimSpace(request.Summary); summary != "" {
 		content = append(content, m.styles.label.Render(m.localize("summary", "сводка"))+" "+m.styles.value.Render(summary))
@@ -514,11 +513,17 @@ func (m *Model) renderApprovalPane() string {
 	if len(request.Metadata.RequestedWritableRoots) > 0 {
 		content = append(content, m.styles.label.Render(m.localize("writable roots", "доступные для записи пути"))+" "+m.styles.value.Render(strings.Join(request.Metadata.RequestedWritableRoots, ", ")))
 	}
+	if cwd := strings.TrimSpace(request.Metadata.WorkingDirectory); cwd != "" {
+		content = append(content, m.styles.label.Render("cwd")+" "+m.styles.value.Render(cwd))
+	}
+	if targets := m.approvalResourcePreview(request); targets != "" {
+		content = append(content, m.styles.label.Render(m.localize("targets", "цели"))+" "+m.styles.value.Render(targets))
+	}
 	content = append(content,
 		"",
 		m.styles.helpKey.Render("Y")+" "+m.styles.helpDesc.Render(allowOnce),
 		m.styles.helpKey.Render("A")+" "+m.styles.helpDesc.Render(allowSession),
-		m.styles.helpKey.Render("N")+" "+m.styles.helpDesc.Render(m.localize("deny", "запретить")),
+		m.styles.helpKey.Render("N")+" "+m.styles.helpDesc.Render(denyLabel),
 	)
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, content...))
 }
@@ -859,6 +864,8 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 		Items:   defaultPaletteItemsForLanguage(m.language),
 		Context: defaultPaletteContextForLanguage(m.language),
 	}
+	m.sessionPaletteStartup = false
+	m.startup.Mode = StartupModeNone
 	m.paletteInput.Reset()
 	m.state.Focus = FocusInput
 	m.applyFocusState()
@@ -869,7 +876,10 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 func (m *Model) beginCWDPrompt(msg sessionLoadedMsg) bool {
 	sessionCWD := strings.TrimSpace(msg.Meta.CWD)
 	currentCWD := strings.TrimSpace(m.effectiveWorkingDirectory())
-	if sessionCWD == "" || currentCWD == "" || sessionCWD == currentCWD {
+	if sessionCWD == "" || currentCWD == "" {
+		return false
+	}
+	if appstate.ComparableSessionCWD(sessionCWD) == appstate.ComparableSessionCWD(currentCWD) {
 		return false
 	}
 	m.cwdPrompt = &cwdPromptState{
@@ -921,7 +931,7 @@ func (m *Model) confirmCWDPrompt(selection cwdSelection) tea.Cmd {
 		msg.Meta.CWD = prompt.SessionCWD
 	}
 	m.applyLoadedSession(msg)
-	return nil
+	return m.consumeStartupPrompt()
 }
 
 func (m *Model) openPaletteMode(mode PaletteMode, pushCurrent bool) tea.Cmd {
@@ -1631,9 +1641,9 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 
 	switch m.state.Palette.Mode {
 	case PaletteModeResume:
-		return m.loadSessionCmd(item.Value, false)
+		return m.loadSessionCmdWithOptions(item.Value, false, m.sessionPaletteStartup)
 	case PaletteModeFork:
-		return m.loadSessionCmd(item.Value, true)
+		return m.loadSessionCmdWithOptions(item.Value, true, m.sessionPaletteStartup)
 	case PaletteModeSettings:
 		switch item.Key {
 		case "__back":
@@ -2052,6 +2062,10 @@ func (m *Model) paletteTitle() string {
 }
 
 func (m *Model) loadLatestSessionCmd(fork bool) tea.Cmd {
+	return m.loadLatestSessionCmdWithOptions(fork, false)
+}
+
+func (m *Model) loadLatestSessionCmdWithOptions(fork bool, useStartupOverrides bool) tea.Cmd {
 	return func() tea.Msg {
 		entries, err := appstate.LoadSessions(m.layout.SessionsDir(), 0)
 		if err != nil {
@@ -2068,11 +2082,18 @@ func (m *Model) loadLatestSessionCmd(fork bool) tea.Cmd {
 		}
 		entry := entries[0]
 		meta, messages, err := appstate.LoadSession(entry.Path)
+		if useStartupOverrides {
+			meta = m.applyStartupSessionOverrides(meta)
+		}
 		return sessionLoadedMsg{Entry: entry, Meta: meta, Messages: messages, Fork: fork, Err: err}
 	}
 }
 
 func (m *Model) loadSessionCmd(path string, fork bool) tea.Cmd {
+	return m.loadSessionCmdWithOptions(path, fork, false)
+}
+
+func (m *Model) loadSessionCmdWithOptions(path string, fork bool, useStartupOverrides bool) tea.Cmd {
 	return func() tea.Msg {
 		if strings.TrimSpace(path) == "" {
 			return sessionLoadedMsg{Err: errors.New(m.localize("session path is empty", "путь к сессии пуст"))}
@@ -2082,11 +2103,18 @@ func (m *Model) loadSessionCmd(path string, fork bool) tea.Cmd {
 			return sessionLoadedMsg{Err: err}
 		}
 		meta, messages, err := appstate.LoadSession(entry.Path)
+		if useStartupOverrides {
+			meta = m.applyStartupSessionOverrides(meta)
+		}
 		return sessionLoadedMsg{Entry: entry, Meta: meta, Messages: messages, Fork: fork, Err: err}
 	}
 }
 
 func (m *Model) loadSelectedSessionCmd(selector string, fork bool) tea.Cmd {
+	return m.loadSelectedSessionCmdWithOptions(selector, fork, false)
+}
+
+func (m *Model) loadSelectedSessionCmdWithOptions(selector string, fork bool, useStartupOverrides bool) tea.Cmd {
 	return func() tea.Msg {
 		entry, err := appstate.ResolveSessionEntry(m.layout.SessionsDir(), selector)
 		if err != nil {
@@ -2096,15 +2124,20 @@ func (m *Model) loadSelectedSessionCmd(selector string, fork bool) tea.Cmd {
 			return sessionLoadedMsg{Err: err}
 		}
 		meta, messages, err := appstate.LoadSession(entry.Path)
+		if useStartupOverrides {
+			meta = m.applyStartupSessionOverrides(meta)
+		}
 		return sessionLoadedMsg{Entry: entry, Meta: meta, Messages: messages, Fork: fork, Err: err}
 	}
 }
 
 func (m *Model) openSessionsPalette(fork bool, pushCurrent bool) tea.Cmd {
+	m.sessionPaletteStartup = false
 	return m.openSessionsPaletteWithOptions(fork, pushCurrent, false)
 }
 
 func (m *Model) openStartupSessionsPalette(fork bool) tea.Cmd {
+	m.sessionPaletteStartup = true
 	return m.openSessionsPaletteWithOptions(fork, false, true)
 }
 
@@ -2160,13 +2193,13 @@ func (m *Model) filterSessionEntries(entries []appstate.SessionEntry) []appstate
 	if m.startup.ShowAll {
 		return entries
 	}
-	currentCWD := strings.TrimSpace(m.effectiveWorkingDirectory())
+	currentCWD := appstate.ComparableSessionCWD(m.effectiveWorkingDirectory())
 	if currentCWD == "" {
 		return entries
 	}
 	filtered := make([]appstate.SessionEntry, 0, len(entries))
 	for _, entry := range entries {
-		entryCWD := strings.TrimSpace(entry.CWD)
+		entryCWD := appstate.ComparableSessionCWD(entry.CWD)
 		if entryCWD == "" || entryCWD == currentCWD {
 			filtered = append(filtered, entry)
 		}
@@ -2245,29 +2278,29 @@ func (m *Model) startupCmd() tea.Cmd {
 	case StartupModeForkPicker:
 		return m.openStartupSessionsPalette(true)
 	case StartupModeResumeLatest:
-		return m.loadLatestSessionCmd(false)
+		return m.loadLatestSessionCmdWithOptions(false, true)
 	case StartupModeForkLatest:
-		return m.loadLatestSessionCmd(true)
+		return m.loadLatestSessionCmdWithOptions(true, true)
 	case StartupModeResumeSelect:
 		if strings.TrimSpace(m.startup.SessionSelector) == "" {
 			return nil
 		}
-		return m.loadSelectedSessionCmd(m.startup.SessionSelector, false)
+		return m.loadSelectedSessionCmdWithOptions(m.startup.SessionSelector, false, true)
 	case StartupModeForkSelect:
 		if strings.TrimSpace(m.startup.SessionSelector) == "" {
 			return nil
 		}
-		return m.loadSelectedSessionCmd(m.startup.SessionSelector, true)
+		return m.loadSelectedSessionCmdWithOptions(m.startup.SessionSelector, true, true)
 	case StartupModeResumePath:
 		if strings.TrimSpace(m.startup.SessionPath) == "" {
 			return nil
 		}
-		return m.loadSessionCmd(m.startup.SessionPath, false)
+		return m.loadSessionCmdWithOptions(m.startup.SessionPath, false, true)
 	case StartupModeForkPath:
 		if strings.TrimSpace(m.startup.SessionPath) == "" {
 			return nil
 		}
-		return m.loadSessionCmd(m.startup.SessionPath, true)
+		return m.loadSessionCmdWithOptions(m.startup.SessionPath, true, true)
 	case StartupModeModel:
 		m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
 		return m.openModelPickerPalette(false)
@@ -2294,6 +2327,7 @@ func (m *Model) startupCmd() tea.Cmd {
 func (m *Model) resetConversation() {
 	m.history = nil
 	m.approvalStore = taskrun.NewApprovalSessionStore()
+	m.sessionPaletteStartup = false
 	m.state.LiveTurn = nil
 	m.state.Transcript = defaultStateForLanguage(m.language).Transcript
 	m.state.SessionPath = ""
@@ -2704,14 +2738,97 @@ func (m *Model) resolveApproval(decision taskrun.ApprovalDecision) tea.Cmd {
 	}
 	switch decision {
 	case taskrun.ApprovalDecisionApproveForSession:
-		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Approved for session", "Разрешено на сессию"), request.Name)
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Approved for session", "Разрешено на сессию"), m.approvalDecisionSubject(request))
 	case taskrun.ApprovalDecisionApprove:
-		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Approved", "Разрешено"), request.Name)
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Approved", "Разрешено"), m.approvalDecisionSubject(request))
 	default:
-		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Denied", "Запрещено"), request.Name)
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Denied", "Запрещено"), m.approvalDecisionSubject(request))
 	}
 	m.refreshViewport()
 	return nil
+}
+
+func (m *Model) approvalTitle(request tooling.ApprovalRequest) string {
+	switch tooling.ApprovalKindForRequest(request) {
+	case tooling.ApprovalKindPermissionRequest:
+		return m.localize("Additional Permissions Requested", "Запрошены дополнительные разрешения")
+	case tooling.ApprovalKindShellCommand:
+		return m.localize("Shell Command Requires Approval", "Команда shell требует подтверждения")
+	case tooling.ApprovalKindApplyPatch:
+		return m.localize("Patch Requires Approval", "Патч требует подтверждения")
+	case tooling.ApprovalKindWorkspaceWrite:
+		return m.localize("Write Requires Approval", "Запись требует подтверждения")
+	case tooling.ApprovalKindReadOnly:
+		return m.localize("Tool Requires Approval", "Инструмент требует подтверждения")
+	default:
+		return m.localize("Approval Required", "Нужно подтверждение")
+	}
+}
+
+func (m *Model) approvalKindHint(request tooling.ApprovalRequest) string {
+	switch tooling.ApprovalKindForRequest(request) {
+	case tooling.ApprovalKindPermissionRequest:
+		return m.localize("The model is asking for extra write access before continuing.", "Модель просит дополнительный доступ на запись перед продолжением.")
+	case tooling.ApprovalKindShellCommand:
+		return m.localize("This will start a subprocess and may change files.", "Это запустит подпроцесс и может изменить файлы.")
+	case tooling.ApprovalKindApplyPatch:
+		return m.localize("This will edit files through an inline patch.", "Это изменит файлы через встроенный патч.")
+	case tooling.ApprovalKindWorkspaceWrite:
+		return m.localize("This tool will write directly into the workspace.", "Этот инструмент будет писать прямо в рабочую папку.")
+	case tooling.ApprovalKindReadOnly:
+		return m.localize("This tool is read-only but is still gated by the current policy.", "Этот инструмент только читает, но всё ещё ограничен текущей политикой.")
+	default:
+		return ""
+	}
+}
+
+func (m *Model) approvalActionLabels(request tooling.ApprovalRequest) (string, string, string) {
+	switch tooling.ApprovalKindForRequest(request) {
+	case tooling.ApprovalKindPermissionRequest:
+		return m.localize("grant for this turn", "дать доступ на этот ход"), m.localize("grant for this session", "дать доступ на всю сессию"), m.localize("deny", "запретить")
+	case tooling.ApprovalKindShellCommand:
+		return m.localize("run once", "запустить один раз"), m.localize("allow shell for session", "разрешить shell на сессию"), m.localize("deny", "запретить")
+	case tooling.ApprovalKindApplyPatch:
+		return m.localize("apply once", "применить один раз"), m.localize("allow patches for session", "разрешить патчи на сессию"), m.localize("deny", "запретить")
+	case tooling.ApprovalKindWorkspaceWrite:
+		return m.localize("write once", "записать один раз"), m.localize("allow writes for session", "разрешить запись на сессию"), m.localize("deny", "запретить")
+	default:
+		return m.localize("approve once", "разрешить один раз"), m.localize("approve for session", "разрешить на сессию"), m.localize("deny", "запретить")
+	}
+}
+
+func (m *Model) approvalResourcePreview(request tooling.ApprovalRequest) string {
+	if len(request.Metadata.ResourceKeys) == 0 {
+		return ""
+	}
+	preview := make([]string, 0, minInt(len(request.Metadata.ResourceKeys), 3))
+	for _, value := range request.Metadata.ResourceKeys {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		for _, prefix := range []string{"file:", "dir:", "tree:", "cwd:", "tool:", "writable_root:"} {
+			value = strings.TrimPrefix(value, prefix)
+		}
+		if value == "" {
+			continue
+		}
+		preview = append(preview, value)
+		if len(preview) == 3 {
+			break
+		}
+	}
+	return strings.Join(preview, ", ")
+}
+
+func (m *Model) approvalDecisionSubject(request tooling.ApprovalRequest) string {
+	if summary := strings.TrimSpace(request.Summary); summary != "" {
+		return summary
+	}
+	if strings.TrimSpace(request.Name) != "" {
+		return request.Name
+	}
+	return m.localize("tool request", "запрос инструмента")
 }
 
 func localizedToolStatusTUI(language commandcatalog.CatalogLanguage, status string) string {
@@ -3268,4 +3385,24 @@ func (m *Model) effectiveWorkingDirectory() string {
 		return cwd
 	}
 	return currentWorkingDirectory()
+}
+
+func (m *Model) applyStartupSessionOverrides(meta appstate.SessionMeta) appstate.SessionMeta {
+	options := m.startup.TaskOptions
+	if strings.TrimSpace(options.Model) != "" {
+		meta.Model = strings.TrimSpace(options.Model)
+	}
+	if strings.TrimSpace(options.Profile) != "" {
+		meta.Profile = strings.TrimSpace(options.Profile)
+	}
+	if strings.TrimSpace(options.Provider) != "" {
+		meta.Provider = strings.TrimSpace(options.Provider)
+	}
+	if strings.TrimSpace(options.ReasoningEffort) != "" {
+		meta.Reasoning = strings.TrimSpace(options.ReasoningEffort)
+	}
+	if strings.TrimSpace(options.CWD) != "" {
+		meta.CWD = strings.TrimSpace(options.CWD)
+	}
+	return meta
 }

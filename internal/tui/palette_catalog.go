@@ -495,15 +495,12 @@ func (catalog staticPaletteCommandCatalog) commandPresentation(command PaletteCo
 	}
 
 	display := paletteDisplayLanguage(preferred, query)
-	preferred = normalizePaletteLanguage(preferred)
-	if preferred == commandcatalog.CatalogLanguageUnknown {
-		preferred = display
-	}
+	queryLanguage := commandcatalog.DetectCatalogLanguage(query)
 	locale := catalog.commandLocale(command, display)
 	mirror := catalog.commandLocale(command, oppositePaletteLanguage(display))
 	label := fallbackPaletteSlash(locale)
 	mirrorLabel := fallbackPaletteSlash(mirror)
-	if display != preferred && mirrorLabel != "" && mirrorLabel != label {
+	if queryLanguage != commandcatalog.CatalogLanguageUnknown && queryLanguage != display && mirrorLabel != "" && mirrorLabel != label {
 		label = fmt.Sprintf("%s (%s)", label, mirrorLabel)
 	}
 	keywords := make([]string, 0, 16)
@@ -543,11 +540,13 @@ func normalizePaletteLanguage(language commandcatalog.CatalogLanguage) commandca
 }
 
 func paletteDisplayLanguage(preferred commandcatalog.CatalogLanguage, query string) commandcatalog.CatalogLanguage {
-	display := preferred
-	if queryLanguage := commandcatalog.DetectCatalogLanguage(query); queryLanguage == commandcatalog.CatalogLanguageEnglish || queryLanguage == commandcatalog.CatalogLanguageRussian {
-		display = queryLanguage
+	display := normalizePaletteLanguage(preferred)
+	if preferred == commandcatalog.CatalogLanguageUnknown {
+		if queryLanguage := commandcatalog.DetectCatalogLanguage(query); queryLanguage == commandcatalog.CatalogLanguageEnglish || queryLanguage == commandcatalog.CatalogLanguageRussian {
+			return queryLanguage
+		}
 	}
-	return normalizePaletteLanguage(display)
+	return display
 }
 
 func oppositePaletteLanguage(language commandcatalog.CatalogLanguage) commandcatalog.CatalogLanguage {

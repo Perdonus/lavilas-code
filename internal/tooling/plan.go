@@ -449,6 +449,7 @@ func executePlannedCall(ctx context.Context, batchIndex int, mode ExecutionMode,
 func ApprovalRequestForCall(batch int, call ToolCallPlan) ApprovalRequest {
 	summary, details := describeApprovalCall(call)
 	return ApprovalRequest{
+		Kind:       ClassifyApprovalKind(call.Name, call.Metadata),
 		Index:      call.Index,
 		Batch:      batch,
 		ApprovalID: call.ApprovalID,
@@ -650,6 +651,7 @@ func collectApprovalRequests(results []ToolResultEnvelope) []ApprovalRequest {
 			continue
 		}
 		requests = append(requests, ApprovalRequest{
+			Kind:       ClassifyApprovalKind(result.Name, result.Metadata),
 			Index:      result.Index,
 			Batch:      result.BatchIndex,
 			ApprovalID: result.ApprovalID,

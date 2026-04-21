@@ -687,11 +687,10 @@ func catalogListItem(
 	displayName := locale.Name
 	displayMirrorName := ""
 	displayShowsMirror := false
-	normalizedPreferred := normalizeCatalogLanguage(preferred)
-	if normalizedPreferred == CatalogLanguageUnknown {
-		normalizedPreferred = displayLanguage
-	}
-	if displayLanguage != normalizedPreferred && mirror.Name != "" && normalizeCatalogKey(mirror.Name) != normalizeCatalogKey(locale.Name) {
+	if queryLanguage != CatalogLanguageUnknown &&
+		queryLanguage != displayLanguage &&
+		mirror.Name != "" &&
+		normalizeCatalogKey(mirror.Name) != normalizeCatalogKey(locale.Name) {
 		displayMirrorName = mirror.Name
 		displayShowsMirror = true
 		displayName = fmt.Sprintf("%s (%s)", locale.Name, mirror.Name)
@@ -721,11 +720,12 @@ func catalogListItem(
 func catalogDisplayContext(preferred CatalogLanguage, query string) (CatalogLanguage, CatalogLanguage) {
 	queryLanguage := DetectCatalogLanguage(query)
 	displayLanguage := normalizeCatalogLanguage(preferred)
-	if queryLanguage == CatalogLanguageEnglish || queryLanguage == CatalogLanguageRussian {
-		displayLanguage = queryLanguage
-	}
 	if displayLanguage == CatalogLanguageUnknown {
-		displayLanguage = CatalogLanguageEnglish
+		if queryLanguage == CatalogLanguageEnglish || queryLanguage == CatalogLanguageRussian {
+			displayLanguage = queryLanguage
+		} else {
+			displayLanguage = CatalogLanguageEnglish
+		}
 	}
 	return displayLanguage, queryLanguage
 }

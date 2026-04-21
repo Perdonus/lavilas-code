@@ -708,7 +708,7 @@ func runResume(args []string) int {
 	}
 
 	if strings.TrimSpace(input.Prompt) == "" {
-		if input.JSONOutput {
+		if input.TaskOptions.JSON {
 			return printJSON(map[string]any{
 				"session":  sessionEntry,
 				"meta":     meta,
@@ -733,15 +733,10 @@ func runResume(args []string) int {
 	}
 
 	runOptions := taskrun.Options{
-		Prompt:          input.Prompt,
-		Model:           meta.Model,
-		Profile:         meta.Profile,
-		Provider:        meta.Provider,
-		ReasoningEffort: meta.Reasoning,
-		History:         messages,
-		JSON:            input.JSONOutput,
+		History: messages,
 	}
-	applySettingsToolPolicy(&runOptions)
+	runOptions = applyResumeSessionDefaults(meta, runOptions, input.TaskOptions)
+	runOptions.Prompt = input.Prompt
 	result, err := taskrun.Run(contextBackground(), runOptions)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
@@ -753,7 +748,7 @@ func runResume(args []string) int {
 	}
 	result.SessionPath = sessionEntry.Path
 
-	if input.JSONOutput {
+	if runOptions.JSON {
 		return printJSON(result)
 	}
 	if err := taskrun.Print(result); err != nil {
@@ -794,16 +789,8 @@ func runFork(args []string) int {
 		return 1
 	}
 
-	runOptions := taskrun.Options{
-		Prompt:          input.Prompt,
-		Model:           meta.Model,
-		Profile:         meta.Profile,
-		Provider:        meta.Provider,
-		ReasoningEffort: meta.Reasoning,
-		History:         messages,
-		JSON:            input.JSONOutput,
-	}
-	applySettingsToolPolicy(&runOptions)
+	runOptions := applyResumeSessionDefaults(meta, taskrun.Options{History: messages}, input.TaskOptions)
+	runOptions.Prompt = input.Prompt
 	result, err := taskrun.Run(contextBackground(), runOptions)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fork: %v\n", err)
@@ -817,7 +804,7 @@ func runFork(args []string) int {
 		result.SessionPath = entry.Path
 	}
 
-	if input.JSONOutput {
+	if runOptions.JSON {
 		return printJSON(result)
 	}
 	if err := taskrun.Print(result); err != nil {
@@ -870,19 +857,25 @@ func hasPersistableMessage(message runtime.Message) bool {
 type resumeInput struct {
 	Selector   string
 	Prompt     string
-	JSONOutput bool
 	Last       bool
 	ShowAll    bool
+	TaskOptions taskrun.Options
 }
 
 func parseResumeArgs(args []string) (resumeInput, error) {
 	var input resumeInput
 	var promptParts []string
 
-	for _, arg := range args {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if next, handled, err := consumeCommonTaskFlag(&input.TaskOptions, args, index, arg, true); handled {
+			if err != nil {
+				return resumeInput{}, err
+			}
+			index = next
+			continue
+		}
 		switch arg {
-		case "--json":
-			input.JSONOutput = true
 		case "--last":
 			input.Last = true
 		case "--all":
@@ -965,13 +958,13 @@ func resolveResumeSession(root string, selector string, last bool, showAll bool,
 }
 
 func filterSessionsByWorkingDirectory(sessions []state.SessionEntry, cwd string) []state.SessionEntry {
-	cwd = strings.TrimSpace(cwd)
+	cwd = state.ComparableSessionCWD(cwd)
 	if cwd == "" {
 		return sessions
 	}
 	filtered := make([]state.SessionEntry, 0, len(sessions))
 	for _, entry := range sessions {
-		entryCWD := strings.TrimSpace(entry.CWD)
+		entryCWD := state.ComparableSessionCWD(entry.CWD)
 		if entryCWD == "" || entryCWD == cwd {
 			filtered = append(filtered, entry)
 		}
@@ -980,13 +973,15 @@ func filterSessionsByWorkingDirectory(sessions []state.SessionEntry, cwd string)
 }
 
 func shouldRunInteractiveResume(input resumeInput) bool {
-	return isInteractiveTerminal() && !input.JSONOutput
+	return isInteractiveTerminal() && !input.TaskOptions.JSON
 }
 
 func runResumeTUI(input resumeInput, fork bool) int {
+	applySettingsToolPolicy(&input.TaskOptions)
 	startup := tui.StartupOptions{
 		ShowAll:       input.ShowAll,
 		InitialPrompt: strings.TrimSpace(input.Prompt),
+		TaskOptions:   input.TaskOptions,
 	}
 	switch {
 	case strings.TrimSpace(input.Selector) != "":
@@ -1009,7 +1004,7 @@ func runResumeTUI(input resumeInput, fork bool) int {
 			startup.Mode = tui.StartupModeResumePicker
 		}
 	}
-	return tui.Run(tui.Options{Startup: startup})
+	return tui.Run(tui.Options{Startup: startup, TaskOptions: input.TaskOptions})
 }
 
 func fallback(value string, fallbackValue string) string {
@@ -1059,61 +1054,17 @@ func parseRunOptions(args []string) (taskrun.Options, error) {
 
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
-		if next, handled, err := consumeToolPolicyFlag(&options, args, index); handled {
+		if next, handled, err := consumeCommonTaskFlag(&options, args, index, arg, true); handled {
 			if err != nil {
 				return taskrun.Options{}, err
 			}
 			index = next
 			continue
 		}
-		switch arg {
-		case "--json":
-			options.JSON = true
-		case "--no-stream":
-			options.DisableStreaming = true
-		case "--stream":
-			options.DisableStreaming = false
-		case "--model":
-			value, next, err := takeFlagValue(args, index, arg)
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.Model = value
-			index = next
-		case "--profile":
-			value, next, err := takeFlagValue(args, index, arg)
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.Profile = value
-			index = next
-		case "--provider":
-			value, next, err := takeFlagValue(args, index, arg)
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.Provider = value
-			index = next
-		case "--reasoning":
-			value, next, err := takeFlagValue(args, index, arg)
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.ReasoningEffort = value
-			index = next
-		case "--system":
-			value, next, err := takeFlagValue(args, index, arg)
-			if err != nil {
-				return taskrun.Options{}, err
-			}
-			options.SystemPrompt = value
-			index = next
-		default:
-			if strings.HasPrefix(arg, "--") {
-				return taskrun.Options{}, fmt.Errorf("unknown flag %q", arg)
-			}
-			promptParts = append(promptParts, arg)
+		if strings.HasPrefix(arg, "--") {
+			return taskrun.Options{}, fmt.Errorf("unknown flag %q", arg)
 		}
+		promptParts = append(promptParts, arg)
 	}
 
 	options.Prompt = strings.TrimSpace(strings.Join(promptParts, " "))
@@ -1122,6 +1073,90 @@ func parseRunOptions(args []string) (taskrun.Options, error) {
 	}
 	applySettingsToolPolicy(&options)
 	return options, nil
+}
+
+func consumeCommonTaskFlag(options *taskrun.Options, args []string, index int, arg string, allowJSON bool) (int, bool, error) {
+	if next, handled, err := consumeToolPolicyFlag(options, args, index); handled {
+		return next, true, err
+	}
+	switch arg {
+	case "--json":
+		if !allowJSON {
+			return index, false, nil
+		}
+		options.JSON = true
+		return index, true, nil
+	case "--no-stream":
+		options.DisableStreaming = true
+		return index, true, nil
+	case "--stream":
+		options.DisableStreaming = false
+		return index, true, nil
+	case "--model", "--profile", "--provider", "--reasoning", "--system", "--cwd":
+		value, next, err := takeFlagValue(args, index, arg)
+		if err != nil {
+			return index, true, err
+		}
+		switch arg {
+		case "--model":
+			options.Model = value
+		case "--profile":
+			options.Profile = value
+		case "--provider":
+			options.Provider = value
+		case "--reasoning":
+			options.ReasoningEffort = value
+		case "--system":
+			options.SystemPrompt = value
+		case "--cwd":
+			options.CWD = value
+		}
+		return next, true, nil
+	default:
+		return index, false, nil
+	}
+}
+
+func applyResumeSessionDefaults(meta state.SessionMeta, base taskrun.Options, overrides taskrun.Options) taskrun.Options {
+	options := base
+	if strings.TrimSpace(options.Model) == "" {
+		options.Model = strings.TrimSpace(meta.Model)
+	}
+	if strings.TrimSpace(options.Profile) == "" {
+		options.Profile = strings.TrimSpace(meta.Profile)
+	}
+	if strings.TrimSpace(options.Provider) == "" {
+		options.Provider = strings.TrimSpace(meta.Provider)
+	}
+	if strings.TrimSpace(options.ReasoningEffort) == "" {
+		options.ReasoningEffort = strings.TrimSpace(meta.Reasoning)
+	}
+	if strings.TrimSpace(options.CWD) == "" {
+		options.CWD = strings.TrimSpace(meta.CWD)
+	}
+	if strings.TrimSpace(overrides.Model) != "" {
+		options.Model = strings.TrimSpace(overrides.Model)
+	}
+	if strings.TrimSpace(overrides.Profile) != "" {
+		options.Profile = strings.TrimSpace(overrides.Profile)
+	}
+	if strings.TrimSpace(overrides.Provider) != "" {
+		options.Provider = strings.TrimSpace(overrides.Provider)
+	}
+	if strings.TrimSpace(overrides.ReasoningEffort) != "" {
+		options.ReasoningEffort = strings.TrimSpace(overrides.ReasoningEffort)
+	}
+	if strings.TrimSpace(overrides.SystemPrompt) != "" {
+		options.SystemPrompt = strings.TrimSpace(overrides.SystemPrompt)
+	}
+	if strings.TrimSpace(overrides.CWD) != "" {
+		options.CWD = strings.TrimSpace(overrides.CWD)
+	}
+	options.JSON = overrides.JSON
+	options.DisableStreaming = overrides.DisableStreaming
+	options.ToolPolicy = overrides.ToolPolicy
+	applySettingsToolPolicy(&options)
+	return options
 }
 
 func applySettingsToolPolicy(options *taskrun.Options) {
