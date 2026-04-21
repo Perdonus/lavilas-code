@@ -408,9 +408,10 @@ func (m *Model) paletteSubtitle() string {
 			return fmt.Sprintf("Папка профилей: %s. Быстрый вызов: %sprofiles", m.layout.ProfilesDir(), prefix)
 		}
 		return fmt.Sprintf("Profiles folder: %s. Quick command: %sprofiles", m.layout.ProfilesDir(), prefix)
-	case PaletteModeCustomization:
-	case PaletteModeCustomizationColor:
-	case PaletteModeCustomizationFormatting:
+	case PaletteModeCustomization,
+		PaletteModeCustomizationColor,
+		PaletteModeCustomizationFormatting:
+		return ""
 	default:
 		return ""
 	}
