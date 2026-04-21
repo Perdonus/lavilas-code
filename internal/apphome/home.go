@@ -10,6 +10,7 @@ type Paths struct {
 	HomeDir   string
 	CodexHome string
 	Config    string
+	Auth      string
 	Profiles  string
 	Settings  string
 	Sessions  string
@@ -57,6 +58,10 @@ func (l Layout) ProfilesDir() string {
 	return filepath.Join(l.CodexHome(), "Profiles")
 }
 
+func (l Layout) AuthPath() string {
+	return filepath.Join(l.CodexHome(), "auth.json")
+}
+
 func (l Layout) SettingsPath() string {
 	return filepath.Join(l.ProfilesDir(), "settings.json")
 }
@@ -70,6 +75,7 @@ func (l Layout) Paths() Paths {
 		HomeDir:   HomeDir(),
 		CodexHome: l.CodexHome(),
 		Config:    l.ConfigPath(),
+		Auth:      l.AuthPath(),
 		Profiles:  l.ProfilesDir(),
 		Settings:  l.SettingsPath(),
 		Sessions:  l.SessionsDir(),
@@ -86,6 +92,10 @@ func ConfigPath() string {
 
 func ProfilesDir() string {
 	return DefaultLayout().ProfilesDir()
+}
+
+func AuthPath() string {
+	return DefaultLayout().AuthPath()
 }
 
 func SettingsPath() string {
