@@ -852,11 +852,15 @@ func resolveRequest(config state.Config, options Options) (resolvedRequest, erro
 		}
 	}
 
+	systemPrompt := resolveSystemPrompt(options.SystemPrompt, cwd)
 	messages := cloneMessages(options.History)
-	if len(messages) == 0 {
-		messages = append(messages, runtime.TextMessage(runtime.RoleSystem, resolveSystemPrompt(options.SystemPrompt)))
-	} else if strings.TrimSpace(options.SystemPrompt) != "" && messages[0].Role == runtime.RoleSystem {
-		messages[0] = runtime.TextMessage(runtime.RoleSystem, resolveSystemPrompt(options.SystemPrompt))
+	switch {
+	case len(messages) == 0:
+		messages = append(messages, runtime.TextMessage(runtime.RoleSystem, systemPrompt))
+	case messages[0].Role == runtime.RoleSystem:
+		messages[0] = runtime.TextMessage(runtime.RoleSystem, systemPrompt)
+	default:
+		messages = append([]runtime.Message{runtime.TextMessage(runtime.RoleSystem, systemPrompt)}, messages...)
 	}
 	messages = append(messages, runtime.TextMessage(runtime.RoleUser, options.Prompt))
 

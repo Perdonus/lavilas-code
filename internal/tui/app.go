@@ -28,6 +28,7 @@ const (
 	StartupModeResumePath   StartupMode = "resume_path"
 	StartupModeForkPath     StartupMode = "fork_path"
 	StartupModeModel        StartupMode = "model"
+	StartupModeModelPresets StartupMode = "model_presets"
 	StartupModeProfiles     StartupMode = "profiles"
 	StartupModeProviders    StartupMode = "providers"
 	StartupModeSettings     StartupMode = "settings"

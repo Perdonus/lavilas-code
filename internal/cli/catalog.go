@@ -85,6 +85,8 @@ func catalogCommandRun(name string) (func(args []string) int, bool) {
 		return runStatus, true
 	case "profiles":
 		return runProfiles, true
+	case "presets":
+		return runPresets, true
 	case "providers":
 		return runProviders, true
 	case "model":

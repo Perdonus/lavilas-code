@@ -164,6 +164,16 @@ func runModel(args []string) int {
 	return 0
 }
 
+func runPresets(args []string) int {
+	if shouldOpenInteractiveConfig(args) {
+		return tui.Run(tui.Options{Startup: tui.StartupOptions{Mode: tui.StartupModeModelPresets}})
+	}
+	presetArgs := make([]string, 0, len(args)+1)
+	presetArgs = append(presetArgs, "preset")
+	presetArgs = append(presetArgs, args...)
+	return runModel(presetArgs)
+}
+
 func runProfiles(args []string) int {
 	if shouldOpenInteractiveConfig(args) {
 		return tui.Run(tui.Options{Startup: tui.StartupOptions{Mode: tui.StartupModeProfiles}})

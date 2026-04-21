@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -726,20 +727,21 @@ func (m *Model) refreshViewport() {
 }
 
 func (m *Model) submitInput() tea.Cmd {
-	if m.state.Busy {
-		return nil
-	}
 	draft := strings.TrimSpace(m.input.Value())
 	if draft == "" {
 		return nil
 	}
-	m.input.Reset()
-	m.state.InputDraft = ""
-
 	prefix := commandPrefix(m.layout.SettingsPath())
 	if strings.HasPrefix(draft, prefix) {
+		m.input.Reset()
+		m.state.InputDraft = ""
 		return m.dispatchSlash(draft, prefix)
 	}
+	if m.state.Busy {
+		return nil
+	}
+	m.input.Reset()
+	m.state.InputDraft = ""
 
 	m.state.Busy = true
 	m.state.LiveTurn = &LiveTurnState{Prompt: draft}
@@ -797,7 +799,11 @@ func (m *Model) dispatchSlash(line string, prefix string) tea.Cmd {
 		m.appendTranscript("system", fmt.Sprintf("%s: %s%s", m.localize("Unknown slash command", "Неизвестная слэш-команда"), prefix, fields[0]))
 		return nil
 	}
-	return m.executePaletteCommand(command)
+	if m.state.Busy && !command.AvailableDuringTask {
+		m.appendTranscript("system", fmt.Sprintf("%s: %s%s", m.localize("Command unavailable while a turn is running", "Команда недоступна, пока выполняется ход"), prefix, fields[0]))
+		return nil
+	}
+	return m.executePaletteCommand(command, fields[1:])
 }
 
 func (m *Model) applyTaskResult(msg taskFinishedMsg) {
@@ -1370,7 +1376,10 @@ func paletteItemToken(item PaletteItem) string {
 	return item.Key + "\x00" + item.Title + "\x00" + item.Value
 }
 
-func (m *Model) executePaletteCommand(command PaletteCommandSpec) tea.Cmd {
+func (m *Model) executePaletteCommand(command PaletteCommandSpec, args []string) tea.Cmd {
+	if cmd := m.executeInlineSlashCommand(command, args); cmd != nil {
+		return cmd
+	}
 	switch command.Action {
 	case PaletteActionOpenPalette:
 		if m.state.Palette.Visible {
@@ -1406,6 +1415,12 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec) tea.Cmd {
 		return m.openSessionsPalette(false, m.state.Palette.Visible)
 	case PaletteActionBrowseFork:
 		return m.openSessionsPalette(true, m.state.Palette.Visible)
+	case PaletteActionClearTranscript:
+		m.clearTranscriptView()
+		if m.state.Palette.Visible {
+			return m.closePalette()
+		}
+		return nil
 	case PaletteActionShowStatus:
 		m.appendTranscript("system", m.statusSummary())
 		if m.state.Palette.Visible {
@@ -1441,6 +1456,108 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec) tea.Cmd {
 			return m.openPaletteMode(command.Mode, m.state.Palette.Visible)
 		}
 	default:
+		return nil
+	}
+}
+
+func (m *Model) executeInlineSlashCommand(command PaletteCommandSpec, args []string) tea.Cmd {
+	args = normalizeInlineSlashArgs(args)
+	if len(args) == 0 {
+		return nil
+	}
+	key := normalizePaletteCommandName(firstNonEmpty(command.CatalogCommand, command.Key))
+	switch key {
+	case "setlang":
+		return m.executeInlineSetlang(args)
+	case "permissions":
+		return m.executeInlinePermissions(args)
+	default:
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Inline arguments are not supported for this command", "У этой команды inline-аргументы не поддерживаются"), strings.Join(args, " "))
+		return nil
+	}
+}
+
+func normalizeInlineSlashArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(args))
+	for _, arg := range args {
+		if trimmed := strings.TrimSpace(arg); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func (m *Model) executeInlineSetlang(args []string) tea.Cmd {
+	if len(args) == 0 {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(args[0])) {
+	case "ru", "russian", "русский":
+		return m.setSettingsLanguage("ru")
+	case "en", "english", "английский":
+		return m.setSettingsLanguage("en")
+	default:
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Unsupported language", "Неподдерживаемый язык"), args[0])
+		return nil
+	}
+}
+
+func (m *Model) executeInlinePermissions(args []string) tea.Cmd {
+	if len(args) == 0 {
+		return nil
+	}
+	action := strings.ToLower(strings.TrimSpace(args[0]))
+	policy := tooling.NormalizeToolPolicy(m.options.ToolPolicy)
+	switch action {
+	case "auto", "авто":
+		policy.ApprovalMode = tooling.ToolApprovalModeAuto
+		return m.saveToolPolicy(policy, fmt.Sprintf("%s: %s", m.localize("Approval mode", "Режим подтверждений"), m.approvalModeLabel(policy.ApprovalMode)))
+	case "require", "требовать":
+		policy.ApprovalMode = tooling.ToolApprovalModeRequire
+		return m.saveToolPolicy(policy, fmt.Sprintf("%s: %s", m.localize("Approval mode", "Режим подтверждений"), m.approvalModeLabel(policy.ApprovalMode)))
+	case "deny", "запретить":
+		policy.ApprovalMode = tooling.ToolApprovalModeDeny
+		return m.saveToolPolicy(policy, fmt.Sprintf("%s: %s", m.localize("Approval mode", "Режим подтверждений"), m.approvalModeLabel(policy.ApprovalMode)))
+	case "block-mutating", "block-mutating-tools", "блок-записи":
+		policy.BlockMutatingTools = true
+		return m.saveToolPolicy(policy, m.localize("Mutating tools blocked", "Изменяющие инструменты запрещены"))
+	case "allow-mutating", "разрешить-запись":
+		policy.BlockMutatingTools = false
+		return m.saveToolPolicy(policy, m.localize("Mutating tools allowed", "Изменяющие инструменты разрешены"))
+	case "block-shell", "block-shell-tools", "блок-shell":
+		policy.BlockShellCommands = true
+		return m.saveToolPolicy(policy, m.localize("Shell commands blocked", "Shell-команды запрещены"))
+	case "allow-shell", "разрешить-shell":
+		policy.BlockShellCommands = false
+		return m.saveToolPolicy(policy, m.localize("Shell commands allowed", "Shell-команды разрешены"))
+	case "enable-parallel", "включить-параллель":
+		policy.Planning.AllowParallel = true
+		if policy.Planning.MaxParallelCalls < 2 {
+			policy.Planning.MaxParallelCalls = maxInt(2, tooling.DefaultPlanningPolicy().MaxParallelCalls)
+		}
+		return m.saveToolPolicy(policy, m.localize("Parallel tools enabled", "Параллельные инструменты включены"))
+	case "disable-parallel", "выключить-параллель":
+		policy.Planning.AllowParallel = false
+		policy.Planning.MaxParallelCalls = 1
+		return m.saveToolPolicy(policy, m.localize("Parallel tools disabled", "Параллельные инструменты выключены"))
+	case "parallelism", "параллелизм":
+		if len(args) < 2 {
+			m.state.Footer = m.localize("parallelism requires a number", "параллелизм требует число")
+			return nil
+		}
+		value, err := strconv.Atoi(strings.TrimSpace(args[1]))
+		if err != nil || value < 1 {
+			m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Invalid parallelism", "Некорректный параллелизм"), args[1])
+			return nil
+		}
+		policy.Planning.MaxParallelCalls = value
+		policy.Planning.AllowParallel = value > 1
+		return m.saveToolPolicy(policy, fmt.Sprintf("%s: %d", m.localize("Parallelism", "Параллелизм"), value))
+	default:
+		m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Unsupported permissions action", "Неподдерживаемое действие permissions"), args[0])
 		return nil
 	}
 }
@@ -1738,7 +1855,7 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 	default:
 		if item.Key != "__back" {
 			if command, ok := m.catalog.LookupByKey(item.Key); ok {
-				return m.executePaletteCommand(command)
+				return m.executePaletteCommand(command, nil)
 			}
 		}
 		switch item.Key {
@@ -2154,6 +2271,9 @@ func (m *Model) startupCmd() tea.Cmd {
 	case StartupModeModel:
 		m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
 		return m.openModelPickerPalette(false)
+	case StartupModeModelPresets:
+		m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
+		return m.openModelPresetsSettingsPalette(false)
 	case StartupModeProfiles:
 		m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginCommand)
 		return m.openProfilesPalette(false)
@@ -2179,6 +2299,13 @@ func (m *Model) resetConversation() {
 	m.state.SessionPath = ""
 	m.state.Footer = m.localize("Started a new session", "Начата новая сессия")
 	m.updateStatus()
+	m.refreshViewport()
+}
+
+func (m *Model) clearTranscriptView() {
+	m.state.Transcript = nil
+	m.state.LiveTurn = nil
+	m.state.Footer = m.localize("Screen cleared", "Экран очищен")
 	m.refreshViewport()
 }
 
@@ -3016,7 +3143,15 @@ func (m *Model) resolveSlashCommand(name string) (PaletteCommandSpec, bool) {
 	if m.catalog == nil {
 		m.catalog = defaultPaletteCatalog()
 	}
-	return m.catalog.LookupBySlash(needle)
+	command, ok := m.catalog.LookupBySlash(needle)
+	if !ok {
+		return PaletteCommandSpec{}, false
+	}
+	settings := m.settingsForUI()
+	if settings.HasHiddenCommand(paletteCommandVisibilityKey(command)) {
+		return PaletteCommandSpec{}, false
+	}
+	return command, true
 }
 
 func buildSessionEntry(root string, path string, info os.FileInfo) appstate.SessionEntry {

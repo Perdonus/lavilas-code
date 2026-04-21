@@ -19,6 +19,7 @@ const (
 	PaletteActionForkLatest   PaletteCommandAction = "fork_latest"
 	PaletteActionBrowseResume PaletteCommandAction = "browse_resume"
 	PaletteActionBrowseFork   PaletteCommandAction = "browse_fork"
+	PaletteActionClearTranscript PaletteCommandAction = "clear_transcript"
 	PaletteActionShowStatus   PaletteCommandAction = "show_status"
 	PaletteActionShowHelp     PaletteCommandAction = "show_help"
 	PaletteActionQuit         PaletteCommandAction = "quit"
@@ -36,6 +37,7 @@ type PaletteCommandSpec struct {
 	Key               string
 	CatalogCommand    string
 	PresentationOrder int
+	AvailableDuringTask bool
 	English           PaletteCommandLocale
 	Russian           PaletteCommandLocale
 	Action            PaletteCommandAction
@@ -176,6 +178,7 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			Key:               "model",
 			CatalogCommand:    "model",
 			PresentationOrder: 10,
+			AvailableDuringTask: true,
 			Action:            PaletteActionOpenMode,
 			Mode:              PaletteModeModel,
 			ShowInRoot:        true,
@@ -185,8 +188,19 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			Key:               "profiles",
 			CatalogCommand:    "profiles",
 			PresentationOrder: 20,
+			AvailableDuringTask: true,
 			Action:            PaletteActionOpenMode,
 			Mode:              PaletteModeProfiles,
+			ShowInRoot:        true,
+			ShowInHelp:        true,
+		},
+		{
+			Key:               "presets",
+			CatalogCommand:    "presets",
+			PresentationOrder: 25,
+			AvailableDuringTask: true,
+			Action:            PaletteActionOpenMode,
+			Mode:              PaletteModeModelPresets,
 			ShowInRoot:        true,
 			ShowInHelp:        true,
 		},
@@ -194,6 +208,7 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			Key:               "providers",
 			CatalogCommand:    "providers",
 			PresentationOrder: 90,
+			AvailableDuringTask: true,
 			Action:            PaletteActionOpenMode,
 			Mode:              PaletteModeProviders,
 			ShowInRoot:        true,
@@ -203,6 +218,7 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			Key:               "settings",
 			CatalogCommand:    "settings",
 			PresentationOrder: 30,
+			AvailableDuringTask: true,
 			Action:            PaletteActionOpenMode,
 			Mode:              PaletteModeSettings,
 			ShowInRoot:        true,
@@ -212,6 +228,7 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			Key:               "setlang",
 			CatalogCommand:    "setlang",
 			PresentationOrder: 95,
+			AvailableDuringTask: true,
 			Action:            PaletteActionOpenMode,
 			Mode:              PaletteModeLanguage,
 			ShowInRoot:        true,
@@ -221,6 +238,7 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			Key:               "permissions",
 			CatalogCommand:    "permissions",
 			PresentationOrder: 97,
+			AvailableDuringTask: true,
 			Action:            PaletteActionOpenMode,
 			Mode:              PaletteModePermissions,
 			ShowInRoot:        true,
@@ -230,6 +248,7 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			Key:               "status",
 			CatalogCommand:    "status",
 			PresentationOrder: 100,
+			AvailableDuringTask: true,
 			Action:            PaletteActionShowStatus,
 			ShowInRoot:        true,
 			ShowInHelp:        true,
@@ -252,6 +271,7 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 				Keywords:    []string{"помощь", "клавиши", "команды"},
 			},
 			Action:     PaletteActionShowHelp,
+			AvailableDuringTask: true,
 			ShowInRoot: true,
 			ShowInHelp: true,
 		},
@@ -271,6 +291,7 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 				Keywords:    []string{"палитра", "меню", "команды"},
 			},
 			Action:     PaletteActionOpenPalette,
+			AvailableDuringTask: true,
 			ShowInHelp: true,
 		},
 		{
@@ -291,6 +312,29 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 				Keywords:    []string{"выход", "выйти", "закрыть"},
 			},
 			Action:     PaletteActionQuit,
+			AvailableDuringTask: true,
+			ShowInHelp: true,
+		},
+		{
+			Key:               "clear",
+			PresentationOrder: 122,
+			English: PaletteCommandLocale{
+				Slash:       "clear",
+				Title:       "Clear Screen",
+				Description: "Clear the visible transcript",
+				Aliases:     []string{"cls"},
+				Keywords:    []string{"clear", "screen", "transcript", "reset"},
+			},
+			Russian: PaletteCommandLocale{
+				Slash:       "очистить",
+				Title:       "Очистить экран",
+				Description: "Очистить видимый диалог",
+				Aliases:     []string{"очистка"},
+				Keywords:    []string{"очистить", "экран", "диалог", "сброс"},
+			},
+			Action:     PaletteActionClearTranscript,
+			AvailableDuringTask: true,
+			ShowInRoot: true,
 			ShowInHelp: true,
 		},
 	}

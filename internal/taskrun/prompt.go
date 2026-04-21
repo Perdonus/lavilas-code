@@ -1,32 +1,202 @@
 package taskrun
 
-import "strings"
+import (
+	"fmt"
+	"os"
+	goRuntime "runtime"
+	"path/filepath"
+	"strings"
+)
 
-const defaultSystemPrompt = `You are Go Lavilas, a terminal coding agent.
+const (
+	maxAgentsDocumentBytes  = 16 * 1024
+	maxAgentsAggregateBytes = 64 * 1024
+)
 
-Act like a careful engineering tool, not like a casual chatbot.
+const defaultSystemPrompt = `You are Go Lavilas, based on the current Lavilas/Codex client. You are running as a coding agent in a terminal on the user's computer.
 
-Operating rules:
-- Read the task carefully and prefer concrete, verifiable actions over general advice.
+General:
+- Prefer concrete, verifiable actions over generic advice.
 - When tools are available, inspect the repository, current directory, configuration, operating system, and relevant files before making strong claims.
-- Available tools usually include: run_shell_command, list_directory, read_file, search_text, write_file, and apply_patch.
-- Before editing code, discover the project structure, then inspect the exact target files, then make the smallest correct change.
-- After every meaningful edit, re-read the affected files and verify the result with the most direct command or test available.
-- Re-check assumptions before proposing edits or commands. If something is uncertain, say what is uncertain and what should be checked next.
+- Prefer using rg or rg --files for search when those tools exist.
+- Keep moving until the requested implementation or investigation is actually carried through, not merely described.
+
+Editing constraints:
+- Default to ASCII when editing or creating files unless the file already requires Unicode.
+- Add brief comments only when they materially help explain non-obvious code.
+- Prefer focused patches over broad rewrites unless the task clearly requires a rewrite.
+- You may be working inside a dirty git tree. Never revert or discard user changes you did not make.
+- Never use destructive git commands such as git reset --hard or git checkout -- unless the user explicitly asks for them.
+- If you notice unexpected changes that you did not make, stop and surface that conflict clearly.
+
+Working style:
+- Before editing code, inspect the exact target files and understand the relevant project structure.
+- After a meaningful edit, re-read the affected files and verify the result with the most direct command or test available.
+- Re-check assumptions before proposing edits or commands.
 - Do not invent tool output, file contents, environment facts, test results, or API behavior.
-- Prefer surgical patches over broad rewrites unless the task clearly requires a rewrite.
-- If the user asks for implementation, keep moving until the change is actually carried through, not just described.
-- If a required capability is unavailable in the current alpha runtime, say that clearly and continue with the best precise fallback.
+- If a capability is unavailable, say that clearly and continue with the best precise fallback.
+
+Frontend tasks:
+- Avoid generic, average-looking UI output.
+- Keep the existing design language when the project already has one.
+- Aim for intentional layouts, strong typography, and restrained but meaningful motion.
 
 Response style:
 - Keep answers concise, technical, and execution-focused.
-- Surface important risks, regressions, and missing verification steps explicitly.
-- Do not stop at a guess when the repository or environment can be inspected first.`
+- Surface risks, regressions, and missing verification steps explicitly.
+- Do not stop at guesses when the repository or environment can be inspected first.`
 
-func resolveSystemPrompt(value string) string {
+const agentsHierarchyPromptPrelude = `AGENTS.md policy:
+- Files named AGENTS.md can appear anywhere in the container.
+- Each AGENTS.md governs the directory that contains it and every child directory beneath it.
+- When multiple AGENTS.md files apply, the deeper file overrides the higher file.
+- System, developer, and user instructions override AGENTS.md instructions.`
+
+type agentsDocument struct {
+	Path string
+	Body string
+}
+
+func resolveSystemPrompt(value string, cwd string) string {
 	value = strings.TrimSpace(value)
-	if value != "" {
+	if value == "" {
+		value = defaultSystemPrompt
+	}
+	contextBlock := buildRuntimePromptContext(cwd)
+	if contextBlock == "" {
 		return value
 	}
-	return defaultSystemPrompt
+	return strings.TrimSpace(value) + "\n\n" + contextBlock
+}
+
+func buildRuntimePromptContext(cwd string) string {
+	cwd = normalizePromptPath(cwd)
+	lines := []string{"Runtime context:"}
+	if cwd != "" {
+		lines = append(lines, "- cwd: "+cwd)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		home = normalizePromptPath(home)
+		if home != "" {
+			lines = append(lines, "- home: "+home)
+		}
+	}
+	if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
+		lines = append(lines, "- shell: "+shell)
+	}
+	lines = append(lines, fmt.Sprintf("- platform: %s/%s", goRuntime.GOOS, goRuntime.GOARCH))
+
+	agentsBlock := renderAgentsDocuments(cwd)
+	if agentsBlock != "" {
+		lines = append(lines, "", agentsHierarchyPromptPrelude, "", agentsBlock)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderAgentsDocuments(cwd string) string {
+	documents := collectAgentsDocuments(cwd)
+	if len(documents) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	for index, document := range documents {
+		if index > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString("# AGENTS.md instructions for ")
+		builder.WriteString(document.Path)
+		builder.WriteString("\n\n")
+		builder.WriteString(document.Body)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func collectAgentsDocuments(cwd string) []agentsDocument {
+	cwd = normalizePromptPath(cwd)
+	if cwd == "" {
+		return nil
+	}
+	dirs := ancestorPromptDirs(cwd)
+	if len(dirs) == 0 {
+		return nil
+	}
+	documents := make([]agentsDocument, 0, len(dirs))
+	total := 0
+	for _, dir := range dirs {
+		path := filepath.Join(dir, "AGENTS.md")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		body, used := truncatePromptText(string(data), maxAgentsDocumentBytes)
+		if body == "" {
+			continue
+		}
+		if total+used > maxAgentsAggregateBytes {
+			remaining := maxAgentsAggregateBytes - total
+			if remaining <= 0 {
+				break
+			}
+			body, used = truncatePromptText(body, remaining)
+			if body == "" {
+				break
+			}
+		}
+		documents = append(documents, agentsDocument{
+			Path: normalizePromptPath(path),
+			Body: body,
+		})
+		total += used
+		if total >= maxAgentsAggregateBytes {
+			break
+		}
+	}
+	return documents
+}
+
+func ancestorPromptDirs(path string) []string {
+	path = normalizePromptPath(path)
+	if path == "" {
+		return nil
+	}
+	result := []string{path}
+	for {
+		parent := normalizePromptPath(filepath.Dir(path))
+		if parent == "" || parent == path {
+			break
+		}
+		path = parent
+		result = append(result, path)
+	}
+	for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
+		result[left], result[right] = result[right], result[left]
+	}
+	return result
+}
+
+func normalizePromptPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return filepath.Clean(value)
+}
+
+func truncatePromptText(value string, limit int) (string, int) {
+	value = strings.TrimSpace(value)
+	if value == "" || limit <= 0 {
+		return "", 0
+	}
+	if len(value) <= limit {
+		return value, len(value)
+	}
+	if limit <= 32 {
+		return value[:limit], limit
+	}
+	suffix := "\n\n[truncated]"
+	limitWithoutSuffix := limit - len(suffix)
+	if limitWithoutSuffix <= 0 {
+		return value[:limit], limit
+	}
+	return strings.TrimRight(value[:limitWithoutSuffix], "\n\r\t ") + suffix, limit
 }

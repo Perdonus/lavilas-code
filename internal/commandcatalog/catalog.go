@@ -116,6 +116,16 @@ func Catalog() *CommandCatalog {
 				RussianDescription: "Показать или сменить активную модель"},
 			{
 				PresentationOrder:  20,
+				Name:               "presets",
+				Category:           "config",
+				Tags:               []string{"presets", "models", "fast"},
+				EnglishAliases:     []string{"preset", "fast"},
+				EnglishDescription: "Manage model presets",
+				RussianName:        "пресеты",
+				RussianAliases:     []string{"пресет", "быстро"},
+				RussianDescription: "Управлять пресетами моделей"},
+			{
+				PresentationOrder:  25,
 				Name:               "profiles",
 				Category:           "account",
 				Tags:               []string{"profiles", "accounts"},

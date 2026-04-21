@@ -19,12 +19,13 @@ const (
 )
 
 var replAllowedCommands = map[string]struct{}{
-	"status":    {},
-	"model":     {},
-	"profiles":  {},
-	"providers": {},
-	"settings":  {},
-	"setlang":   {},
+	"status":      {},
+	"model":       {},
+	"presets":     {},
+	"profiles":    {},
+	"providers":   {},
+	"settings":    {},
+	"setlang":     {},
 	"permissions": {},
 }
 
