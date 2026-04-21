@@ -20,6 +20,8 @@ type SessionMeta struct {
 	Profile   string    `json:"profile,omitempty"`
 	Reasoning string    `json:"reasoning,omitempty"`
 	CWD       string    `json:"cwd,omitempty"`
+	Branch    string    `json:"branch,omitempty"`
+	Preview   string    `json:"preview,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -32,6 +34,8 @@ type sessionLine struct {
 	Profile    string            `json:"profile,omitempty"`
 	Reasoning  string            `json:"reasoning,omitempty"`
 	CWD        string            `json:"cwd,omitempty"`
+	Branch     string            `json:"branch,omitempty"`
+	Preview    string            `json:"preview,omitempty"`
 	CreatedAt  string            `json:"created_at,omitempty"`
 	UpdatedAt  string            `json:"updated_at,omitempty"`
 	Role       string            `json:"role,omitempty"`
@@ -61,6 +65,9 @@ type sessionContent struct {
 }
 
 func CreateSession(root string, meta SessionMeta, messages []runtime.Message) (SessionEntry, error) {
+	if strings.TrimSpace(meta.Preview) == "" {
+		meta.Preview = previewFromRuntimeMessages(messages)
+	}
 	meta = prepareSessionMetaForPersist(meta)
 	path := sessionPath(root, meta)
 	if err := persistSession(path, meta, messages); err != nil {
@@ -110,6 +117,9 @@ func AppendSessionHistory(path string, meta SessionMeta, history []runtime.Messa
 	if meta.UpdatedAt.IsZero() {
 		merged.UpdatedAt = time.Now().UTC()
 	}
+	if strings.TrimSpace(merged.Preview) == "" {
+		merged.Preview = previewFromRuntimeMessages(history)
+	}
 	merged = prepareSessionMetaForPersist(merged)
 	tail := history[len(existing):]
 	if err := appendSessionDelta(path, merged, tail); err != nil {
@@ -119,71 +129,18 @@ func AppendSessionHistory(path string, meta SessionMeta, history []runtime.Messa
 }
 
 func LoadSession(path string) (SessionMeta, []runtime.Message, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return SessionMeta{}, nil, err
-	}
-	defer file.Close()
-
-	var meta SessionMeta
-	messages := make([]runtime.Message, 0, 8)
-
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		var current sessionLine
-		if err := json.Unmarshal([]byte(line), &current); err != nil {
-			return SessionMeta{}, nil, fmt.Errorf("decode session line: %w", err)
-		}
-		switch current.Type {
-		case "meta":
-			meta = sessionMetaFromLine(current)
-		case "message":
-			messages = append(messages, runtimeMessageFromLine(current))
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return SessionMeta{}, nil, err
-	}
-	return meta, messages, nil
+	return loadSessionFile(path, true)
 }
 
 func LoadSessionMeta(path string) (SessionMeta, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return SessionMeta{}, err
-	}
-	defer file.Close()
-
-	var meta SessionMeta
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var current sessionLine
-		if err := json.Unmarshal([]byte(line), &current); err != nil {
-			return SessionMeta{}, fmt.Errorf("decode session meta line: %w", err)
-		}
-		if current.Type == "meta" {
-			meta = sessionMetaFromLine(current)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return SessionMeta{}, err
-	}
-	return meta, nil
+	meta, _, err := loadSessionFile(path, false)
+	return meta, err
 }
 
 func normalizeSessionMeta(meta SessionMeta) SessionMeta {
 	meta.CWD = sanitizeSessionCWD(meta.CWD)
+	meta.Branch = strings.TrimSpace(meta.Branch)
+	meta.Preview = normalizeSessionPreview(meta.Preview)
 	now := time.Now().UTC()
 	if strings.TrimSpace(meta.SessionID) == "" {
 		meta.SessionID = fmt.Sprintf("%x", now.UnixNano())
@@ -257,6 +214,8 @@ func writeSessionMeta(writer *bufio.Writer, meta SessionMeta) error {
 		Profile:   meta.Profile,
 		Reasoning: meta.Reasoning,
 		CWD:       meta.CWD,
+		Branch:    meta.Branch,
+		Preview:   meta.Preview,
 		CreatedAt: meta.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt: meta.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -304,6 +263,8 @@ func sessionMetaFromLine(line sessionLine) SessionMeta {
 		Profile:   line.Profile,
 		Reasoning: line.Reasoning,
 		CWD:       line.CWD,
+		Branch:    line.Branch,
+		Preview:   line.Preview,
 	}
 	if parsed, err := time.Parse(time.RFC3339Nano, line.CreatedAt); err == nil {
 		meta.CreatedAt = parsed
@@ -425,6 +386,12 @@ func mergeSessionMeta(current SessionMeta, next SessionMeta) SessionMeta {
 	}
 	if strings.TrimSpace(next.CWD) != "" {
 		merged.CWD = next.CWD
+	}
+	if strings.TrimSpace(next.Branch) != "" {
+		merged.Branch = next.Branch
+	}
+	if strings.TrimSpace(next.Preview) != "" {
+		merged.Preview = next.Preview
 	}
 	if merged.CreatedAt.IsZero() {
 		merged.CreatedAt = next.CreatedAt

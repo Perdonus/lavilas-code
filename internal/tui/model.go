@@ -144,8 +144,8 @@ func NewModel(state State) *Model {
 	styles := newStyles()
 
 	input := textinput.New()
-	input.Prompt = "> "
-	input.Placeholder = localizedTextTUI(language, "Send a message to the Go alpha session", "Введите сообщение в Go Lavilas alpha")
+	input.Prompt = "› "
+	input.Placeholder = ""
 	input.TextStyle = styles.value
 	input.PlaceholderStyle = styles.muted
 	input.PromptStyle = styles.sectionTitle
@@ -315,7 +315,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.togglePalette()
 		}
 
-		if m.state.Palette.Visible {
+		if m.state.Palette.Visible && m.state.Focus == FocusPalette {
 			return m, m.updatePalette(msg)
 		}
 
@@ -324,16 +324,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.cycleFocus(1)
 		case key.Matches(msg, m.keys.PrevFocus):
 			return m, m.cycleFocus(-1)
-		case key.Matches(msg, m.keys.Submit) && m.state.Focus == FocusInput:
+		case key.Matches(msg, m.keys.Submit) && m.state.Focus == FocusInput && !m.isInlineCommandPaletteActive():
 			return m, m.submitInput()
 		}
 	}
 
 	switch m.state.Focus {
 	case FocusInput:
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			if cmd := m.updateInlineCommandPalette(keyMsg); cmd != nil {
+				return m, cmd
+			}
+		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		m.state.InputDraft = m.input.Value()
+		m.syncInlinePaletteWithDraft()
 		return m, cmd
 	case FocusTranscript:
 		var cmd tea.Cmd
@@ -357,27 +363,7 @@ func (m *Model) View() string {
 		)
 	}
 
-	statusPane := m.renderStatusPane()
-	mainSections := make([]string, 0, 3)
-	if m.approval != nil {
-		mainSections = append(mainSections, m.renderApprovalPane())
-	}
-	if m.cwdPrompt != nil {
-		mainSections = append(mainSections, m.renderCWDPromptPane())
-	}
-	if m.formPrompt != nil {
-		mainSections = append(mainSections, m.renderFormPromptPane())
-	}
-	if m.state.Palette.Visible {
-		mainSections = append(mainSections, m.renderPalettePane())
-	}
-	mainSections = append(mainSections, m.renderTranscriptPane(), m.renderInputPane())
-	mainColumn := lipgloss.JoinVertical(lipgloss.Left, mainSections...)
-
-	if strings.TrimSpace(statusPane) == "" {
-		return m.styles.app.Render(mainColumn)
-	}
-	return m.styles.app.Render(lipgloss.JoinHorizontal(lipgloss.Top, statusPane, strings.Repeat(" ", layoutGap)+mainColumn))
+	return m.renderCodexScreen()
 }
 
 func (m *Model) State() State {
@@ -389,7 +375,7 @@ func (m *Model) SetState(state State) {
 	m.language = normalizeTUILanguage(m.state.Language)
 	m.state.Language = string(m.language)
 	m.state.Palette.Context = normalizePaletteContextForLanguage(m.state.Palette.Context, m.language)
-	m.input.Placeholder = localizedTextTUI(m.language, "Send a message to the Go alpha session", "Введите сообщение в Go Lavilas alpha")
+	m.input.Placeholder = ""
 	m.paletteInput.Placeholder = localizedTextTUI(m.language, "Type to filter items", "Введите запрос для фильтрации")
 	m.input.SetValue(m.state.InputDraft)
 	m.paletteInput.SetValue(m.state.Palette.Query)
@@ -406,31 +392,12 @@ func (m *Model) resize() {
 		return
 	}
 
-	statusWidth := clampInt(m.width/4, statusPaneMinWidth, statusPaneMaxWidth)
-	if m.width < 100 {
-		statusWidth = clampInt(m.width/3, 22, 30)
-	}
-	mainWidth := m.width - statusWidth - layoutGap
-	if mainWidth < 30 {
-		mainWidth = maxInt(1, m.width-layoutGap)
-		statusWidth = maxInt(0, m.width-mainWidth-layoutGap)
-	}
-
-	m.statusWidth = statusWidth
-	m.mainWidth = mainWidth
-	m.input.Width = maxInt(1, innerWidth(m.styles.pane, m.mainWidth)-2)
-	m.paletteInput.Width = maxInt(1, innerWidth(m.styles.pane, m.mainWidth)-1)
-
-	transcriptHeight := m.height - inputPaneHeight - layoutGap
-	if m.state.Palette.Visible {
-		transcriptHeight -= palettePaneHeight + layoutGap
-	}
-	transcriptHeight = maxInt(3, transcriptHeight)
-
-	viewportWidth := maxInt(1, innerWidth(m.styles.pane, m.mainWidth))
-	viewportHeight := maxInt(3, transcriptHeight-innerHeight(m.styles.pane, transcriptHeight)-1)
-	m.viewport.Width = viewportWidth
-	m.viewport.Height = viewportHeight
+	m.statusWidth = 0
+	m.mainWidth = maxInt(1, m.width)
+	m.input.Width = maxInt(1, m.mainWidth-2)
+	m.paletteInput.Width = maxInt(1, m.mainWidth-2)
+	m.viewport.Width = maxInt(1, m.mainWidth)
+	m.viewport.Height = maxInt(1, m.height-6)
 }
 
 func (m *Model) renderStatusPane() string {
@@ -471,20 +438,7 @@ func (m *Model) renderTranscriptPane() string {
 }
 
 func (m *Model) renderInputPane() string {
-	pane := applyPaneFocus(m.styles.pane, m.styles.paneActive, m.state.Focus == FocusInput).Width(m.mainWidth)
-	footer := m.state.Footer
-	if strings.TrimSpace(footer) == "" {
-		footer = m.localize("Enter submit · Ctrl+P palette", "Enter отправить · Ctrl+P палитра")
-	}
-	if m.state.Busy {
-		footer = m.localize("Running turn...", "Выполняется ход...")
-	}
-	content := []string{
-		m.styles.paneTitle.Render(m.localize("Input", "Ввод")),
-		m.input.View(),
-		m.styles.muted.Render(footer),
-	}
-	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, content...))
+	return m.renderComposerPane()
 }
 
 func (m *Model) renderApprovalPane() string {
@@ -636,59 +590,153 @@ func (m *Model) renderBindings(bindings []key.Binding) string {
 
 func (m *Model) renderTranscriptContent(width int) string {
 	if len(m.state.Transcript) == 0 && m.state.LiveTurn == nil {
-		return m.styles.muted.Render(m.localize("Transcript is empty.", "Диалог пуст."))
+		return ""
 	}
-	bodyStyle := m.styles.body.Width(maxInt(1, width))
-	blocks := make([]string, 0, len(m.state.Transcript)+1)
+	blocks := make([]string, 0, len(m.state.Transcript)+3)
 	for _, entry := range m.state.Transcript {
-		role := strings.TrimSpace(entry.Role)
-		if role == "" {
-			role = "event"
+		if block := m.renderTranscriptEntry(entry, width); strings.TrimSpace(block) != "" {
+			blocks = append(blocks, block)
 		}
-		body := strings.TrimSpace(entry.Body)
-		if body == "" {
-			body = "..."
-		}
-		blocks = append(blocks, lipgloss.JoinVertical(
-			lipgloss.Left,
-			m.roleStyle(role).Render(strings.ToUpper(m.displayRole(role))),
-			bodyStyle.Render(body),
-		))
 	}
 	if m.state.LiveTurn != nil {
 		live := m.state.LiveTurn
-		notes := make([]string, 0, len(live.Notes)+1)
 		if strings.TrimSpace(live.Prompt) != "" {
-			blocks = append(blocks, lipgloss.JoinVertical(
-				lipgloss.Left,
-				m.roleStyle("user").Render(strings.ToUpper(m.localize("user", "пользователь"))),
-				bodyStyle.Render(strings.TrimSpace(live.Prompt)),
-			))
+			blocks = append(blocks, m.renderTranscriptEntry(TranscriptEntry{Role: "user", Body: strings.TrimSpace(live.Prompt)}, width))
 		}
 		if strings.TrimSpace(live.AssistantText) != "" {
-			blocks = append(blocks, lipgloss.JoinVertical(
-				lipgloss.Left,
-				m.roleStyle("assistant").Render(strings.ToUpper(m.localize("assistant", "ассистент"))),
-				bodyStyle.Render(strings.TrimSpace(live.AssistantText)),
-			))
+			blocks = append(blocks, m.renderTranscriptEntry(TranscriptEntry{Role: "assistant", Body: strings.TrimSpace(live.AssistantText)}, width))
 		}
-		for _, call := range live.ToolCalls {
-			line := fmt.Sprintf("%s %s", fallback(call.ID, "<id>"), call.Function.Name)
-			if args := strings.TrimSpace(call.Function.ArgumentsString()); args != "" {
-				line += "\n" + args
-			}
-			notes = append(notes, line)
-		}
-		notes = append(notes, live.Notes...)
-		if len(notes) > 0 {
-			blocks = append(blocks, lipgloss.JoinVertical(
-				lipgloss.Left,
-				m.roleStyle("tool").Render(strings.ToUpper(m.localize("tool", "инструмент"))),
-				bodyStyle.Render(strings.Join(notes, "\n\n")),
-			))
+		for _, note := range m.renderLiveTurnNotes(live) {
+			blocks = append(blocks, m.renderTranscriptEntry(TranscriptEntry{Role: "tool", Body: note}, width))
 		}
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+func (m *Model) renderTranscriptEntry(entry TranscriptEntry, width int) string {
+	role := strings.ToLower(strings.TrimSpace(entry.Role))
+	body := strings.TrimSpace(entry.Body)
+	if body == "" {
+		return ""
+	}
+	prefix := "■"
+	style := m.styles.body
+	switch role {
+	case "user":
+		prefix = "›"
+		style = m.styles.value
+	case "assistant":
+		prefix = "•"
+		style = m.styles.body
+	case "tool":
+		prefix = "•"
+		style = m.styles.muted
+	case "system":
+		prefix = "■"
+		style = m.styles.muted
+	}
+	bodyWidth := maxInt(1, width-lipgloss.Width(prefix)-1)
+	rendered := style.Width(bodyWidth).Render(body)
+	lines := strings.Split(rendered, "\n")
+	indent := strings.Repeat(" ", lipgloss.Width(prefix)+1)
+	for index, line := range lines {
+		if index == 0 {
+			lines[index] = prefix + " " + line
+			continue
+		}
+		lines[index] = indent + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) renderLiveTurnNotes(live *LiveTurnState) []string {
+	if live == nil {
+		return nil
+	}
+	notes := make([]string, 0, len(live.Notes)+len(live.ToolCalls))
+	for _, call := range live.ToolCalls {
+		line := fmt.Sprintf("%s %s", fallback(call.ID, "<id>"), call.Function.Name)
+		if args := strings.TrimSpace(call.Function.ArgumentsString()); args != "" {
+			line += "\n" + args
+		}
+		notes = append(notes, line)
+	}
+	notes = append(notes, live.Notes...)
+	return notes
+}
+
+func (m *Model) updateInlineCommandPalette(keyMsg tea.KeyMsg) tea.Cmd {
+	if !m.isInlineCommandPaletteActive() {
+		return nil
+	}
+	switch {
+	case key.Matches(keyMsg, m.keys.Up):
+		m.movePaletteSelection(-1)
+		return nil
+	case key.Matches(keyMsg, m.keys.Down):
+		m.movePaletteSelection(1)
+		return nil
+	case key.Matches(keyMsg, m.keys.PageUp):
+		m.movePaletteSelection(-m.palettePageSize())
+		return nil
+	case key.Matches(keyMsg, m.keys.PageDown):
+		m.movePaletteSelection(m.palettePageSize())
+		return nil
+	case key.Matches(keyMsg, m.keys.Close):
+		m.input.Reset()
+		m.state.InputDraft = ""
+		m.dismissInlinePalette()
+		return nil
+	case key.Matches(keyMsg, m.keys.Submit):
+		query := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m.input.Value()), commandPrefix(m.layout.SettingsPath())))
+		if strings.Contains(query, " ") {
+			return m.submitInput()
+		}
+		if _, ok := m.selectedPaletteItem(); !ok {
+			return m.submitInput()
+		}
+		m.input.Reset()
+		m.state.InputDraft = ""
+		return m.activatePaletteSelection()
+	}
+	return nil
+}
+
+func (m *Model) syncInlinePaletteWithDraft() {
+	if m.state.Focus != FocusInput || m.state.Busy {
+		return
+	}
+	prefix := commandPrefix(m.layout.SettingsPath())
+	draft := strings.TrimSpace(m.input.Value())
+	if strings.HasPrefix(draft, prefix) {
+		query := strings.TrimSpace(strings.TrimPrefix(draft, prefix))
+		m.state.Palette.Visible = true
+		m.state.Palette.Mode = PaletteModeRoot
+		m.state.Palette.Query = query
+		m.state.Palette.Items = m.rootPaletteItemsForQuery(query)
+		m.state.Palette.Context = defaultPaletteContextForLanguage(m.language)
+		if strings.TrimSpace(m.state.Palette.SelectedToken) == "" {
+			m.state.Palette.Selected = 0
+		}
+		m.syncPaletteSelection()
+		return
+	}
+	if m.isInlineCommandPaletteActive() {
+		m.dismissInlinePalette()
+	}
+}
+
+func (m *Model) dismissInlinePalette() {
+	m.state.Palette.Visible = false
+	m.state.Palette.Mode = PaletteModeRoot
+	m.state.Palette.Query = ""
+	m.state.Palette.Selected = 0
+	m.state.Palette.Items = m.rootPaletteItems()
+	m.state.Palette.Context = defaultPaletteContextForLanguage(m.language)
+	m.state.Palette.SelectedToken = ""
+	m.state.Palette.Stack = nil
+	m.paletteInput.Reset()
+	m.resize()
 }
 
 func (m *Model) roleStyle(role string) lipgloss.Style {
@@ -738,6 +786,9 @@ func (m *Model) submitInput() tea.Cmd {
 	}
 	prefix := commandPrefix(m.layout.SettingsPath())
 	if strings.HasPrefix(draft, prefix) {
+		if m.isInlineCommandPaletteActive() {
+			m.dismissInlinePalette()
+		}
 		m.input.Reset()
 		m.state.InputDraft = ""
 		return m.dispatchSlash(draft, prefix)
@@ -1955,7 +2006,7 @@ func (m *Model) syncPaletteSelection() {
 }
 
 func (m *Model) cycleFocus(delta int) tea.Cmd {
-	order := []PaneFocus{FocusStatus, FocusTranscript, FocusInput}
+	order := []PaneFocus{FocusTranscript, FocusInput}
 	current := 0
 	for index, pane := range order {
 		if pane == m.state.Focus {
@@ -1975,7 +2026,7 @@ func (m *Model) setFocus(next PaneFocus) tea.Cmd {
 func (m *Model) applyFocusState() tea.Cmd {
 	if m.formPrompt != nil {
 		m.state.Focus = FocusInput
-	} else if m.state.Palette.Visible {
+	} else if m.state.Palette.Visible && !(m.state.Palette.Mode == PaletteModeRoot && m.state.Focus == FocusInput) {
 		m.state.Focus = FocusPalette
 	}
 	var cmds []tea.Cmd
@@ -2003,14 +2054,12 @@ func (m *Model) applyFocusState() tea.Cmd {
 
 func (m *Model) focusLabel() string {
 	switch m.state.Focus {
-	case FocusStatus:
-		return m.localize("status pane", "панель статуса")
 	case FocusTranscript:
-		return m.localize("transcript viewport", "область диалога")
+		return m.localize("chat", "чат")
 	case FocusPalette:
-		return m.localize("command palette", "палитра команд")
+		return m.localize("command menu", "меню команд")
 	default:
-		return m.localize("input area", "область ввода")
+		return m.localize("input", "ввод")
 	}
 }
 
@@ -2177,6 +2226,8 @@ func (m *Model) openSessionsPaletteWithOptions(fork bool, pushCurrent bool, star
 				Title:       entry.Name,
 				Description: m.sessionPaletteDescription(entry, showingAllDirectories),
 				Value:       entry.Path,
+				Aliases:     []string{entry.Name, entry.RelPath, entry.CWD, entry.Branch, entry.Preview},
+				Keywords:    []string{entry.Name, entry.RelPath, entry.CWD, entry.Branch, entry.Preview},
 			})
 		}
 		mode := PaletteModeResume
@@ -2577,13 +2628,10 @@ func defaultStateForLanguage(language commandcatalog.CatalogLanguage) State {
 	state := DefaultState()
 	state.Language = string(language)
 	state.Title = "Go Lavilas"
-	state.Transcript = []TranscriptEntry{
-		{Role: "system", Body: localizedTextTUI(language, "Go Lavilas alpha TUI loaded.", "Загружен Go Lavilas alpha TUI.")},
-		{Role: "assistant", Body: localizedTextTUI(language, "Type a prompt and press Enter. Ctrl+P opens the command palette.", "Введите запрос и нажмите Enter. Ctrl+P открывает палитру команд.")},
-	}
+	state.Transcript = nil
 	state.Palette.Items = defaultPaletteItemsForLanguage(language)
 	state.Palette.Context = defaultPaletteContextForLanguage(language)
-	state.Footer = localizedTextTUI(language, "Enter submit · Ctrl+P palette · Tab focus · Esc close", "Enter отправить · Ctrl+P палитра · Tab фокус · Esc закрыть")
+	state.Footer = ""
 	return state
 }
 
@@ -3071,7 +3119,7 @@ func (m *Model) setSettingsLanguage(next string) tea.Cmd {
 	m.language = normalizeTUILanguage(next)
 	m.state.Language = string(m.language)
 	m.state.Title = "Go Lavilas"
-	m.input.Placeholder = localizedTextTUI(m.language, "Send a message to the Go alpha session", "Введите сообщение в Go Lavilas alpha")
+	m.input.Placeholder = ""
 	m.paletteInput.Placeholder = localizedTextTUI(m.language, "Type to filter items", "Введите запрос для фильтрации")
 	m.state.Footer = localizedTextTUI(m.language, "Language updated", "Язык обновлён")
 	m.refreshCurrentPaletteItems()
@@ -3335,6 +3383,8 @@ func (m *Model) currentSessionPaletteItems() ([]PaletteItem, bool, error) {
 			Title:       entry.Name,
 			Description: m.sessionPaletteDescription(entry, showingAllDirectories),
 			Value:       entry.Path,
+			Aliases:     []string{entry.Name, entry.RelPath, entry.CWD, entry.Branch, entry.Preview},
+			Keywords:    []string{entry.Name, entry.RelPath, entry.CWD, entry.Branch, entry.Preview},
 		})
 	}
 	return items, showingAllDirectories, nil

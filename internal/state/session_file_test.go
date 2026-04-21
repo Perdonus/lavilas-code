@@ -292,6 +292,288 @@ func TestAppendSessionHistoryRewritesWholeHistoryWithoutDuplication(t *testing.T
 	}
 }
 
+func TestLoadSessionReadsRustRolloutJSONL(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "019db095-251f-78a0-9fcb-40892a47a780"
+	parentID := "019d5ef3-4516-7e80-93f2-e386ed2e289a"
+	path := filepath.Join(root, "2026", "04", "21", "rollout-2026-04-21T18-07-38-"+sessionID+".jsonl")
+
+	writeJSONLLines(t, path,
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:38.843Z",
+			"type":      "session_meta",
+			"payload": map[string]any{
+				"id":             sessionID,
+				"timestamp":      "2026-04-21T15:07:38.160Z",
+				"cwd":            "/root",
+				"model_provider": "openai",
+				"git":            map[string]any{"branch": "main"},
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:38.900Z",
+			"type":      "session_meta",
+			"payload": map[string]any{
+				"id":             parentID,
+				"timestamp":      "2026-04-05T18:41:34.495Z",
+				"cwd":            "/root/old",
+				"model_provider": "mistral",
+				"git":            map[string]any{"branch": "legacy"},
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:38.910Z",
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type": "message",
+				"role": "developer",
+				"content": []map[string]any{
+					{"type": "input_text", "text": "system instructions"},
+				},
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:38.920Z",
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type": "message",
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "input_text", "text": "# AGENTS.md instructions for /root"},
+				},
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:39.000Z",
+			"type":      "turn_context",
+			"payload": map[string]any{
+				"cwd":   "/root/project",
+				"model": "gpt-5.4",
+				"effort": "high",
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:39.010Z",
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type": "message",
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "input_text", "text": "Implement the plan."},
+				},
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:39.015Z",
+			"type":      "event_msg",
+			"payload": map[string]any{
+				"type":    "user_message",
+				"message": "Implement the plan.",
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:39.030Z",
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type":      "function_call",
+				"name":      "exec_command",
+				"call_id":   "call_123",
+				"arguments": "{\"cmd\":\"pwd\"}",
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:39.050Z",
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type":    "function_call_output",
+				"call_id": "call_123",
+				"output":  "done",
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:39.120Z",
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type": "message",
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "output_text", "text": "Finished."},
+				},
+			},
+		},
+	)
+
+	meta, messages, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if meta.SessionID != sessionID {
+		t.Fatalf("meta.SessionID = %q", meta.SessionID)
+	}
+	if meta.Provider != "openai" {
+		t.Fatalf("meta.Provider = %q", meta.Provider)
+	}
+	if meta.Model != "gpt-5.4" {
+		t.Fatalf("meta.Model = %q", meta.Model)
+	}
+	if meta.Reasoning != "high" {
+		t.Fatalf("meta.Reasoning = %q", meta.Reasoning)
+	}
+	if meta.CWD != "/root/project" {
+		t.Fatalf("meta.CWD = %q", meta.CWD)
+	}
+	if meta.Branch != "main" {
+		t.Fatalf("meta.Branch = %q", meta.Branch)
+	}
+	if meta.Preview != "Implement the plan." {
+		t.Fatalf("meta.Preview = %q", meta.Preview)
+	}
+	if meta.CreatedAt.IsZero() || meta.UpdatedAt.IsZero() {
+		t.Fatalf("meta timestamps were not restored: %+v", meta)
+	}
+	if len(messages) != 6 {
+		t.Fatalf("unexpected message count: %d", len(messages))
+	}
+	if messages[0].Role != runtime.RoleSystem || messages[0].Text() != "system instructions" {
+		t.Fatalf("unexpected first message: %+v", messages[0])
+	}
+	if messages[1].Role != runtime.RoleUser || messages[1].Text() != "# AGENTS.md instructions for /root" {
+		t.Fatalf("unexpected injected user message: %+v", messages[1])
+	}
+	if messages[2].Role != runtime.RoleUser || messages[2].Text() != "Implement the plan." {
+		t.Fatalf("unexpected user message: %+v", messages[2])
+	}
+	if len(messages[3].ToolCalls) != 1 || messages[3].ToolCalls[0].ID != "call_123" {
+		t.Fatalf("unexpected tool call message: %+v", messages[3])
+	}
+	if messages[4].Role != runtime.RoleTool || messages[4].ToolCallID != "call_123" || messages[4].Text() != "done" {
+		t.Fatalf("unexpected tool output message: %+v", messages[4])
+	}
+	if messages[5].Role != runtime.RoleAssistant || messages[5].Text() != "Finished." {
+		t.Fatalf("unexpected final assistant message: %+v", messages[5])
+	}
+}
+
+func TestLoadSessionSupportsMixedRolloutAndNativeJSONL(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "019db095-251f-78a0-9fcb-40892a47a780"
+	path := filepath.Join(root, "2026", "04", "21", "rollout-2026-04-21T18-07-38-"+sessionID+".jsonl")
+
+	writeJSONLLines(t, path,
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:38.843Z",
+			"type":      "session_meta",
+			"payload": map[string]any{
+				"id":             sessionID,
+				"timestamp":      "2026-04-21T15:07:38.160Z",
+				"cwd":            "/root/project",
+				"model_provider": "openai",
+			},
+		},
+		map[string]any{
+			"timestamp": "2026-04-21T15:07:39.010Z",
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type": "message",
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "input_text", "text": "legacy prompt"},
+				},
+			},
+		},
+		sessionLine{
+			Type:      "meta",
+			SessionID: sessionID,
+			Model:     "gpt-5.5",
+			Provider:  "openrouter",
+			Profile:   "openrouter-profile",
+			Reasoning: "medium",
+			CWD:       "/root/project",
+			Branch:    "main",
+			Preview:   "legacy prompt",
+			CreatedAt: "2026-04-21T15:07:38.160Z",
+			UpdatedAt: "2026-04-21T15:09:00.000Z",
+		},
+		sessionLine{
+			Type: "message",
+			Role: string(runtime.RoleAssistant),
+			Content: []sessionContent{
+				{Type: "text", Text: "native append"},
+			},
+		},
+	)
+
+	meta, messages, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if meta.Provider != "openrouter" {
+		t.Fatalf("meta.Provider = %q", meta.Provider)
+	}
+	if meta.Profile != "openrouter-profile" {
+		t.Fatalf("meta.Profile = %q", meta.Profile)
+	}
+	if meta.Model != "gpt-5.5" {
+		t.Fatalf("meta.Model = %q", meta.Model)
+	}
+	if meta.Reasoning != "medium" {
+		t.Fatalf("meta.Reasoning = %q", meta.Reasoning)
+	}
+	if meta.Branch != "main" {
+		t.Fatalf("meta.Branch = %q", meta.Branch)
+	}
+	if meta.Preview != "legacy prompt" {
+		t.Fatalf("meta.Preview = %q", meta.Preview)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("unexpected message count: %d", len(messages))
+	}
+	if messages[0].Role != runtime.RoleUser || messages[0].Text() != "legacy prompt" {
+		t.Fatalf("unexpected legacy message: %+v", messages[0])
+	}
+	if messages[1].Role != runtime.RoleAssistant || messages[1].Text() != "native append" {
+		t.Fatalf("unexpected native message: %+v", messages[1])
+	}
+
+	index, err := ScanSessions(root)
+	if err != nil {
+		t.Fatalf("ScanSessions: %v", err)
+	}
+	if len(index.Entries) != 1 {
+		t.Fatalf("unexpected index entries: %+v", index.Entries)
+	}
+	if index.Entries[0].Branch != "main" {
+		t.Fatalf("entry.Branch = %q", index.Entries[0].Branch)
+	}
+	if index.Entries[0].Preview != "legacy prompt" {
+		t.Fatalf("entry.Preview = %q", index.Entries[0].Preview)
+	}
+}
+
+func writeJSONLLines(t *testing.T, path string, lines ...any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(path), err)
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("Create(%s): %v", path, err)
+	}
+	defer file.Close()
+	for _, line := range lines {
+		payload, err := json.Marshal(line)
+		if err != nil {
+			t.Fatalf("Marshal line: %v", err)
+		}
+		if _, err := file.Write(payload); err != nil {
+			t.Fatalf("Write payload: %v", err)
+		}
+		if _, err := file.WriteString("\n"); err != nil {
+			t.Fatalf("Write newline: %v", err)
+		}
+	}
+}
+
 func TestAppendSessionHistoryRejectsMismatchedPrefix(t *testing.T) {
 	root := t.TempDir()
 	createdAt := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)

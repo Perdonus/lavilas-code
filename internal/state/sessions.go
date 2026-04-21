@@ -18,6 +18,8 @@ type SessionEntry struct {
 	Path    string    `json:"path"`
 	RelPath string    `json:"rel_path"`
 	CWD     string    `json:"cwd,omitempty"`
+	Branch  string    `json:"branch,omitempty"`
+	Preview string    `json:"preview,omitempty"`
 	Created time.Time `json:"created_at,omitempty"`
 	ModTime time.Time `json:"mod_time"`
 	Size    int64     `json:"size"`
@@ -227,6 +229,10 @@ func buildSessionEntry(root string, path string, info fs.FileInfo, meta SessionM
 		rel = filepath.Base(path)
 	}
 	name := filepath.Base(path)
+	id := strings.TrimSpace(meta.SessionID)
+	if id == "" {
+		id = strings.TrimSuffix(name, filepath.Ext(name))
+	}
 	createdAt := info.ModTime()
 	if !meta.CreatedAt.IsZero() {
 		createdAt = meta.CreatedAt.UTC()
@@ -236,11 +242,13 @@ func buildSessionEntry(root string, path string, info fs.FileInfo, meta SessionM
 		modTime = meta.UpdatedAt.UTC()
 	}
 	return SessionEntry{
-		ID:      strings.TrimSuffix(name, filepath.Ext(name)),
+		ID:      id,
 		Name:    name,
 		Path:    path,
 		RelPath: rel,
 		CWD:     meta.CWD,
+		Branch:  meta.Branch,
+		Preview: meta.Preview,
 		Created: createdAt,
 		ModTime: modTime,
 		Size:    info.Size(),
@@ -251,7 +259,11 @@ func hydrateSessionIndexEntries(index *SessionIndex) (bool, error) {
 	changed := false
 	for i := range index.Entries {
 		entry := &index.Entries[i]
-		if strings.TrimSpace(entry.CWD) != "" {
+		if strings.TrimSpace(entry.CWD) != "" &&
+			strings.TrimSpace(entry.Preview) != "" &&
+			!entry.Created.IsZero() &&
+			!entry.ModTime.IsZero() &&
+			entry.Size > 0 {
 			continue
 		}
 		info, err := os.Stat(entry.Path)
@@ -264,6 +276,14 @@ func hydrateSessionIndexEntries(index *SessionIndex) (bool, error) {
 		}
 		if hydrated.CWD != "" {
 			entry.CWD = hydrated.CWD
+			changed = true
+		}
+		if entry.Branch != hydrated.Branch {
+			entry.Branch = hydrated.Branch
+			changed = true
+		}
+		if entry.Preview != hydrated.Preview {
+			entry.Preview = hydrated.Preview
 			changed = true
 		}
 		if !hydrated.Created.IsZero() && !entry.Created.Equal(hydrated.Created) {

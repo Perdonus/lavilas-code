@@ -909,7 +909,14 @@ func resolveProviderClient(config state.Config, providerName string) (provider.C
 	if strings.TrimSpace(providerName) == "" {
 		apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 		if apiKey == "" {
-			return nil, "", fmt.Errorf("provider is not configured and OPENAI_API_KEY is empty")
+			authKey, err := state.LoadOpenAIAPIKey(apphome.AuthPath())
+			if err != nil {
+				return nil, "", err
+			}
+			apiKey = strings.TrimSpace(authKey)
+		}
+		if apiKey == "" {
+			return nil, "", fmt.Errorf("provider is not configured and OPENAI_API_KEY/auth.json is empty")
 		}
 		client, err := responsesapi.NewClient(responsesapi.Config{
 			Name:   "OpenAI",
@@ -927,6 +934,13 @@ func resolveProviderClient(config state.Config, providerName string) (provider.C
 	}
 
 	token := providerConfig.BearerToken()
+	if token == "" && providerLooksLikeOpenAI(providerName, providerConfig) {
+		authKey, err := state.LoadOpenAIAPIKey(apphome.AuthPath())
+		if err != nil {
+			return nil, "", err
+		}
+		token = strings.TrimSpace(authKey)
+	}
 	if token == "" {
 		return nil, "", fmt.Errorf("provider %q has no bearer token or env key value", providerName)
 	}
@@ -966,6 +980,13 @@ func resolveProviderClient(config state.Config, providerName string) (provider.C
 	default:
 		return nil, "", fmt.Errorf("provider %q uses unsupported wire_api %q", providerName, wireAPI)
 	}
+}
+
+func providerLooksLikeOpenAI(providerName string, providerConfig state.ProviderConfig) bool {
+	name := strings.ToLower(strings.TrimSpace(providerName))
+	display := strings.ToLower(strings.TrimSpace(providerConfig.DisplayName()))
+	baseURL := strings.ToLower(strings.TrimSpace(providerConfig.BaseURL))
+	return strings.Contains(name, "openai") || strings.Contains(display, "openai") || strings.Contains(baseURL, "api.openai.com")
 }
 
 func providerEndpoint(baseURL string) (string, string, error) {

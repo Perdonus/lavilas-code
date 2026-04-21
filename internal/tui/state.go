@@ -131,17 +131,14 @@ func DefaultState() State {
 			{Label: "Mode", Value: "alpha"},
 			{Label: "Session", Value: "fresh"},
 		},
-		Transcript: []TranscriptEntry{
-			{Role: "system", Body: "Go Lavilas alpha TUI loaded."},
-			{Role: "assistant", Body: "Type a prompt and press Enter. Ctrl+P opens the command palette."},
-		},
+		Transcript: nil,
 		Palette: PaletteState{
 			Mode:    PaletteModeRoot,
 			Items:   defaultPaletteItemsForLanguage(language),
 			Context: defaultPaletteContextForLanguage(language),
 		},
 		Focus:  FocusInput,
-		Footer: "Enter submit · Ctrl+P palette · Tab focus · Esc close",
+		Footer: "",
 	}
 }
 
