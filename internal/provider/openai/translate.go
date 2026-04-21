@@ -125,7 +125,7 @@ func toolFromRuntime(tool runtime.ToolDefinition) Tool {
 		Function: FunctionDefinition{
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,
-			Parameters:  tool.Function.Parameters,
+			Parameters:  runtime.NormalizeStrictJSONSchema(tool.Function.Parameters),
 			Strict:      tool.Function.Strict,
 		},
 	}

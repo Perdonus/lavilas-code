@@ -214,7 +214,7 @@ func requestFromRuntime(req runtime.Request, stream bool) (Request, error) {
 				Type:        "function",
 				Name:        tool.Function.Name,
 				Description: tool.Function.Description,
-				Parameters:  tool.Function.Parameters,
+				Parameters:  runtime.NormalizeStrictJSONSchema(tool.Function.Parameters),
 				Strict:      tool.Function.Strict,
 			})
 		}

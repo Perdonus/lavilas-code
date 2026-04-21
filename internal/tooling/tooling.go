@@ -200,7 +200,7 @@ func functionTool(name string, description string, parameters map[string]any) to
 		Function: toolruntime.FunctionDefinition{
 			Name:        name,
 			Description: description,
-			Parameters:  parameters,
+			Parameters:  toolruntime.NormalizeStrictJSONSchema(parameters),
 			Strict:      true,
 		},
 	}

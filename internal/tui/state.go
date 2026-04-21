@@ -28,6 +28,7 @@ const (
 	PaletteModeRoot            PaletteMode = "root"
 	PaletteModeResume          PaletteMode = "resume"
 	PaletteModeFork            PaletteMode = "fork"
+	PaletteModeStatus          PaletteMode = "status"
 	PaletteModeModel           PaletteMode = "model"
 	PaletteModeModelSettings   PaletteMode = "model_settings"
 	PaletteModeModelCatalog    PaletteMode = "model_catalog"
@@ -42,6 +43,7 @@ const (
 	PaletteModePresetActions   PaletteMode = "preset_actions"
 	PaletteModePresetModels    PaletteMode = "preset_models"
 	PaletteModeSettings        PaletteMode = "settings"
+	PaletteModeCustomization   PaletteMode = "customization"
 	PaletteModeLanguage        PaletteMode = "language"
 	PaletteModeCommandPrefix   PaletteMode = "command_prefix"
 	PaletteModePopupCommands   PaletteMode = "popup_commands"
@@ -116,7 +118,9 @@ type PaletteContext struct {
 type PaletteItem struct {
 	Key         string
 	Title       string
+	Subtitle    string
 	Description string
+	Meta        string
 	Value       string
 	Aliases     []string
 	Keywords    []string
@@ -226,6 +230,7 @@ func normalizePaletteMode(value PaletteMode) PaletteMode {
 	case PaletteModeRoot,
 		PaletteModeResume,
 		PaletteModeFork,
+		PaletteModeStatus,
 		PaletteModeModel,
 		PaletteModeModelSettings,
 		PaletteModeModelCatalog,
@@ -240,6 +245,7 @@ func normalizePaletteMode(value PaletteMode) PaletteMode {
 		PaletteModePresetActions,
 		PaletteModePresetModels,
 		PaletteModeSettings,
+		PaletteModeCustomization,
 		PaletteModeLanguage,
 		PaletteModeCommandPrefix,
 		PaletteModePopupCommands,
@@ -304,7 +310,9 @@ func clonePaletteItems(items []PaletteItem) []PaletteItem {
 		cloned[index] = PaletteItem{
 			Key:         item.Key,
 			Title:       item.Title,
+			Subtitle:    item.Subtitle,
 			Description: item.Description,
+			Meta:        item.Meta,
 			Value:       item.Value,
 			Aliases:     cloneStrings(item.Aliases),
 			Keywords:    cloneStrings(item.Keywords),

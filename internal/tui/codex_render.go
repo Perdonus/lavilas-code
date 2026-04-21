@@ -3,11 +3,14 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Perdonus/lavilas-code/internal/apphome"
+	"github.com/Perdonus/lavilas-code/internal/modelcatalog"
 	appstate "github.com/Perdonus/lavilas-code/internal/state"
 	"github.com/Perdonus/lavilas-code/internal/version"
 )
@@ -19,14 +22,19 @@ const (
 )
 
 func (m *Model) renderCodexScreen() string {
-	if m.isSessionPickerMode() && m.state.Focus == FocusPalette {
+	switch {
+	case m.state.Focus == FocusPalette && m.isSessionPickerMode():
 		return m.styles.app.Render(m.renderSessionPickerScreen())
+	case m.state.Focus == FocusPalette && m.state.Palette.Visible && m.state.Palette.Mode == PaletteModeStatus:
+		return m.styles.app.Render(m.renderStatusScreen())
+	case m.state.Focus == FocusPalette && m.state.Palette.Visible:
+		return m.styles.app.Render(m.renderPaletteModalScreen())
 	}
 
 	header := m.renderSessionHeaderBox()
 	composer := m.renderComposerPane()
 	popup := ""
-	if m.state.Palette.Visible {
+	if m.isInlineCommandPaletteActive() {
 		popup = m.renderCommandPopup(commandPopupMaxRows + 4)
 	}
 	aux := make([]string, 0, 3)
@@ -151,9 +159,16 @@ func (m *Model) headerReasoningLabel() string {
 
 func (m *Model) renderComposerPane() string {
 	meta := m.renderComposerMeta()
+	footer := strings.TrimSpace(m.state.Footer)
+	if footer == "" {
+		footer = m.localize("? for hints", "? для подсказок")
+	}
 	parts := []string{m.input.View()}
 	if strings.TrimSpace(meta) != "" {
 		parts = append(parts, m.styles.muted.Render(meta))
+	}
+	if footer != "" {
+		parts = append(parts, m.styles.muted.Render("  "+footer))
 	}
 	return strings.Join(parts, "\n")
 }
@@ -206,94 +221,388 @@ func (m *Model) renderCommandPopup(maxHeight int) string {
 	if len(items) == 0 {
 		return ""
 	}
-	lines := make([]string, 0, commandPopupMaxRows+4)
-	if m.state.Palette.Mode != PaletteModeRoot || m.state.Focus == FocusPalette {
-		title := strings.TrimSpace(m.paletteTitle())
-		if title != "" {
-			lines = append(lines, title)
-		}
-	}
-	if m.state.Focus == FocusPalette && m.state.Palette.Mode != PaletteModeRoot {
-		lines = append(lines, m.paletteInput.View())
-	}
-	reserved := len(lines)
-	rowLimit := maxInt(1, minInt(commandPopupMaxRows, maxHeight-reserved-1))
+	lines := make([]string, 0, commandPopupMaxRows+3)
+	rowLimit := maxInt(1, minInt(commandPopupMaxRows, maxHeight-1))
 	selected := clampInt(m.state.Palette.Selected, 0, maxInt(0, len(items)-1))
 	start, end := paletteVisibleRange(len(items), selected, rowLimit)
 	for index := start; index < end; index++ {
 		lines = append(lines, m.renderCommandPopupRow(items[index], index == selected))
 	}
-	if m.state.Focus == FocusPalette {
-		if hint := strings.TrimSpace(m.paletteHint()); hint != "" {
-			lines = append(lines, m.styles.muted.Render(hint))
-		}
+	if hint := strings.TrimSpace(m.localize("Enter — run, Esc — close", "Enter — открыть, Esc — закрыть")); hint != "" {
+		lines = append(lines, m.styles.muted.Render(hint))
 	}
 	return strings.Join(lines, "\n")
 }
 
 func (m *Model) renderCommandPopupRow(item PaletteItem, selected bool) string {
 	prefix := commandPrefix(m.layout.SettingsPath())
-	left := strings.TrimSpace(item.Title)
-	if m.state.Palette.Mode == PaletteModeRoot {
-		left = prefix + strings.TrimSpace(item.Title)
-	}
-	description := strings.TrimSpace(item.Description)
-	row := "  " + left
-	if description != "" {
-		padding := maxInt(2, 18-lipgloss.Width(left))
-		row += strings.Repeat(" ", padding) + description
-	}
+	left := prefix + strings.TrimSpace(item.Title)
+	right := strings.TrimSpace(item.Description)
+	row := padBetween(left, right, maxInt(24, m.width-2))
 	style := m.styles.body
 	if selected {
 		style = m.styles.selected
+		row = "› " + strings.TrimLeft(row, " ")
+	} else {
+		row = "  " + strings.TrimLeft(row, " ")
 	}
 	return style.Render(row)
 }
 
-func (m *Model) renderSessionPickerScreen() string {
-	headerHeight := 1
-	searchHeight := 1
-	columnsHeight := 1
-	hintHeight := 1
-	listHeight := maxInt(1, m.height-headerHeight-searchHeight-columnsHeight-hintHeight-(sessionPickerListPadding*2))
+func (m *Model) renderStatusScreen() string {
+	return m.statusCardBox(maxInt(40, m.width))
+}
 
+func (m *Model) renderStatusCardInline() string {
+	return m.statusCardBox(minInt(maxInt(40, m.width-2), 86))
+}
+
+func (m *Model) statusCardBox(width int) string {
+	lines := []string{
+		fmt.Sprintf(" >_ Go Lavilas (v%s)", version.Version),
+		"",
+		m.localize(" Limits and credits are shown from the active account snapshot.", " Лимиты и кредиты отображаются по данным текущего аккаунта."),
+		m.localize(" If values lag, reopen /status in a few seconds.", " Если значения обновляются не сразу, откройте /status повторно через несколько секунд."),
+		"",
+	}
+	for _, field := range m.statusCardFields() {
+		lines = append(lines, formatStatusField(field[0], field[1]))
+	}
+	return lipgloss.NewStyle().
+		Width(width).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#5D6675")).
+		Padding(0, 1).
+		Render(strings.Join(lines, "\n"))
+}
+
+func (m *Model) statusCardFields() [][2]string {
+	tokenSummary := m.localize("0 total  (0 input + 0 output)", "0 всего  (0 вход + 0 выход)")
+	fields := make([][2]string, 0, 10)
+	fields = append(fields,
+		[2]string{m.localize("Model", "Модель"), firstNonEmpty(strings.TrimSpace(m.state.Model), localizedUnsetTUI(m.language))},
+	)
+	if provider := strings.TrimSpace(m.state.Provider); provider != "" {
+		fields = append(fields, [2]string{m.localize("Model Provider", "Провайдер модели"), provider})
+	}
+	fields = append(fields,
+		[2]string{m.localize("Directory", "Каталог"), compactPathForUI(strings.TrimSpace(m.effectiveWorkingDirectory()))},
+		[2]string{m.localize("Permissions", "Доступ"), m.toolPolicySummary()},
+		[2]string{"AGENTS.md", m.statusAgentsPath()},
+		[2]string{m.localize("Account", "Аккаунт"), m.statusAccountValue()},
+		[2]string{m.localize("Collaboration Mode", "Режим совместной работы"), "Default"},
+		[2]string{m.localize("Session", "Сессия"), m.statusSessionValue()},
+		[2]string{m.localize("Tokens", "Токены"), tokenSummary},
+		[2]string{m.localize("Limits", "Лимиты"), m.localize("data not available yet", "данные пока недоступны")},
+	)
+	return fields
+}
+
+func formatStatusField(label string, value string) string {
+	return fmt.Sprintf("  %-26s %s", label+":", value)
+}
+
+func (m *Model) statusAgentsPath() string {
+	cwd := strings.TrimSpace(m.effectiveWorkingDirectory())
+	if cwd == "" {
+		return m.localize("<none>", "<нет>")
+	}
+	path := filepath.Join(cwd, "AGENTS.md")
+	if _, err := os.Stat(path); err == nil {
+		return "AGENTS.md"
+	}
+	return m.localize("<none>", "<нет>")
+}
+
+func (m *Model) statusAccountValue() string {
+	if profile := strings.TrimSpace(m.state.Profile); profile != "" {
+		return fmt.Sprintf("%s (%s)", m.localize("Saved profile configured", "Сохранён сохранённый профиль"), profile)
+	}
+	if _, err := os.Stat(m.layout.AuthPath()); err == nil {
+		return m.localize("API key configured (run lvls login to save a profile)", "API-ключ настроен (выполните lvls login, чтобы сохранить профиль)")
+	}
+	return m.localize("Not configured", "Не настроен")
+}
+
+func (m *Model) statusSessionValue() string {
+	if sessionPath := strings.TrimSpace(m.state.SessionPath); sessionPath != "" {
+		base := strings.TrimSuffix(filepath.Base(sessionPath), filepath.Ext(sessionPath))
+		if base != "" {
+			return base
+		}
+		return sessionPath
+	}
+	return m.localize("<none>", "<нет>")
+}
+
+func (m *Model) renderPaletteModalScreen() string {
+	title := m.paletteTitle()
+	subtitle := m.paletteSubtitle()
+	footer := m.paletteFooterHint()
+	bodyWidth := maxInt(24, m.width-4)
+	bodyLines := make([]string, 0, 32)
+	if subtitle != "" {
+		bodyLines = append(bodyLines, m.styles.muted.Render(subtitle))
+	}
+	bodyLines = append(bodyLines, m.styles.muted.Render(strings.Repeat("─", maxInt(8, bodyWidth))))
+	bodyLines = append(bodyLines, m.renderPaletteSearchRow(bodyWidth, m.paletteModalResultCount()))
+	bodyLines = append(bodyLines, m.renderPaletteRows(bodyWidth, m.paletteModalListHeight(bodyWidth))...)
+	return m.renderFramedScreen(title, bodyLines, footer)
+}
+
+func (m *Model) renderSessionPickerScreen() string {
 	title := m.localize("Resume Previous Session", "Продолжить предыдущую сессию")
 	if m.state.Palette.Mode == PaletteModeFork {
 		title = m.localize("Fork Previous Session", "Форк предыдущей сессии")
 	}
-	header := fmt.Sprintf(
-		"%s  %s: %s",
-		title,
-		m.localize("Sort", "Сортировка"),
-		m.sessionSortLabel(),
-	)
-	search := m.localize("Type to search", "Введите запрос")
-	if query := strings.TrimSpace(m.state.Palette.Query); query != "" {
-		search = query
-	}
-	columns := fmt.Sprintf(
-		"  %-16s  %-16s  %-8s  %s",
+	header := fmt.Sprintf("%s  %s: %s", title, m.localize("Sort", "Сортировка"), m.sessionSortLabel())
+	bodyWidth := maxInt(24, m.width-4)
+	entries, _, err := m.sessionPickerEntries()
+	bodyLines := []string{m.renderPaletteSearchRow(bodyWidth, len(entries))}
+	bodyLines = append(bodyLines, m.styles.muted.Render(fmt.Sprintf("  %-16s  %-16s  %-8s  %s",
 		m.localize("Created", "Создано"),
 		m.localize("Updated", "Обновлено"),
 		m.localize("Branch", "Ветка"),
 		m.localize("Dialog", "Диалог"),
-	)
-	entries, _, err := m.sessionPickerEntries()
-	list := m.renderSessionPickerList(m.filteredPaletteItems(), entries, listHeight, err)
-	hint := strings.Join([]string{
+	)))
+	bodyLines = append(bodyLines, m.renderSessionPickerRows(entries, err, m.paletteModalListHeight(bodyWidth))...)
+	footer := strings.Join([]string{
 		m.localize("enter to continue", "enter чтобы продолжить"),
 		m.localize("esc to start new", "esc чтобы начать новую"),
 		m.localize("ctrl + c to exit", "ctrl + c чтобы выйти"),
 		m.localize("tab to change sort", "tab чтобы переключить сортировку"),
-		m.localize("↑/↓ to move", "↑/↓ для прокрутки"),
+		m.localize("↑/↓ to move", "↑/↓ для списка"),
 	}, "     ")
-	return lipgloss.NewStyle().Width(m.width).Render(strings.Join([]string{
-		header,
-		search,
-		columns,
-		list,
-		hint,
-	}, "\n"))
+	return m.renderFramedScreen(header, bodyLines, footer)
+}
+
+func (m *Model) renderFramedScreen(title string, bodyLines []string, footer string) string {
+	pane := lipgloss.NewStyle().
+		Width(maxInt(40, m.width)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#5D6675")).
+		Padding(0, 1)
+	content := []string{title}
+	content = append(content, bodyLines...)
+	rendered := pane.Render(strings.Join(content, "\n"))
+	if strings.TrimSpace(footer) == "" {
+		return rendered
+	}
+	return rendered + "\n" + m.styles.muted.Render("  "+footer)
+}
+
+func (m *Model) paletteSubtitle() string {
+	prefix := commandPrefix(m.layout.SettingsPath())
+	switch m.state.Palette.Mode {
+	case PaletteModeModelCatalog:
+		config, err := loadConfigOptional(m.layout.ConfigPath())
+		if err == nil {
+			ctx, resolveErr := modelcatalog.ResolveRuntimeContext(config, apphome.CodexHome(), "", "")
+			if resolveErr == nil {
+				return fmt.Sprintf("%s · %s", firstNonEmpty(strings.TrimSpace(ctx.ProviderName), strings.TrimSpace(m.state.Provider)), ctx.ProviderID)
+			}
+		}
+		return firstNonEmpty(strings.TrimSpace(m.state.Provider), localizedUnsetTUI(m.language))
+	case PaletteModeProfiles:
+		if m.language == "ru" {
+			return fmt.Sprintf("Папка профилей: %s. Быстрый вызов: %sprofiles", m.layout.ProfilesDir(), prefix)
+		}
+		return fmt.Sprintf("Profiles folder: %s. Quick command: %sprofiles", m.layout.ProfilesDir(), prefix)
+	case PaletteModeCustomization:
+		return m.localize("Colors and formatting", "Цвета и форматирование")
+	default:
+		return ""
+	}
+}
+
+func (m *Model) paletteFooterHint() string {
+	switch m.state.Palette.Mode {
+	case PaletteModeModelCatalog:
+		return m.localize("Enter opens the reasoning picker, Esc closes the menu.", "Enter открывает выбор размышлений для модели, Esc закрывает окно.")
+	case PaletteModeProfiles:
+		return m.localize("Press enter to open profile actions, esc to go back", "Нажмите enter чтобы открыть действия профиля, esc для возврата")
+	case PaletteModeStatus:
+		return m.localize("Esc — back", "Esc — назад")
+	default:
+		return m.localize("Enter — select, click — open, Esc — back", "Enter — выбрать, клик — открыть, Esc — назад")
+	}
+}
+
+func (m *Model) paletteSearchPlaceholder() string {
+	switch m.state.Palette.Mode {
+	case PaletteModeModelCatalog:
+		return m.localize("Find a model in the catalog", "Найти модель в каталоге")
+	case PaletteModeProfiles:
+		return m.localize("Find a profile, model, or provider", "Найти профиль, модель или провайдера")
+	case PaletteModeSettings:
+		return m.localize("Find a settings section", "Найти раздел настроек")
+	case PaletteModeCustomization:
+		return m.localize("Find a customization section", "Найти раздел кастомизации")
+	case PaletteModeModelSettings:
+		return m.localize("Find model settings", "Найти раздел моделей")
+	case PaletteModeProviders:
+		return m.localize("Find a provider", "Найти провайдера")
+	case PaletteModeModelPresets:
+		return m.localize("Find a preset", "Найти пресет")
+	case PaletteModeRoot:
+		return m.localize("Type a command", "Введите команду")
+	default:
+		return localizedTextTUI(m.language, "Type to filter items", "Введите запрос")
+	}
+}
+
+func (m *Model) paletteModalResultCount() int {
+	items := m.filteredPaletteItems()
+	if _, rest, hasBack := splitPaletteBackItem(items); hasBack {
+		return len(rest)
+	}
+	return len(items)
+}
+
+func (m *Model) renderPaletteSearchRow(width int, count int) string {
+	query := strings.TrimSpace(m.state.Palette.Query)
+	placeholder := m.paletteSearchPlaceholder()
+	left := query
+	if left == "" {
+		left = placeholder
+	}
+	left = "⌕  " + left
+	right := fmt.Sprintf("%d", count)
+	return m.styles.body.Render(padBetween(left, right, maxInt(12, width)))
+}
+
+func (m *Model) paletteModalListHeight(width int) int {
+	paneFrame := 2
+	bodyLines := 4
+	if subtitle := m.paletteSubtitle(); strings.TrimSpace(subtitle) != "" {
+		bodyLines++
+	}
+	footerLines := 1
+	available := m.height - paneFrame - bodyLines - footerLines - (sessionPickerListPadding * 2)
+	if available < 4 {
+		available = 4
+	}
+	return available
+}
+
+func (m *Model) renderPaletteRows(width int, height int) []string {
+	items := m.filteredPaletteItems()
+	if len(items) == 0 {
+		return []string{lipgloss.NewStyle().Width(width).Height(height).Render(m.localize("No items match the current filter.", "Ничего не найдено по текущему фильтру."))}
+	}
+	selected := clampInt(m.state.Palette.Selected, 0, maxInt(0, len(items)-1))
+	start, end := paletteVisibleRange(len(items), selected, maxInt(1, minInt(len(items), height)))
+	lines := make([]string, 0, height)
+	for index := start; index < end; index++ {
+		rowLines := m.renderPaletteRowLines(items[index], index == selected, width)
+		for _, line := range rowLines {
+			if len(lines) == height {
+				return lines
+			}
+			lines = append(lines, line)
+		}
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+func (m *Model) renderPaletteRowLines(item PaletteItem, selected bool, width int) []string {
+	mode := m.state.Palette.Mode
+	prefix := "  "
+	if selected {
+		prefix = "› "
+	}
+	compact := mode == PaletteModeSettings || mode == PaletteModeCustomization || mode == PaletteModeModelSettings || mode == PaletteModeLanguage || mode == PaletteModeCommandPrefix || mode == PaletteModePopupCommands || mode == PaletteModePermissions || mode == PaletteModeRoot
+	style := m.styles.body
+	if selected {
+		style = m.styles.selected
+	}
+	if compact {
+		line := padBetween(strings.TrimSpace(item.Title), strings.TrimSpace(item.Description), maxInt(10, width-lipgloss.Width(prefix)))
+		return []string{style.Render(prefix + line)}
+	}
+	left := strings.TrimSpace(item.Title)
+	if subtitle := strings.TrimSpace(item.Subtitle); subtitle != "" {
+		left = left + "  " + subtitle
+	}
+	lineOne := padBetween(left, strings.TrimSpace(item.Meta), maxInt(10, width-lipgloss.Width(prefix)))
+	lines := []string{style.Render(prefix + lineOne)}
+	if description := strings.TrimSpace(item.Description); description != "" {
+		descPrefix := strings.Repeat(" ", lipgloss.Width(prefix)) + "  "
+		lines = append(lines, style.Render(descPrefix+truncateForPicker(description, maxInt(10, width-lipgloss.Width(descPrefix)))))
+	}
+	return lines
+}
+
+func (m *Model) renderSessionPickerRows(entries []appstate.SessionEntry, err error, height int) []string {
+	if err != nil {
+		return []string{err.Error()}
+	}
+	if len(entries) == 0 {
+		return []string{m.localize("Loading sessions…", "Загрузка сессий…")}
+	}
+	entryByPath := make(map[string]appstate.SessionEntry, len(entries))
+	for _, entry := range entries {
+		entryByPath[strings.TrimSpace(entry.Path)] = entry
+	}
+	items := m.filteredPaletteItems()
+	selectedPath := ""
+	if item, ok := m.selectedPaletteItem(); ok {
+		selectedPath = strings.TrimSpace(item.Value)
+	}
+	rows := make([]string, 0, height)
+	for _, item := range items {
+		entry, ok := entryByPath[strings.TrimSpace(item.Value)]
+		if !ok {
+			continue
+		}
+		row := fmt.Sprintf("  %-16s  %-16s  %-8s  %s",
+			formatSessionPickerTime(entry.Created),
+			formatSessionPickerTime(entry.ModTime),
+			truncateForPicker(firstNonEmpty(strings.TrimSpace(entry.Branch), "-"), 8),
+			truncateForPicker(firstNonEmpty(strings.TrimSpace(entry.Preview), strings.TrimSpace(entry.RelPath), strings.TrimSpace(entry.Name)), maxInt(12, m.width-48)),
+		)
+		style := m.styles.body
+		if strings.TrimSpace(entry.Path) == selectedPath {
+			style = m.styles.selected
+			row = "›" + strings.TrimPrefix(row, " ")
+		}
+		rows = append(rows, style.Render(row))
+		if len(rows) == height {
+			break
+		}
+	}
+	for len(rows) < height {
+		rows = append(rows, "")
+	}
+	return rows
+}
+
+func padBetween(left string, right string, width int) string {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if width <= 0 {
+		if right == "" {
+			return left
+		}
+		return left + " " + right
+	}
+	if right == "" {
+		return truncateForPicker(left, width)
+	}
+	leftWidth := lipgloss.Width(left)
+	rightWidth := lipgloss.Width(right)
+	if leftWidth+2+rightWidth > width {
+		left = truncateForPicker(left, maxInt(1, width-rightWidth-2))
+		leftWidth = lipgloss.Width(left)
+	}
+	padding := width - leftWidth - rightWidth
+	if padding < 2 {
+		padding = 2
+	}
+	return left + strings.Repeat(" ", padding) + right
 }
 
 func (m *Model) sessionSortLabel() string {
@@ -337,46 +646,6 @@ func (m *Model) filterSessionPickerEntries(entries []appstate.SessionEntry, quer
 		}
 	}
 	return filtered
-}
-
-func (m *Model) renderSessionPickerList(items []PaletteItem, entries []appstate.SessionEntry, height int, err error) string {
-	if err != nil {
-		return lipgloss.NewStyle().Width(m.width).Height(height).Render(err.Error())
-	}
-	if len(entries) == 0 {
-		return lipgloss.NewStyle().Width(m.width).Height(height).Render(m.localize("No sessions yet", "Сессий пока нет"))
-	}
-	entryByPath := make(map[string]appstate.SessionEntry, len(entries))
-	for _, entry := range entries {
-		entryByPath[strings.TrimSpace(entry.Path)] = entry
-	}
-	selectedPath := ""
-	if item, ok := m.selectedPaletteItem(); ok {
-		selectedPath = strings.TrimSpace(item.Value)
-	}
-	rows := make([]string, 0, minInt(height, len(items)))
-	for _, item := range items {
-		entry, ok := entryByPath[strings.TrimSpace(item.Value)]
-		if !ok {
-			continue
-		}
-		row := fmt.Sprintf(
-			"  %-16s  %-16s  %-8s  %s",
-			formatSessionPickerTime(entry.Created),
-			formatSessionPickerTime(entry.ModTime),
-			truncateForPicker(firstNonEmpty(strings.TrimSpace(entry.Branch), "-"), 8),
-			truncateForPicker(firstNonEmpty(strings.TrimSpace(entry.Preview), strings.TrimSpace(entry.RelPath), strings.TrimSpace(entry.Name)), maxInt(12, m.width-48)),
-		)
-		style := m.styles.body
-		if strings.TrimSpace(entry.Path) == selectedPath {
-			style = m.styles.selected
-		}
-		rows = append(rows, style.Render(row))
-		if len(rows) == height {
-			break
-		}
-	}
-	return lipgloss.NewStyle().Width(m.width).Height(height).Render(strings.Join(rows, "\n"))
 }
 
 func formatSessionPickerTime(value time.Time) string {

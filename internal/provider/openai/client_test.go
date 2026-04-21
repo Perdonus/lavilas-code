@@ -87,6 +87,57 @@ func TestClientCreate(t *testing.T) {
 	}
 }
 
+func TestRequestFromRuntimeNormalizesStrictToolSchema(t *testing.T) {
+	payload, err := requestFromRuntime(runtime.Request{
+		Model:    "gpt-test",
+		Messages: []runtime.Message{runtime.TextMessage(runtime.RoleUser, "hi")},
+		Tools: []runtime.ToolDefinition{{
+			Function: runtime.FunctionDefinition{
+				Name:        "run_shell_command",
+				Description: "Run shell",
+				Strict:      true,
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"cmd": map[string]any{"type": "string"},
+						"permissions": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"writable_roots": map[string]any{
+									"type":  "array",
+									"items": map[string]any{"type": "string"},
+								},
+							},
+						},
+					},
+					"required": []string{"cmd"},
+				},
+			},
+		}},
+	}, Config{DefaultModel: "gpt-test"}, false)
+	if err != nil {
+		t.Fatalf("requestFromRuntime: %v", err)
+	}
+	if len(payload.Tools) != 1 {
+		t.Fatalf("unexpected tools: %+v", payload.Tools)
+	}
+	root := payload.Tools[0].Function.Parameters
+	if got, ok := root["additionalProperties"].(bool); !ok || got {
+		t.Fatalf("root additionalProperties = %#v, want false", root["additionalProperties"])
+	}
+	properties, ok := root["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties missing from normalized schema: %+v", root)
+	}
+	permissions, ok := properties["permissions"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested permissions schema missing: %+v", properties)
+	}
+	if got, ok := permissions["additionalProperties"].(bool); !ok || got {
+		t.Fatalf("nested additionalProperties = %#v, want false", permissions["additionalProperties"])
+	}
+}
+
 func TestClientStream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if accept := r.Header.Get("Accept"); accept != "text/event-stream" {

@@ -129,6 +129,29 @@ type Model struct {
 	approvalStore                 *taskrun.ApprovalSessionStore
 }
 
+var composerPlaceholders = map[commandcatalog.CatalogLanguage][]string{
+	commandcatalog.CatalogLanguageRussian: {
+		"Объясни этот кодовый проект",
+		"Кратко перескажи недавние коммиты",
+		"Реализуй {feature}",
+		"Найди и исправь баг в @filename",
+		"Напиши тесты для @filename",
+		"Улучши документацию в @filename",
+		"Запусти /review для моих текущих изменений",
+		"Используй /skills, чтобы показать доступные навыки",
+	},
+	commandcatalog.CatalogLanguageEnglish: {
+		"Explain this codebase",
+		"Summarize recent commits",
+		"Implement {feature}",
+		"Find and fix a bug in @filename",
+		"Write tests for @filename",
+		"Improve documentation in @filename",
+		"Run /review on my current changes",
+		"Use /skills to show available skills",
+	},
+}
+
 func New() *Model {
 	model, err := newModel(Options{})
 	if err != nil {
@@ -145,7 +168,7 @@ func NewModel(state State) *Model {
 
 	input := textinput.New()
 	input.Prompt = "› "
-	input.Placeholder = ""
+	input.Placeholder = composerPlaceholder(language)
 	input.TextStyle = styles.value
 	input.PlaceholderStyle = styles.muted
 	input.PromptStyle = styles.sectionTitle
@@ -153,6 +176,7 @@ func NewModel(state State) *Model {
 	input.SetValue(clonedState.InputDraft)
 
 	paletteInput := textinput.New()
+	paletteInput.Prompt = "⌕  "
 	paletteInput.Placeholder = localizedTextTUI(language, "Type to filter items", "Введите запрос для фильтрации")
 	paletteInput.TextStyle = styles.value
 	paletteInput.PlaceholderStyle = styles.muted
@@ -178,6 +202,7 @@ func NewModel(state State) *Model {
 	if len(model.state.Palette.Items) == 0 {
 		model.state.Palette.Items = model.rootPaletteItems()
 	}
+	model.reloadStyleSettings()
 	model.refreshViewport()
 	return model
 }
@@ -208,8 +233,25 @@ func newModel(options Options) (*Model, error) {
 	if options.PaletteCatalog != nil {
 		model.catalog = options.PaletteCatalog
 	}
+	model.applyStyleSettings(settings)
 	model.state.Palette.Items = model.rootPaletteItems()
 	return model, nil
+}
+
+func composerPlaceholder(language commandcatalog.CatalogLanguage) string {
+	language = normalizeTUILanguage(string(language))
+	samples := composerPlaceholders[language]
+	if len(samples) == 0 {
+		samples = composerPlaceholders[commandcatalog.CatalogLanguageEnglish]
+	}
+	if len(samples) == 0 {
+		return ""
+	}
+	index := int(time.Now().UnixNano()%int64(len(samples)))
+	if index < 0 || index >= len(samples) {
+		index = 0
+	}
+	return samples[index]
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -375,7 +417,9 @@ func (m *Model) SetState(state State) {
 	m.language = normalizeTUILanguage(m.state.Language)
 	m.state.Language = string(m.language)
 	m.state.Palette.Context = normalizePaletteContextForLanguage(m.state.Palette.Context, m.language)
-	m.input.Placeholder = ""
+	m.reloadStyleSettings()
+	m.input.Placeholder = composerPlaceholder(m.language)
+	m.paletteInput.Prompt = "⌕  "
 	m.paletteInput.Placeholder = localizedTextTUI(m.language, "Type to filter items", "Введите запрос для фильтрации")
 	m.input.SetValue(m.state.InputDraft)
 	m.paletteInput.SetValue(m.state.Palette.Query)
@@ -619,6 +663,9 @@ func (m *Model) renderTranscriptEntry(entry TranscriptEntry, width int) string {
 	if body == "" {
 		return ""
 	}
+	if role == "card" {
+		return body
+	}
 	prefix := "■"
 	style := m.styles.body
 	switch role {
@@ -762,6 +809,8 @@ func (m *Model) displayRole(role string) string {
 		return m.localize("system", "система")
 	case "tool":
 		return m.localize("tool", "инструмент")
+	case "card":
+		return m.localize("card", "карточка")
 	default:
 		return fallback(strings.TrimSpace(role), m.localize("event", "событие"))
 	}
@@ -1123,11 +1172,18 @@ func (m *Model) directPaletteContext(mode PaletteMode) PaletteContext {
 			BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
 			ReturnFocus:     FocusInput,
 		}
-	case PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
+	case PaletteModeCustomization, PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
 		return PaletteContext{
 			BackTitle:       localize("Back to Settings", "Назад к настройкам"),
 			BackDescription: localize("Return to settings", "Вернуться к настройкам"),
 			BackHint:        localize("Enter select · Esc back", "Enter выбрать · Esc назад"),
+			ReturnFocus:     FocusInput,
+		}
+	case PaletteModeStatus:
+		return PaletteContext{
+			BackTitle:       localize("Back to Chat", "Назад в чат"),
+			BackDescription: localize("Return to transcript", "Вернуться к диалогу"),
+			BackHint:        localize("Esc back", "Esc назад"),
 			ReturnFocus:     FocusInput,
 		}
 	}
@@ -1154,8 +1210,10 @@ func (m *Model) navigatePaletteBranchBack() tea.Cmd {
 		return m.reopenModelPresetsSettingsPalette()
 	case PaletteModePresetActions, PaletteModePresetModels:
 		return m.reopenCurrentProviderPresetEditor()
-	case PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
+	case PaletteModeCustomization, PaletteModeLanguage, PaletteModeCommandPrefix, PaletteModePopupCommands, PaletteModePermissions:
 		return m.openPaletteMode(PaletteModeSettings, false)
+	case PaletteModeStatus:
+		return m.closePalette()
 	}
 	return nil
 }
@@ -1164,6 +1222,10 @@ func (m *Model) paletteItemsForMode(mode PaletteMode) []PaletteItem {
 	switch mode {
 	case PaletteModeSettings:
 		return m.settingsPaletteItems()
+	case PaletteModeCustomization:
+		return m.customizationPaletteItems()
+	case PaletteModeStatus:
+		return nil
 	case PaletteModeLanguage:
 		return m.languagePaletteItems()
 	case PaletteModeCommandPrefix:
@@ -1205,11 +1267,41 @@ func (m *Model) settingsPaletteItems() []PaletteItem {
 	settings, _ := loadSettingsOptional(m.layout.SettingsPath())
 	summary := settings.Summary()
 	return []PaletteItem{
+		{Key: "settings.customization", Title: m.localize("Customization", "Кастомизация"), Description: m.localize("Colors and formatting", "Цвета и форматирование"), Keywords: []string{"customization", "colors", "formatting", "кастомизация", "цвета", "форматирование"}},
 		{Key: "settings.model_settings", Title: m.localize("Model Settings", "Настройки моделей"), Description: m.localize("Models, profiles, presets", "Модели, профили, пресеты"), Aliases: []string{"/model", "/profiles", "/providers", "/модель", "/профили", "/провайдеры"}, Keywords: []string{"reasoning", "provider", "profile", "models", "profiles", "providers", "модель", "провайдер", "профиль"}},
 		{Key: "settings.language", Title: m.localize("Interface Language", "Язык интерфейса"), Description: fallback(summary.Language, localizedUnsetTUI(m.language)), Keywords: []string{"locale", "translation", "язык", "language"}},
 		{Key: "settings.command_prefix", Title: m.localize("Command Prefix", "Префикс команд"), Description: fallback(summary.CommandPrefix, localizedUnsetTUI(m.language)), Keywords: []string{"slash", "prefix", "commands", "префикс"}},
 		{Key: "settings.hidden_commands", Title: m.localize("Popup Commands", "Команды во всплывающем списке"), Description: fmt.Sprintf("%d %s", len(summary.HiddenCommands), m.localize("hidden", "скрыто")), Keywords: []string{"visibility", "commands", "popup", "hidden", "скрытые"}},
-		{Key: "settings.permissions", Title: m.localize("Permissions and Approvals", "Разрешения и подтверждения"), Description: m.toolPolicySummary(), Keywords: []string{"permissions", "approvals", "tools", "sandbox", "разрешения", "подтверждения"}},
+		{Key: "settings.permissions", Title: m.localize("Access and Approvals", "Доступ и подтверждения"), Description: m.toolPolicySummary(), Keywords: []string{"permissions", "approvals", "tools", "sandbox", "разрешения", "подтверждения"}},
+	}
+}
+
+func (m *Model) customizationPaletteItems() []PaletteItem {
+	settings := m.settingsForUI()
+	fillValue := m.localize("Background", "Фон")
+	if !effectiveSelectionHighlightFill(settings) {
+		fillValue = m.localize("Text", "Текст")
+	}
+	colorValue := fallback(strings.TrimSpace(settings.SelectionHighlight.Color), "#8FB8FF")
+	return []PaletteItem{
+		{
+			Key:         "customization.fill",
+			Title:       m.localize("Fill", "Заливка"),
+			Description: fillValue,
+			Keywords:    []string{"fill", "background", "selection", "заливка", "фон", "выделение"},
+		},
+		{
+			Key:         "customization.color",
+			Title:       m.localize("Color", "Цвет"),
+			Description: colorValue,
+			Keywords:    []string{"color", "palette", "reply", "command", "цвет", "палитра", "ответ", "команда"},
+		},
+		{
+			Key:         "customization.formatting",
+			Title:       m.localize("Formatting", "Форматирование"),
+			Description: m.localize("Alpha preview", "Alpha-превью"),
+			Keywords:    []string{"formatting", "bold", "italic", "underline", "strike", "форматирование", "жирный", "курсив", "подчёркивание"},
+		},
 	}
 }
 
@@ -1305,10 +1397,14 @@ func paletteBackCopyForMode(mode PaletteMode, language commandcatalog.CatalogLan
 		return localize("Back to Preset Actions", "Назад к действиям пресета"), localize("Return to preset actions", "Вернуться к действиям пресета")
 	case PaletteModePresetModels:
 		return localize("Back to Preset Models", "Назад к моделям пресета"), localize("Return to the preset model picker", "Вернуться к выбору модели пресета")
+	case PaletteModeCustomization:
+		return localize("Back to Settings", "Назад к настройкам"), localize("Return to settings", "Вернуться к настройкам")
 	case PaletteModeResume:
 		return localize("Back to Resume", "Назад к продолжению"), localize("Return to saved sessions", "Вернуться к сохранённым сессиям")
 	case PaletteModeFork:
 		return localize("Back to Fork", "Назад к ответвлению"), localize("Return to fork browser", "Вернуться к списку ответвлений")
+	case PaletteModeStatus:
+		return localize("Back to Chat", "Назад в чат"), localize("Return to transcript", "Вернуться к диалогу")
 	default:
 		return localize("Back to Chat", "Назад в чат"), localize("Return to transcript", "Вернуться к диалогу")
 	}
@@ -1483,7 +1579,10 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec, args []string)
 		}
 		return nil
 	case PaletteActionShowStatus:
-		m.appendTranscript("system", m.statusSummary())
+		m.state.Transcript = append(m.state.Transcript, TranscriptEntry{Role: "card", Body: m.renderStatusCardInline()})
+		m.refreshViewport()
+		m.state.Footer = m.localize("Status opened", "Статус открыт")
+		m.updateStatus()
 		if m.state.Palette.Visible {
 			return m.closePalette()
 		}
@@ -1699,6 +1798,8 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 		switch item.Key {
 		case "__back":
 			return m.navigatePaletteBack()
+		case "settings.customization":
+			return m.openPaletteMode(PaletteModeCustomization, true)
 		case "settings.model_settings":
 			m.setModelSettingsNavigationOrigin(ModelSettingsNavigationOriginSettings)
 			return m.openModelSettingsPalette(true)
@@ -1710,6 +1811,19 @@ func (m *Model) activatePaletteSelection() tea.Cmd {
 			return m.openPaletteMode(PaletteModePopupCommands, true)
 		case "settings.permissions":
 			return m.openPaletteMode(PaletteModePermissions, true)
+		}
+		return nil
+	case PaletteModeCustomization:
+		switch item.Key {
+		case "__back":
+			return m.navigatePaletteBack()
+		case "customization.fill":
+			return m.toggleSelectionHighlightFill()
+		case "customization.color":
+			return m.cycleSelectionHighlightColor()
+		case "customization.formatting":
+			m.state.Footer = m.localize("Formatting preview is not wired yet", "Превью форматирования пока не подключено")
+			return nil
 		}
 		return nil
 	case PaletteModeLanguage:
@@ -2069,6 +2183,8 @@ func (m *Model) paletteTitle() string {
 		return m.localize("Resume Session", "Продолжить сессию")
 	case PaletteModeFork:
 		return m.localize("Fork Session", "Ответвить сессию")
+	case PaletteModeStatus:
+		return m.localize("Status", "Статус")
 	case PaletteModeModel:
 		return m.localize("Choose Model", "Выбор модели")
 	case PaletteModeModelSettings:
@@ -2078,11 +2194,11 @@ func (m *Model) paletteTitle() string {
 	case PaletteModeReasoning:
 		return m.localize("Reasoning", "Размышления")
 	case PaletteModeProfiles:
-		return m.localize("Profiles", "Профили")
+		return m.localize("Account Profiles", "Профили аккаунтов")
 	case PaletteModeProfileActions:
 		return m.localize("Profile Actions", "Действия профиля")
 	case PaletteModeProviders:
-		return m.localize("Providers", "Провайдеры")
+		return m.localize("Model Providers", "Провайдеры моделей")
 	case PaletteModeProviderActions:
 		return m.localize("Provider Actions", "Действия провайдера")
 	case PaletteModeAddAccount:
@@ -2097,6 +2213,8 @@ func (m *Model) paletteTitle() string {
 		return m.localize("Choose Preset Model", "Выбор модели для пресета")
 	case PaletteModeSettings:
 		return m.localize("Settings", "Настройки")
+	case PaletteModeCustomization:
+		return m.localize("Customization", "Кастомизация")
 	case PaletteModeLanguage:
 		return m.localize("Interface Language", "Язык интерфейса")
 	case PaletteModeCommandPrefix:
@@ -2104,7 +2222,7 @@ func (m *Model) paletteTitle() string {
 	case PaletteModePopupCommands:
 		return m.localize("Popup Commands", "Команды во всплывающем списке")
 	case PaletteModePermissions:
-		return m.localize("Permissions and Approvals", "Разрешения и подтверждения")
+		return m.localize("Access and Approvals", "Доступ и подтверждения")
 	default:
 		return m.localize("Command Palette", "Палитра команд")
 	}
@@ -2895,6 +3013,7 @@ func localizedToolStatusTUI(language commandcatalog.CatalogLanguage, status stri
 }
 
 func (m *Model) refreshCurrentPaletteItems() {
+	m.reloadStyleSettings()
 	if !m.state.Palette.Visible {
 		return
 	}
@@ -3119,7 +3238,8 @@ func (m *Model) setSettingsLanguage(next string) tea.Cmd {
 	m.language = normalizeTUILanguage(next)
 	m.state.Language = string(m.language)
 	m.state.Title = "Go Lavilas"
-	m.input.Placeholder = ""
+	m.applyStyleSettings(settings)
+	m.input.Placeholder = composerPlaceholder(m.language)
 	m.paletteInput.Placeholder = localizedTextTUI(m.language, "Type to filter items", "Введите запрос для фильтрации")
 	m.state.Footer = localizedTextTUI(m.language, "Language updated", "Язык обновлён")
 	m.refreshCurrentPaletteItems()
@@ -3263,6 +3383,68 @@ func (m *Model) cycleCommandPrefix() tea.Cmd {
 		next = "/"
 	}
 	return m.setSettingsCommandPrefix(next)
+}
+
+func (m *Model) toggleSelectionHighlightFill() tea.Cmd {
+	settingsPath := m.layout.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
+		return nil
+	}
+	if effectiveSelectionHighlightFill(settings) {
+		settings.SelectionHighlight.Fill = false
+		settings.SelectionHighlight.Preset = "text"
+	} else {
+		settings.SelectionHighlight.Fill = true
+		settings.SelectionHighlight.Preset = "fill"
+	}
+	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
+		return nil
+	}
+	if settings.SelectionHighlight.Fill {
+		m.state.Footer = m.localize("Selection fill enabled", "Заливка выделения включена")
+	} else {
+		m.state.Footer = m.localize("Selection text mode enabled", "Текстовый режим выделения включён")
+	}
+	m.reloadStyleSettings()
+	m.refreshCurrentPaletteItems()
+	m.updateStatus()
+	m.refreshViewport()
+	return nil
+}
+
+func (m *Model) cycleSelectionHighlightColor() tea.Cmd {
+	settingsPath := m.layout.SettingsPath()
+	settings, err := loadSettingsOptional(settingsPath)
+	if err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load settings", "Не удалось загрузить настройки"), err)
+		return nil
+	}
+	palette := []string{"#8FB8FF", "#FFD166", "#8BD5CA", "#F28FAD", "#C4B5FD", "#F4EBD0"}
+	current := strings.TrimSpace(settings.SelectionHighlight.Color)
+	index := 0
+	for i, candidate := range palette {
+		if strings.EqualFold(candidate, current) {
+			index = (i + 1) % len(palette)
+			break
+		}
+	}
+	if current == "" {
+		index = 0
+	}
+	settings.SelectionHighlight.Color = palette[index]
+	if err := appstate.SaveSettings(settingsPath, settings); err != nil {
+		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to save settings", "Не удалось сохранить настройки"), err)
+		return nil
+	}
+	m.state.Footer = fmt.Sprintf("%s: %s", m.localize("Selection color updated", "Цвет выделения обновлён"), settings.SelectionHighlight.Color)
+	m.reloadStyleSettings()
+	m.refreshCurrentPaletteItems()
+	m.updateStatus()
+	m.refreshViewport()
+	return nil
 }
 
 func (m *Model) togglePopupCommandVisibility(name string) tea.Cmd {

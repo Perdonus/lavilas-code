@@ -33,7 +33,7 @@ func newStyles() styles {
 		assistColor = "#8BD5CA"
 		systemColor = "#F28FAD"
 		toolColor   = "#B7BDF8"
-		selectBG    = "#243042"
+		selectBG    = "#8FB8FF"
 		busyColor   = "#FFD166"
 	)
 
@@ -54,7 +54,7 @@ func newStyles() styles {
 		value:         lipgloss.NewStyle().Foreground(lipgloss.Color(textColor)),
 		muted:         lipgloss.NewStyle().Foreground(lipgloss.Color(mutedColor)),
 		body:          lipgloss.NewStyle().Foreground(lipgloss.Color(textColor)),
-		selected:      lipgloss.NewStyle().Background(lipgloss.Color(selectBG)).Foreground(lipgloss.Color(textColor)).Bold(true),
+		selected:      lipgloss.NewStyle().Background(lipgloss.Color(selectBG)).Foreground(lipgloss.Color("#111111")).Bold(true),
 		helpKey:       lipgloss.NewStyle().Foreground(lipgloss.Color(titleColor)).Bold(true),
 		helpDesc:      lipgloss.NewStyle().Foreground(lipgloss.Color(mutedColor)),
 		roleUser:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(userColor)),

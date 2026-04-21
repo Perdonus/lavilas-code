@@ -179,10 +179,26 @@ func (m *Model) openAllModelsPalette(pushCurrent bool) tea.Cmd {
 		if currentModel == model.Slug {
 			descriptionParts = append(descriptionParts, m.localize("current", "текущая"))
 		}
+		subtitle := ""
+		if strings.TrimSpace(model.DisplayName) != "" && strings.TrimSpace(model.DisplayName) != strings.TrimSpace(model.Slug) {
+			subtitle = strings.TrimSpace(model.Slug)
+		}
+		metaParts := []string{}
+		if providerID := strings.TrimSpace(ctx.ProviderID); providerID != "" {
+			metaParts = append(metaParts, strings.ToUpper(providerID))
+		}
+		if reasoning := strings.TrimSpace(model.DefaultReasoningLevel); reasoning != "" {
+			metaParts = append(metaParts, strings.ToUpper(reasoning))
+		}
+		if currentModel == model.Slug {
+			metaParts = append(metaParts, strings.ToUpper(m.localize("current", "текущая")))
+		}
 		items = append(items, PaletteItem{
 			Key:         "model.catalog.entry",
 			Title:       firstNonEmpty(strings.TrimSpace(model.DisplayName), strings.TrimSpace(model.Slug)),
+			Subtitle:    subtitle,
 			Description: strings.Join(descriptionParts, " · "),
+			Meta:        strings.Join(metaParts, "   "),
 			Value:       strings.Join([]string{model.Slug, ctx.ProviderName}, "\n"),
 			Keywords: []string{
 				model.Slug,
@@ -236,10 +252,26 @@ func (m *Model) reopenAllModelsPalette() tea.Cmd {
 		if currentModel == model.Slug {
 			descriptionParts = append(descriptionParts, m.localize("current", "текущая"))
 		}
+		subtitle := ""
+		if strings.TrimSpace(model.DisplayName) != "" && strings.TrimSpace(model.DisplayName) != strings.TrimSpace(model.Slug) {
+			subtitle = strings.TrimSpace(model.Slug)
+		}
+		metaParts := []string{}
+		if providerID := strings.TrimSpace(ctx.ProviderID); providerID != "" {
+			metaParts = append(metaParts, strings.ToUpper(providerID))
+		}
+		if reasoning := strings.TrimSpace(model.DefaultReasoningLevel); reasoning != "" {
+			metaParts = append(metaParts, strings.ToUpper(reasoning))
+		}
+		if currentModel == model.Slug {
+			metaParts = append(metaParts, strings.ToUpper(m.localize("current", "текущая")))
+		}
 		items = append(items, PaletteItem{
 			Key:         "model.catalog.entry",
 			Title:       firstNonEmpty(strings.TrimSpace(model.DisplayName), strings.TrimSpace(model.Slug)),
+			Subtitle:    subtitle,
 			Description: strings.Join(descriptionParts, " · "),
+			Meta:        strings.Join(metaParts, "   "),
 			Value:       strings.Join([]string{model.Slug, ctx.ProviderName}, "\n"),
 			Keywords:    []string{model.Slug, model.DisplayName, model.Description, model.DefaultReasoningLevel},
 		})
@@ -339,13 +371,20 @@ func (m *Model) profilesManagerItems() []PaletteItem {
 			firstNonEmpty(accountprofiles.ProviderDisplayName(profile.Provider, m.language == "ru"), localizedUnsetTUI(m.language)),
 			firstNonEmpty(strings.TrimSpace(profile.Model), localizedUnsetTUI(m.language)),
 		}
+		meta := ""
 		if firstNonEmpty(strings.TrimSpace(profile.ConfigProfile), record.Key) == activeProfile {
-			descriptionParts = append(descriptionParts, m.localize("active", "активен"))
+			meta = strings.ToUpper(m.localize("active", "активен"))
+		}
+		subtitle := ""
+		if name := strings.TrimSpace(profile.Name); name != "" && name != record.Key {
+			subtitle = record.Key
 		}
 		items = append(items, PaletteItem{
 			Key:         "profiles.entry",
 			Title:       firstNonEmpty(strings.TrimSpace(profile.Name), record.Key),
+			Subtitle:    subtitle,
 			Description: strings.Join(descriptionParts, " · "),
+			Meta:        meta,
 			Value:       record.Key,
 			Keywords: []string{
 				record.Key,
@@ -439,13 +478,15 @@ func (m *Model) providersManagerItems() []PaletteItem {
 			firstNonEmpty(strings.TrimSpace(provider.BaseURL), localizedUnsetTUI(m.language)),
 			firstNonEmpty(strings.TrimSpace(provider.WireAPI), "chat_completions"),
 		}
+		meta := ""
 		if provider.Name == activeProvider {
-			descriptionParts = append(descriptionParts, m.localize("current", "текущий"))
+			meta = strings.ToUpper(m.localize("current", "текущий"))
 		}
 		items = append(items, PaletteItem{
 			Key:         "providers.entry",
 			Title:       provider.Name,
 			Description: strings.Join(descriptionParts, " · "),
+			Meta:        meta,
 			Value:       provider.Name,
 			Keywords: []string{
 				provider.Name,
