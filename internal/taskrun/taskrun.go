@@ -907,29 +907,14 @@ func cloneMessages(messages []runtime.Message) []runtime.Message {
 
 func resolveProviderClient(config state.Config, providerName string) (provider.Client, string, error) {
 	if strings.TrimSpace(providerName) == "" {
-		apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-		if apiKey == "" {
-			authKey, err := state.LoadOpenAIAPIKey(apphome.AuthPath())
-			if err != nil {
-				return nil, "", err
-			}
-			apiKey = strings.TrimSpace(authKey)
-		}
-		if apiKey == "" {
-			return nil, "", fmt.Errorf("provider is not configured and OPENAI_API_KEY/auth.json is empty")
-		}
-		client, err := responsesapi.NewClient(responsesapi.Config{
-			Name:   "OpenAI",
-			APIKey: apiKey,
-		})
-		if err != nil {
-			return nil, "", err
-		}
-		return client, "openai", nil
+		return resolveBuiltinOpenAIClient()
 	}
 
 	providerConfig, ok := config.Provider(providerName)
 	if !ok {
+		if builtin := normalizeBuiltinProviderName(providerName); builtin == "openai" || builtin == "codex_oauth" {
+			return resolveBuiltinOpenAIClient()
+		}
 		return nil, "", fmt.Errorf("provider %q not found", providerName)
 	}
 
@@ -979,6 +964,39 @@ func resolveProviderClient(config state.Config, providerName string) (provider.C
 		return client, providerName, nil
 	default:
 		return nil, "", fmt.Errorf("provider %q uses unsupported wire_api %q", providerName, wireAPI)
+	}
+}
+
+func resolveBuiltinOpenAIClient() (provider.Client, string, error) {
+	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	if apiKey == "" {
+		authKey, err := state.LoadOpenAIAPIKey(apphome.AuthPath())
+		if err != nil {
+			return nil, "", err
+		}
+		apiKey = strings.TrimSpace(authKey)
+	}
+	if apiKey == "" {
+		return nil, "", fmt.Errorf("provider is not configured and OPENAI_API_KEY/auth.json is empty")
+	}
+	client, err := responsesapi.NewClient(responsesapi.Config{
+		Name:   "OpenAI",
+		APIKey: apiKey,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return client, "openai", nil
+}
+
+func normalizeBuiltinProviderName(providerName string) string {
+	switch strings.ToLower(strings.TrimSpace(providerName)) {
+	case "openai", "openai api", "openai-api", "openai_api":
+		return "openai"
+	case "codex_oauth", "codex-oauth", "oauth", "chatgpt", "openai-oauth", "codex":
+		return "codex_oauth"
+	default:
+		return ""
 	}
 }
 
