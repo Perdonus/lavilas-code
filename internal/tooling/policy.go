@@ -88,6 +88,8 @@ func ClassifyApprovalKind(name string, metadata ToolExecutionMetadata) ApprovalK
 		return ApprovalKindWorkspaceWrite
 	case "read_file", "list_directory", "search_text":
 		return ApprovalKindReadOnly
+	case "update_plan":
+		return ApprovalKindReadOnly
 	}
 	switch metadata.SideEffectKind {
 	case SideEffectKindShell:
@@ -159,6 +161,10 @@ func baseToolMetadata(name string) ToolExecutionMetadata {
 	}
 
 	switch normalizeToolName(name) {
+	case "update_plan":
+		metadata.SideEffectKind = SideEffectKindReadOnly
+		metadata.SandboxHint = SandboxHintInherited
+		metadata.ApprovalRequired = false
 	case "run_shell_command":
 		metadata.SideEffectKind = SideEffectKindShell
 		metadata.SandboxHint = SandboxHintDangerous

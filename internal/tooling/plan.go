@@ -467,6 +467,16 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 	metadata := baseToolMetadata(name)
 
 	switch strings.TrimSpace(name) {
+	case "update_plan":
+		var args UpdatePlanArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			metadata.ArgumentParseError = err.Error()
+			metadata.ResourceKeys = []string{"plan"}
+			return metadata
+		}
+		args = normalizeUpdatePlanArgs(args)
+		metadata.ResourceKeys = []string{"plan"}
+		return metadata
 	case "run_shell_command":
 		var args shellArgs
 		if err := decodeArgs(arguments, &args); err != nil {
@@ -739,6 +749,16 @@ func describeApprovalCall(call ToolCallPlan) (string, string) {
 				details = append(details, strings.Join(grant.WritableRoots[:previewCount], ", "))
 			}
 			return summary, strings.Join(details, " | ")
+		}
+	case "update_plan":
+		var args UpdatePlanArgs
+		if err := decodeArgs(call.Arguments, &args); err == nil {
+			args = normalizeUpdatePlanArgs(args)
+			summary := fmt.Sprintf("update plan with %d step(s)", len(args.Plan))
+			if len(args.Plan) > 0 {
+				return summary, args.Plan[0].Step
+			}
+			return summary, ""
 		}
 	}
 	arguments := strings.TrimSpace(string(call.Arguments))

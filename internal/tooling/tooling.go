@@ -65,6 +65,29 @@ type patchArgs struct {
 func Definitions() []toolruntime.ToolDefinition {
 	return []toolruntime.ToolDefinition{
 		functionTool(
+			"update_plan",
+			"Keep a short task checklist up to date for complex work. Use concise steps and mark them pending, in_progress, or completed.",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"explanation": map[string]any{"type": "string", "description": "Optional one-line note about why the plan changed. Use an empty string if no note is needed."},
+					"plan": map[string]any{
+						"type":        "array",
+						"description": "Short task checklist with exactly one in_progress step until the work is done.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"step":   map[string]any{"type": "string", "description": "Short one-sentence step."},
+								"status": map[string]any{"type": "string", "description": "One of pending, in_progress, completed.", "enum": []string{"pending", "in_progress", "completed"}},
+							},
+							"required": []string{"step", "status"},
+						},
+					},
+				},
+				"required": []string{"explanation", "plan"},
+			},
+		),
+		functionTool(
 			"run_shell_command",
 			"Run a shell command in the current environment. Use this to inspect the repository, current directory, operating system, disk, git state, or to perform edits through standard CLI tools.",
 			map[string]any{
@@ -268,6 +291,12 @@ func dispatch(ctx context.Context, name string, arguments []byte) string {
 	}
 
 	switch name {
+	case "update_plan":
+		var args UpdatePlanArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
+		}
+		return marshalUpdatePlanResult(args)
 	case "run_shell_command":
 		var args shellArgs
 		if err := decodeArgs(arguments, &args); err != nil {

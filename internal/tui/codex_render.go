@@ -28,7 +28,7 @@ func (m *Model) renderCodexScreen() string {
 		return m.styles.app.Render(m.renderPaletteModalScreen())
 	}
 
-	header := m.renderSessionHeaderBox()
+	conversation := m.renderConversationArea()
 	composer := m.renderComposerPane()
 	popup := ""
 	if m.isInlineCommandPaletteActive() {
@@ -45,23 +45,18 @@ func (m *Model) renderCodexScreen() string {
 		aux = append(aux, m.renderFormPromptPane())
 	}
 
-	reserved := lipgloss.Height(header) + lipgloss.Height(composer)
-	if popup != "" {
-		reserved += lipgloss.Height(popup)
+	parts := make([]string, 0, len(aux)+3)
+	if strings.TrimSpace(conversation) != "" {
+		parts = append(parts, conversation)
 	}
-	for _, block := range aux {
-		if strings.TrimSpace(block) != "" {
-			reserved += lipgloss.Height(block)
-		}
-	}
-	bodyHeight := maxInt(0, m.height-reserved)
-	parts := []string{header, m.renderConversationArea(bodyHeight)}
 	parts = append(parts, aux...)
 	if popup != "" {
 		parts = append(parts, popup)
 	}
-	parts = append(parts, composer)
-	return m.styles.app.Width(m.width).Render(strings.Join(parts, "\n"))
+	if strings.TrimSpace(composer) != "" {
+		parts = append(parts, composer)
+	}
+	return m.styles.app.Width(m.width).Render(strings.Join(parts, "\n\n"))
 }
 
 func (m *Model) isSessionPickerMode() bool {
@@ -186,19 +181,9 @@ func (m *Model) renderComposerMeta() string {
 	return "  " + strings.Join(parts, " · ")
 }
 
-func (m *Model) renderConversationArea(height int) string {
-	if height <= 0 {
-		return ""
-	}
+func (m *Model) renderConversationArea() string {
 	width := maxInt(1, m.width)
-	m.viewport.Width = width
-	m.viewport.Height = maxInt(1, height)
-	m.refreshViewport()
-	body := m.viewport.View()
-	if strings.TrimSpace(body) == "" {
-		return lipgloss.NewStyle().Width(width).Height(height).Render("")
-	}
-	return lipgloss.NewStyle().Width(width).Height(height).Render(body)
+	return lipgloss.NewStyle().Width(width).Render(m.renderTranscriptContent(width))
 }
 
 func (m *Model) renderCommandPopup(maxHeight int) string {

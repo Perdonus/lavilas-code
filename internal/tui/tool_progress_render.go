@@ -35,6 +35,13 @@ type workerToolOutput struct {
 	Workers []tooling.WorkerSummary `json:"workers"`
 }
 
+type updatePlanToolOutput struct {
+	Tool        string                   `json:"tool"`
+	OK          bool                     `json:"ok"`
+	Explanation string                   `json:"explanation"`
+	Plan        []tooling.UpdatePlanStep `json:"plan"`
+}
+
 func renderToolPlanEntry(language commandcatalog.CatalogLanguage, plan *tooling.ExecutionPlan) TranscriptEntry {
 	if plan == nil {
 		return TranscriptEntry{}
@@ -102,6 +109,9 @@ func renderToolResultEntry(language commandcatalog.CatalogLanguage, result *tool
 	if result == nil {
 		return TranscriptEntry{}
 	}
+	if entry := renderPlanUpdateResultEntry(language, result); strings.TrimSpace(entry.Body) != "" {
+		return entry
+	}
 	lines := []string{
 		localizedTextTUI(language, "Tool result", "Результат инструмента"),
 		localizedTextTUI(language, "└ %s · %s", "└ %s · %s", result.Name, localizedToolStatusTUI(language, string(result.Status))),
@@ -119,6 +129,76 @@ func renderToolResultEntry(language commandcatalog.CatalogLanguage, result *tool
 		lines = append(lines, preview)
 	}
 	return TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}
+}
+
+func renderPlanUpdateResultEntry(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) TranscriptEntry {
+	if result == nil || !strings.EqualFold(strings.TrimSpace(result.Name), "update_plan") {
+		return TranscriptEntry{}
+	}
+	body := renderPlanUpdateBody(language, result.OutputText)
+	if strings.TrimSpace(body) == "" {
+		return TranscriptEntry{}
+	}
+	return TranscriptEntry{Role: "tool", Body: body}
+}
+
+func renderPlanUpdateBody(language commandcatalog.CatalogLanguage, raw string) string {
+	var payload updatePlanToolOutput
+	raw = strings.TrimSpace(raw)
+	if raw == "" || json.Unmarshal([]byte(raw), &payload) != nil {
+		return ""
+	}
+	payload.Plan = normalizeRenderedPlan(payload.Plan)
+	lines := []string{localizedTextTUI(language, "Updated plan", "Обновлённый план")}
+	sub := make([]string, 0, len(payload.Plan)+1)
+	if explanation := strings.TrimSpace(payload.Explanation); explanation != "" {
+		sub = append(sub, explanation)
+	}
+	if len(payload.Plan) == 0 {
+		sub = append(sub, localizedTextTUI(language, "(no steps provided)", "(шаги не переданы)"))
+	} else {
+		for _, step := range payload.Plan {
+			sub = append(sub, renderPlanStepLine(language, step))
+		}
+	}
+	for index, line := range sub {
+		prefix := "    "
+		if index == 0 {
+			prefix = "  └ "
+		}
+		lines = append(lines, prefix+line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func normalizeRenderedPlan(plan []tooling.UpdatePlanStep) []tooling.UpdatePlanStep {
+	if len(plan) == 0 {
+		return nil
+	}
+	out := make([]tooling.UpdatePlanStep, 0, len(plan))
+	for _, step := range plan {
+		text := strings.TrimSpace(step.Step)
+		if text == "" {
+			continue
+		}
+		out = append(out, tooling.UpdatePlanStep{
+			Step:   text,
+			Status: tooling.UpdatePlanStatus(strings.TrimSpace(string(step.Status))),
+		})
+	}
+	return out
+}
+
+func renderPlanStepLine(_ commandcatalog.CatalogLanguage, step tooling.UpdatePlanStep) string {
+	status := tooling.UpdatePlanStatus(strings.ToLower(strings.TrimSpace(string(step.Status))))
+	switch status {
+	case tooling.UpdatePlanStatusCompleted:
+		return "✔ " + strings.TrimSpace(step.Step)
+	case tooling.UpdatePlanStatusInProgress:
+		return "□ " + strings.TrimSpace(step.Step)
+	default:
+		return "□ " + strings.TrimSpace(step.Step)
+	}
 }
 
 func renderRetryEntry(language commandcatalog.CatalogLanguage, retryAfter time.Duration, err error) TranscriptEntry {

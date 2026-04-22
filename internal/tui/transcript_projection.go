@@ -12,11 +12,10 @@ func visibleTranscriptFromMessages(messages []runtimeapi.Message, language comma
 	if len(messages) == 0 {
 		return nil
 	}
-	_ = language
 	entries := make([]TranscriptEntry, 0, len(messages))
 	for _, message := range messages {
-		if body := visibleTranscriptBody(message); body != "" && !isHiddenRuntimeTranscript(body) {
-			entries = appendTranscriptEntryDedup(entries, TranscriptEntry{Role: string(message.Role), Body: body})
+		if entry, ok := visibleTranscriptEntry(message, language); ok {
+			entries = appendTranscriptEntryDedup(entries, entry)
 		}
 	}
 	return entries
@@ -37,6 +36,28 @@ func visibleTranscriptBody(message runtimeapi.Message) string {
 		body = normalizeTranscriptBody(message.Refusal)
 	}
 	return body
+}
+
+func visibleTranscriptEntry(message runtimeapi.Message, language commandcatalog.CatalogLanguage) (TranscriptEntry, bool) {
+	if message.Role == runtimeapi.RoleTool {
+		if body := visibleToolTranscriptBody(message, language); body != "" {
+			return TranscriptEntry{Role: "tool", Body: body}, true
+		}
+		return TranscriptEntry{}, false
+	}
+	body := visibleTranscriptBody(message)
+	if body == "" || isHiddenRuntimeTranscript(body) {
+		return TranscriptEntry{}, false
+	}
+	return TranscriptEntry{Role: string(message.Role), Body: body}, true
+}
+
+func visibleToolTranscriptBody(message runtimeapi.Message, language commandcatalog.CatalogLanguage) string {
+	raw := normalizeTranscriptBody(message.Text())
+	if raw == "" {
+		return ""
+	}
+	return renderPlanUpdateBody(language, raw)
 }
 
 func visibleToolCallBody(call runtimeapi.ToolCall, language commandcatalog.CatalogLanguage) string {

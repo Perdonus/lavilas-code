@@ -52,7 +52,7 @@ func Run(options Options) int {
 		return 1
 	}
 
-	program := tea.NewProgram(model, tea.WithMouseCellMotion())
+	program := tea.NewProgram(model)
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "tui: %v\n", err)
 		return 1

@@ -286,7 +286,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
-		m.refreshViewport()
 		return m, nil
 	case taskFinishedMsg:
 		m.state.Busy = false
@@ -389,14 +388,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.taskCancel()
 				m.state.Footer = m.localize("Cancellation requested", "Запрошена остановка хода")
 				return m, nil
-			case key.Matches(msg, m.keys.PageUp):
-				if m.scrollTranscriptPage(-1) {
-					return m, nil
-				}
-			case key.Matches(msg, m.keys.PageDown):
-				if m.scrollTranscriptPage(1) {
-					return m, nil
-				}
 			}
 		}
 
@@ -409,9 +400,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.submitInput()
 		}
 	case tea.MouseMsg:
-		if m.handleTranscriptMouse(msg) {
-			return m, nil
-		}
+		return m, nil
 	}
 
 	switch m.state.Focus {
@@ -433,9 +422,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInlinePaletteWithDraft()
 		return m, cmd
 	case FocusTranscript:
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
+		return m, nil
 	default:
 		return m, nil
 	}
@@ -477,7 +464,6 @@ func (m *Model) SetState(state State) {
 	}
 	m.applyFocusState()
 	m.resize()
-	m.refreshViewport()
 }
 
 func (m *Model) resize() {
@@ -682,10 +668,10 @@ func (m *Model) renderBindings(bindings []key.Binding) string {
 }
 
 func (m *Model) renderTranscriptContent(width int) string {
-	if len(m.state.Transcript) == 0 && len(m.state.Transient) == 0 && m.state.LiveTurn == nil {
-		return ""
+	blocks := make([]string, 0, len(m.state.Transcript)+len(m.state.Transient)+5)
+	if header := strings.TrimSpace(m.renderSessionHeaderBox()); header != "" {
+		blocks = append(blocks, header)
 	}
-	blocks := make([]string, 0, len(m.state.Transcript)+len(m.state.Transient)+4)
 	for _, entry := range m.state.Transcript {
 		if block := m.renderTranscriptEntry(entry, width); strings.TrimSpace(block) != "" {
 			blocks = append(blocks, block)
@@ -953,41 +939,13 @@ func (m *Model) refreshViewport() {
 }
 
 func (m *Model) scrollTranscriptPage(direction int) bool {
-	if m.state.Palette.Visible && !m.isInlineCommandPaletteActive() {
-		return false
-	}
-	if m.viewport.Height <= 0 {
-		return false
-	}
-	if direction < 0 {
-		m.viewport.ViewUp()
-		return true
-	}
-	if direction > 0 {
-		m.viewport.ViewDown()
-		return true
-	}
+	_ = direction
 	return false
 }
 
 func (m *Model) handleTranscriptMouse(msg tea.MouseMsg) bool {
-	if m.state.Palette.Visible && !m.isInlineCommandPaletteActive() {
-		return false
-	}
-	if msg.Action != tea.MouseActionPress {
-		return false
-	}
-	step := maxInt(1, m.viewport.Height/4)
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		m.viewport.LineUp(step)
-		return true
-	case tea.MouseButtonWheelDown:
-		m.viewport.LineDown(step)
-		return true
-	default:
-		return false
-	}
+	_ = msg
+	return false
 }
 
 func (m *Model) submitInput() tea.Cmd {
@@ -2523,7 +2481,10 @@ func (m *Model) syncPaletteSelection() {
 }
 
 func (m *Model) cycleFocus(delta int) tea.Cmd {
-	order := []PaneFocus{FocusTranscript, FocusInput}
+	order := []PaneFocus{FocusInput}
+	if m.state.Palette.Visible && !m.isInlineCommandPaletteActive() {
+		order = append(order, FocusPalette)
+	}
 	current := 0
 	for index, pane := range order {
 		if pane == m.state.Focus {
@@ -2571,8 +2532,6 @@ func (m *Model) applyFocusState() tea.Cmd {
 
 func (m *Model) focusLabel() string {
 	switch m.state.Focus {
-	case FocusTranscript:
-		return m.localize("chat", "чат")
 	case FocusPalette:
 		return m.localize("command menu", "меню команд")
 	default:
@@ -3271,9 +3230,7 @@ func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) {
 		live.AssistantText = update.Snapshot.Text
 		live.ToolCalls = cloneRuntimeToolCalls(update.Snapshot.ToolCalls)
 	case taskrun.ProgressKindToolPlanned:
-		if update.ToolPlan != nil {
-			live.Entries = appendTranscriptEntryDedup(live.Entries, renderToolPlanEntry(m.language, update.ToolPlan))
-		}
+		// Execution batches are internal. User-facing task plans come from update_plan.
 	case taskrun.ProgressKindApprovalRequired:
 		if update.ApprovalRequest != nil {
 			live.Entries = appendTranscriptEntryDedup(live.Entries, renderApprovalEntry(m.language, update.ApprovalRequest))
