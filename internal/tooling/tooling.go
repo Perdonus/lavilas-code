@@ -31,6 +31,8 @@ type shellArgs struct {
 	Cmd            string `json:"cmd"`
 	Cwd            string `json:"cwd,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	ProcessID      string `json:"process_id,omitempty"`
+	YieldTimeMs    int    `json:"yield_time_ms,omitempty"`
 }
 
 type listArgs struct {
@@ -71,8 +73,10 @@ func Definitions() []toolruntime.ToolDefinition {
 					"cmd":             map[string]any{"type": "string", "description": "Shell command to execute."},
 					"cwd":             map[string]any{"type": "string", "description": "Optional working directory. Defaults to the current directory."},
 					"timeout_seconds": map[string]any{"type": "integer", "description": "Optional timeout in seconds. Defaults to 20, max 120."},
+					"process_id":      map[string]any{"type": "string", "description": "Optional process identifier for polling a command started earlier."},
+					"yield_time_ms":   map[string]any{"type": "integer", "description": "Optional time to wait for background command output before returning. Values above zero enable background polling mode."},
 				},
-				"required": []string{"cmd", "cwd", "timeout_seconds"},
+				"required": []string{"cmd", "cwd", "timeout_seconds", "process_id", "yield_time_ms"},
 			},
 		),
 		functionTool(
@@ -158,6 +162,56 @@ func Definitions() []toolruntime.ToolDefinition {
 					},
 				},
 				"required": []string{"permissions", "reason"},
+			},
+		),
+		functionTool(
+			"spawn_worker",
+			"Start a background worker that can inspect the repository or work on a subtask in parallel. Use wait_worker later to collect its result.",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"prompt":    map[string]any{"type": "string", "description": "Task for the worker."},
+					"cwd":       map[string]any{"type": "string", "description": "Optional working directory override."},
+					"model":     map[string]any{"type": "string", "description": "Optional model override."},
+					"provider":  map[string]any{"type": "string", "description": "Optional provider override."},
+					"profile":   map[string]any{"type": "string", "description": "Optional profile override."},
+					"reasoning": map[string]any{"type": "string", "description": "Optional reasoning effort override."},
+				},
+				"required": []string{"prompt", "cwd", "model", "provider", "profile", "reasoning"},
+			},
+		),
+		functionTool(
+			"list_workers",
+			"List active and completed background workers.",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"include_finished": map[string]any{"type": "boolean", "description": "Whether to include completed workers."},
+				},
+				"required": []string{"include_finished"},
+			},
+		),
+		functionTool(
+			"wait_worker",
+			"Wait for a worker to finish or poll its current status after a short timeout.",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"worker_id":       map[string]any{"type": "string", "description": "Worker identifier returned by spawn_worker."},
+					"timeout_seconds": map[string]any{"type": "integer", "description": "How long to wait before returning the current status."},
+				},
+				"required": []string{"worker_id", "timeout_seconds"},
+			},
+		),
+		functionTool(
+			"cancel_worker",
+			"Cancel a running worker.",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"worker_id": map[string]any{"type": "string", "description": "Worker identifier to cancel."},
+				},
+				"required": []string{"worker_id"},
 			},
 		),
 	}
@@ -250,6 +304,62 @@ func dispatch(ctx context.Context, name string, arguments []byte) string {
 			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
 		}
 		return applyPatch(ctx, args)
+	case "spawn_worker":
+		var args WorkerSpawnArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
+		}
+		runtime := workerRuntimeFromContext(ctx)
+		if runtime == nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": "worker runtime is unavailable"})
+		}
+		summary, err := runtime.Spawn(ctx, args)
+		if err != nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
+		}
+		return marshalResult(map[string]any{"ok": true, "tool": name, "worker": summary})
+	case "list_workers":
+		var args WorkerListArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
+		}
+		runtime := workerRuntimeFromContext(ctx)
+		if runtime == nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": "worker runtime is unavailable"})
+		}
+		summaries, err := runtime.List(ctx, args)
+		if err != nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
+		}
+		return marshalResult(map[string]any{"ok": true, "tool": name, "workers": summaries})
+	case "wait_worker":
+		var args WorkerWaitArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
+		}
+		runtime := workerRuntimeFromContext(ctx)
+		if runtime == nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": "worker runtime is unavailable"})
+		}
+		summary, err := runtime.Wait(ctx, args)
+		if err != nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
+		}
+		return marshalResult(map[string]any{"ok": true, "tool": name, "worker": summary})
+	case "cancel_worker":
+		var args WorkerCancelArgs
+		if err := decodeArgs(arguments, &args); err != nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
+		}
+		runtime := workerRuntimeFromContext(ctx)
+		if runtime == nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": "worker runtime is unavailable"})
+		}
+		summary, err := runtime.Cancel(ctx, args)
+		if err != nil {
+			return marshalResult(map[string]any{"ok": false, "tool": name, "error": err.Error()})
+		}
+		return marshalResult(map[string]any{"ok": true, "tool": name, "worker": summary})
 	default:
 		return marshalResult(map[string]any{"ok": false, "tool": name, "error": "unknown tool"})
 	}
@@ -267,6 +377,9 @@ func decodeArgs(data []byte, target any) error {
 }
 
 func runShellCommand(ctx context.Context, args shellArgs) string {
+	if processID := strings.TrimSpace(args.ProcessID); processID != "" {
+		return pollBackgroundShellCommand(ctx, args)
+	}
 	commandText := strings.TrimSpace(args.Cmd)
 	if commandText == "" {
 		return marshalResult(map[string]any{"ok": false, "tool": "run_shell_command", "error": "cmd is required"})
@@ -277,13 +390,14 @@ func runShellCommand(ctx context.Context, args shellArgs) string {
 		return marshalResult(map[string]any{"ok": false, "tool": "run_shell_command", "error": err.Error()})
 	}
 
-	timeout := defaultShellTimeout
-	if args.TimeoutSeconds > 0 {
-		timeout = time.Duration(args.TimeoutSeconds) * time.Second
+	timeout := normalizeShellTimeout(args.TimeoutSeconds)
+	if args.YieldTimeMs > 0 {
+		return startBackgroundShellCommand(ctx, commandText, cwd, timeout, args.YieldTimeMs)
 	}
-	if timeout > maxShellTimeout {
-		timeout = maxShellTimeout
-	}
+	return runShellCommandSync(ctx, commandText, cwd, timeout)
+}
+
+func runShellCommandSync(ctx context.Context, commandText string, cwd string, timeout time.Duration) string {
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -312,23 +426,51 @@ func runShellCommand(ctx context.Context, args shellArgs) string {
 
 	stdoutText, stdoutTruncated := clampString(stdout.String(), maxToolOutputChars)
 	stderrText, stderrTruncated := clampString(stderr.String(), maxToolOutputChars)
+	timedOut := commandCtx.Err() == context.DeadlineExceeded
 	payload := map[string]any{
 		"ok":               err == nil,
 		"tool":             "run_shell_command",
 		"cmd":              commandText,
 		"cwd":              cwd,
 		"exit_code":        exitCode,
+		"output":           joinCommandOutput(stdoutText, stderrText),
 		"stdout":           stdoutText,
 		"stderr":           stderrText,
+		"timed_out":        timedOut,
 		"stdout_truncated": stdoutTruncated,
 		"stderr_truncated": stderrTruncated,
 	}
-	if commandCtx.Err() == context.DeadlineExceeded {
+	if timedOut {
+		payload["ok"] = false
 		payload["error"] = fmt.Sprintf("command timed out after %s", timeout)
 	} else if err != nil && exitCode == -1 {
 		payload["error"] = err.Error()
 	}
 	return marshalResult(payload)
+}
+
+func normalizeShellTimeout(timeoutSeconds int) time.Duration {
+	timeout := defaultShellTimeout
+	if timeoutSeconds > 0 {
+		timeout = time.Duration(timeoutSeconds) * time.Second
+	}
+	if timeout > maxShellTimeout {
+		return maxShellTimeout
+	}
+	return timeout
+}
+
+func joinCommandOutput(stdout string, stderr string) string {
+	switch {
+	case stdout == "" && stderr == "":
+		return ""
+	case stdout == "":
+		return stderr
+	case stderr == "":
+		return stdout
+	default:
+		return stdout + "\n" + stderr
+	}
 }
 
 func listDirectory(args listArgs) string {

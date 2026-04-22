@@ -12,20 +12,11 @@ func visibleTranscriptFromMessages(messages []runtimeapi.Message, language comma
 	if len(messages) == 0 {
 		return nil
 	}
+	_ = language
 	entries := make([]TranscriptEntry, 0, len(messages))
 	for _, message := range messages {
 		if body := visibleTranscriptBody(message); body != "" && !isHiddenRuntimeTranscript(body) {
 			entries = appendTranscriptEntryDedup(entries, TranscriptEntry{Role: string(message.Role), Body: body})
-		}
-		if message.Role != runtimeapi.RoleAssistant {
-			continue
-		}
-		for _, call := range message.ToolCalls {
-			body := visibleToolCallBody(call, language)
-			if body == "" {
-				continue
-			}
-			entries = appendTranscriptEntryDedup(entries, TranscriptEntry{Role: "tool", Body: body})
 		}
 	}
 	return entries
@@ -64,12 +55,7 @@ func visibleLiveTurnNotes(live *LiveTurnState, language commandcatalog.CatalogLa
 	if live == nil {
 		return nil
 	}
-	notes := make([]string, 0, len(live.Notes)+len(live.ToolCalls))
-	for _, call := range live.ToolCalls {
-		if body := visibleToolCallBody(call, language); body != "" {
-			notes = appendUniqueNote(notes, body)
-		}
-	}
+	notes := make([]string, 0, len(live.Notes))
 	for _, note := range live.Notes {
 		notes = appendUniqueNote(notes, note)
 	}

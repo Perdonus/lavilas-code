@@ -473,6 +473,10 @@ func inspectToolCall(name string, arguments json.RawMessage) ToolExecutionMetada
 			metadata.ArgumentParseError = err.Error()
 			return metadata
 		}
+		if processID := strings.TrimSpace(args.ProcessID); processID != "" {
+			metadata.ResourceKeys = []string{"process:" + processID}
+			return metadata
+		}
 		metadata.WorkingDirectory = normalizeResourcePath(args.Cwd, ".")
 		metadata.ResourceKeys = []string{"cwd:" + metadata.WorkingDirectory}
 		return metadata
@@ -672,6 +676,13 @@ func describeApprovalCall(call ToolCallPlan) (string, string) {
 	case "run_shell_command":
 		var args shellArgs
 		if err := decodeArgs(call.Arguments, &args); err == nil {
+			if processID := strings.TrimSpace(args.ProcessID); processID != "" {
+				summary := fmt.Sprintf("poll process %s", processID)
+				if cwd := strings.TrimSpace(args.Cwd); cwd != "" {
+					return summary, fmt.Sprintf("cwd=%s", cwd)
+				}
+				return summary, ""
+			}
 			summary := strings.TrimSpace(args.Cmd)
 			if summary == "" {
 				summary = call.Name

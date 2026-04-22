@@ -60,6 +60,7 @@ type State struct {
 	Title       string
 	Status      []StatusItem
 	Transcript  []TranscriptEntry
+	Transient   []TranscriptEntry
 	LiveTurn    *LiveTurnState
 	InputDraft  string
 	Palette     PaletteState
@@ -90,6 +91,7 @@ type LiveTurnState struct {
 	AssistantText string
 	ToolCalls     []runtimeapi.ToolCall
 	Notes         []string
+	Entries       []TranscriptEntry
 	StartedAt     time.Time
 	SpinnerFrame  int
 }
@@ -170,6 +172,7 @@ func (s State) clone() State {
 		Title:       strings.TrimSpace(s.Title),
 		Status:      cloneStatusItems(s.Status),
 		Transcript:  cloneTranscriptEntries(s.Transcript),
+		Transient:   cloneTranscriptEntries(s.Transient),
 		LiveTurn:    cloneLiveTurnState(s.LiveTurn),
 		InputDraft:  s.InputDraft,
 		Focus:       normalizeFocus(s.Focus),
@@ -365,6 +368,7 @@ func cloneLiveTurnState(value *LiveTurnState) *LiveTurnState {
 		AssistantText: value.AssistantText,
 		ToolCalls:     cloneRuntimeToolCalls(value.ToolCalls),
 		Notes:         cloneStrings(value.Notes),
+		Entries:       cloneTranscriptEntries(value.Entries),
 		StartedAt:     value.StartedAt,
 		SpinnerFrame:  value.SpinnerFrame,
 	}

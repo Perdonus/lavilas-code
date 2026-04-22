@@ -205,7 +205,7 @@ func TestRunWithToolLoop_PreservesToolTraceInHistory(t *testing.T) {
 		}},
 	}
 
-	history, requestMessages, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), nil, nil, progressReporter{})
+	history, requestMessages, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, tooling.DefaultToolPolicy(), nil, nil, progressReporter{}, workerRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestRunWithToolLoop_RequireApprovalBlocksMutatingTool(t *testing.T) {
 
 	policy := tooling.DefaultToolPolicy()
 	policy.ApprovalMode = tooling.ToolApprovalModeRequire
-	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, nil, nil, progressReporter{})
+	history, _, _, assistant, _, reports, err := runWithToolLoop(context.Background(), client, request, true, policy, nil, nil, progressReporter{}, workerRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestRunWithToolLoop_ApprovalHandlerExecutesApprovedTool(t *testing.T) {
 			t.Fatalf("approval summary = %q, want path %q", request.Summary, targetPath)
 		}
 		return ApprovalDecisionApprove, nil
-	}, progressReporter{})
+	}, progressReporter{}, workerRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestRunWithToolLoop_ApprovalHandlerDeniesTool(t *testing.T) {
 			t.Fatalf("unexpected approval request: %+v", request)
 		}
 		return ApprovalDecisionDeny, nil
-	}, progressReporter{})
+	}, progressReporter{}, workerRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -553,7 +553,7 @@ func TestRunWithToolLoop_ApprovalHandlerApproveForSessionCachesEquivalentCalls(t
 			t.Fatalf("expected stable approval id: %+v", request)
 		}
 		return ApprovalDecisionApproveForSession, nil
-	}, progressReporter{})
+	}, progressReporter{}, workerRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -669,7 +669,7 @@ func TestRunWithToolLoop_RequestPermissionsGrantAllowsLaterWrite(t *testing.T) {
 			t.Fatalf("unexpected approval request: %+v", request)
 		}
 		return ApprovalDecisionApproveForSession, nil
-	}, progressReporter{})
+	}, progressReporter{}, workerRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -801,7 +801,7 @@ func TestRunWithToolLoop_EmitsToolPlanningProgress(t *testing.T) {
 		fn: func(update ProgressUpdate) {
 			updates = append(updates, update)
 		},
-	})
+	}, workerRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
@@ -848,7 +848,8 @@ func TestRunSingleTurn_RetriesRetryableCreateErrors(t *testing.T) {
 		},
 	}
 
-	response, _, assistant, err := runSingleTurn(context.Background(), client, runtime.Request{Model: "alpha-model"}, false, 1, progressReporter{})
+	request := runtime.Request{Model: "alpha-model"}
+	response, _, assistant, err := runSingleTurn(context.Background(), client, &request, false, 1, progressReporter{})
 	if err != nil {
 		t.Fatalf("runSingleTurn: %v", err)
 	}

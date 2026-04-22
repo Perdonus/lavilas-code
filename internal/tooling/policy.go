@@ -164,6 +164,16 @@ func baseToolMetadata(name string) ToolExecutionMetadata {
 		metadata.SandboxHint = SandboxHintDangerous
 		metadata.MutatesWorkspace = true
 		metadata.SpawnsSubprocess = true
+	case "spawn_worker":
+		metadata.SideEffectKind = SideEffectKindUnknown
+		metadata.SandboxHint = SandboxHintInherited
+		metadata.ApprovalRequired = false
+		metadata.SupportsParallel = true
+	case "list_workers", "wait_worker", "cancel_worker":
+		metadata.SideEffectKind = SideEffectKindReadOnly
+		metadata.SandboxHint = SandboxHintInherited
+		metadata.ApprovalRequired = false
+		metadata.SupportsParallel = true
 	case "list_directory", "read_file", "search_text":
 		metadata.SideEffectKind = SideEffectKindReadOnly
 		metadata.SandboxHint = SandboxHintInherited

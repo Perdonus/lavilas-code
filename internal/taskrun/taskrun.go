@@ -191,7 +191,17 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	})
 
 	if len(request.Tools) > 0 {
-		history, requestMessages, response, assistantMessage, events, toolReports, err := runWithToolLoop(ctx, resolved.Client, request, preferStreaming, toolPolicy, options.ApprovalStore, options.OnApproval, reporter)
+		workerBase := workerRuntimeOptions{
+			SystemPrompt: systemPromptFromMessages(resolved.Messages),
+			Model:        resolved.Model,
+			Provider:     resolved.ProviderName,
+			Profile:      resolved.ProfileName,
+			Reasoning:    resolved.ReasoningEffort,
+			CWD:          resolved.CWD,
+			ToolPolicy:   toolPolicy,
+			History:      cloneMessages(resolved.Messages),
+		}
+		history, requestMessages, response, assistantMessage, events, toolReports, err := runWithToolLoop(ctx, resolved.Client, request, preferStreaming, toolPolicy, options.ApprovalStore, options.OnApproval, reporter, workerBase)
 		if err != nil {
 			reporter.Emit(ProgressUpdate{Kind: ProgressKindTurnFailed, Err: err})
 			return Result{}, err
@@ -219,15 +229,15 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	}
 
 	if !preferStreaming {
-		response, err := createWithRetry(ctx, resolved.Client, request, 1, reporter)
+		response, _, assistantMessage, err := runSingleTurn(ctx, resolved.Client, &request, false, 1, reporter)
 		if err != nil {
 			reporter.Emit(ProgressUpdate{Kind: ProgressKindTurnFailed, Err: err})
 			return Result{}, err
 		}
 		result.Response = response
 		result.Text = responseText(response)
-		if response != nil && len(response.Choices) > 0 {
-			result.AssistantMessage = response.Choices[0].Message
+		if hasPersistableMessage(assistantMessage) {
+			result.AssistantMessage = assistantMessage
 		} else if strings.TrimSpace(result.Text) != "" {
 			result.AssistantMessage = runtime.TextMessage(runtime.RoleAssistant, result.Text)
 		}
@@ -244,7 +254,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		return result, nil
 	}
 
-	response, events, assistantMessage, err := runSingleTurn(ctx, resolved.Client, request, true, 1, reporter)
+	response, events, assistantMessage, err := runSingleTurn(ctx, resolved.Client, &request, true, 1, reporter)
 	if err != nil {
 		reporter.Emit(ProgressUpdate{Kind: ProgressKindTurnFailed, Err: err})
 		return Result{}, err
@@ -269,7 +279,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	return result, nil
 }
 
-func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, toolPolicy tooling.ToolPolicy, approvalStore *ApprovalSessionStore, approvalHandler ApprovalHandler, reporter progressReporter) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, []tooling.ExecutionReport, error) {
+func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, toolPolicy tooling.ToolPolicy, approvalStore *ApprovalSessionStore, approvalHandler ApprovalHandler, reporter progressReporter, workerBase workerRuntimeOptions) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, []tooling.ExecutionReport, error) {
 	const maxRounds = 8
 
 	messages := cloneMessages(request.Messages)
@@ -292,7 +302,7 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 			})
 		}
 
-		response, roundEvents, assistantMessage, err := runSingleTurn(ctx, client, currentRequest, preferStreaming, round+1, reporter)
+		response, roundEvents, assistantMessage, err := runSingleTurn(ctx, client, &currentRequest, preferStreaming, round+1, reporter)
 		if err != nil {
 			return nil, nil, nil, runtime.Message{}, nil, nil, err
 		}
@@ -318,7 +328,12 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 		if err != nil {
 			return nil, nil, nil, runtime.Message{}, nil, nil, err
 		}
-		report := tooling.ExecutePlan(ctx, resolvedPlan)
+		workerOptions := workerBase
+		workerOptions.Model = currentRequest.Model
+		workerOptions.Reasoning = currentRequest.ReasoningEffort
+		workerOptions.History = cloneMessages(currentRequest.Messages)
+		executionCtx := tooling.WithWorkerRuntime(ctx, newWorkerToolRuntime(workerOptions))
+		report := tooling.ExecutePlan(executionCtx, resolvedPlan)
 		toolReports = append(toolReports, report)
 		if approvalHandler == nil {
 			for _, approval := range report.ApprovalRequests {
@@ -432,19 +447,49 @@ func applyApprovalDecision(call *tooling.ToolCallPlan, decision ApprovalDecision
 	call.Metadata.PermissionGrantScope = tooling.PermissionGrantScopeTurn
 }
 
-func runSingleTurn(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, round int, reporter progressReporter) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
-	if preferStreaming && client.Capabilities().Streaming {
-		return collectStreamTurn(ctx, client, request, round, reporter)
+func runSingleTurn(ctx context.Context, client provider.Client, request *runtime.Request, preferStreaming bool, round int, reporter progressReporter) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {
+	if request == nil {
+		return nil, nil, runtime.Message{}, fmt.Errorf("request is required")
 	}
 
-	response, err := createWithRetry(ctx, client, request, round, reporter)
-	if err != nil {
-		return nil, nil, runtime.Message{}, err
+	originalMessages := cloneMessages(request.Messages)
+	candidates := buildContextCompactionCandidates(originalMessages)
+	currentRequest := *request
+	currentRequest.Messages = cloneMessages(originalMessages)
+
+	for index := -1; ; index++ {
+		var (
+			response         *runtime.Response
+			events           []runtime.StreamEvent
+			assistantMessage runtime.Message
+			err              error
+		)
+
+		if preferStreaming && client.Capabilities().Streaming {
+			response, events, assistantMessage, err = collectStreamTurn(ctx, client, currentRequest, round, reporter)
+		} else {
+			response, err = createWithRetry(ctx, client, currentRequest, round, reporter)
+			if err == nil {
+				if response == nil || len(response.Choices) == 0 {
+					err = fmt.Errorf("provider returned no choices")
+				} else {
+					assistantMessage = response.Choices[0].Message
+				}
+			}
+		}
+		if err == nil {
+			request.Messages = cloneMessages(currentRequest.Messages)
+			return response, events, assistantMessage, nil
+		}
+		if !isContextOverflowError(err) || index+1 >= len(candidates) {
+			return nil, nil, runtime.Message{}, err
+		}
+
+		next := candidates[index+1]
+		emitContextCompactionRetry(reporter, round, client.Name(), currentRequest.Model, next.Label, err)
+		currentRequest = *request
+		currentRequest.Messages = cloneMessages(next.Messages)
 	}
-	if response == nil || len(response.Choices) == 0 {
-		return nil, nil, runtime.Message{}, fmt.Errorf("provider returned no choices")
-	}
-	return response, nil, response.Choices[0].Message, nil
 }
 
 func collectStreamTurn(ctx context.Context, client provider.Client, request runtime.Request, round int, reporter progressReporter) (*runtime.Response, []runtime.StreamEvent, runtime.Message, error) {

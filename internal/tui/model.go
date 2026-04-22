@@ -136,6 +136,7 @@ type Model struct {
 	customizationColorTarget      popupColorTarget
 	customizationFormatTarget     popupFormatTarget
 	taskCancel                    context.CancelFunc
+	inputHistory                  *inputHistory
 }
 
 var composerPlaceholders = map[commandcatalog.CatalogLanguage][]string{
@@ -205,6 +206,7 @@ func NewModel(state State) *Model {
 		sessionSort:                   sessionSortUpdated,
 		approvalStore:                 taskrun.NewApprovalSessionStore(),
 		modelSettingsNavigationOrigin: ModelSettingsNavigationOriginCommand,
+		inputHistory:                  newInputHistory(apphome.DefaultLayout()),
 	}
 	model.state.Language = string(language)
 	model.state.Palette.Context = normalizePaletteContextForLanguage(model.state.Palette.Context, language)
@@ -236,6 +238,7 @@ func newModel(options Options) (*Model, error) {
 	state.Status = buildStatusItems(layout, state, 0)
 	model := NewModel(state)
 	model.layout = layout
+	model.inputHistory = newInputHistory(layout)
 	model.options = options.TaskOptions
 	model.startup = options.Startup
 	model.language = language
@@ -287,6 +290,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taskFinishedMsg:
 		m.state.Busy = false
+		m.flushLiveTurnEntries()
 		m.state.LiveTurn = nil
 		m.taskCancel = nil
 		m.approval = nil
@@ -304,6 +308,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyTaskProgress(inner.Update)
 		case taskFinishedMsg:
 			m.state.Busy = false
+			m.flushLiveTurnEntries()
 			m.state.LiveTurn = nil
 			m.taskCancel = nil
 			m.approval = nil
@@ -412,6 +417,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.state.Focus {
 	case FocusInput:
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			if m.handleInputHistoryNavigation(keyMsg) {
+				return m, nil
+			}
 			if cmd := m.updateInlineCommandPalette(keyMsg); cmd != nil {
 				return m, cmd
 			}
@@ -419,6 +427,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		m.state.InputDraft = m.input.Value()
+		if m.inputHistory != nil {
+			m.inputHistory.syncDraft(m.state.InputDraft)
+		}
 		m.syncInlinePaletteWithDraft()
 		return m, cmd
 	case FocusTranscript:
@@ -671,11 +682,16 @@ func (m *Model) renderBindings(bindings []key.Binding) string {
 }
 
 func (m *Model) renderTranscriptContent(width int) string {
-	if len(m.state.Transcript) == 0 && m.state.LiveTurn == nil {
+	if len(m.state.Transcript) == 0 && len(m.state.Transient) == 0 && m.state.LiveTurn == nil {
 		return ""
 	}
-	blocks := make([]string, 0, len(m.state.Transcript)+3)
+	blocks := make([]string, 0, len(m.state.Transcript)+len(m.state.Transient)+4)
 	for _, entry := range m.state.Transcript {
+		if block := m.renderTranscriptEntry(entry, width); strings.TrimSpace(block) != "" {
+			blocks = append(blocks, block)
+		}
+	}
+	for _, entry := range m.state.Transient {
 		if block := m.renderTranscriptEntry(entry, width); strings.TrimSpace(block) != "" {
 			blocks = append(blocks, block)
 		}
@@ -684,6 +700,11 @@ func (m *Model) renderTranscriptContent(width int) string {
 		live := m.state.LiveTurn
 		if strings.TrimSpace(live.Prompt) != "" {
 			blocks = append(blocks, m.renderTranscriptEntry(TranscriptEntry{Role: "user", Body: strings.TrimSpace(live.Prompt)}, width))
+		}
+		for _, entry := range live.Entries {
+			if block := m.renderTranscriptEntry(entry, width); strings.TrimSpace(block) != "" {
+				blocks = append(blocks, block)
+			}
 		}
 		if strings.TrimSpace(live.AssistantText) != "" {
 			blocks = append(blocks, m.renderTranscriptEntry(TranscriptEntry{Role: "assistant", Body: strings.TrimSpace(live.AssistantText)}, width))
@@ -738,7 +759,7 @@ func (m *Model) renderLiveTurnNotes(live *LiveTurnState) []string {
 	if live == nil {
 		return nil
 	}
-	notes := make([]string, 0, len(live.Notes)+len(live.ToolCalls)+1)
+	notes := make([]string, 0, len(live.Notes)+1)
 	if status := m.liveTurnStatusLine(live); status != "" {
 		notes = append(notes, status)
 	}
@@ -768,6 +789,51 @@ func (m *Model) liveTurnStatusLine(live *LiveTurnState) string {
 		spinner,
 		elapsed,
 	)
+}
+
+func (m *Model) handleInputHistoryNavigation(keyMsg tea.KeyMsg) bool {
+	if m.state.Focus != FocusInput || m.isInlineCommandPaletteActive() || m.inputHistory == nil {
+		return false
+	}
+	if !key.Matches(keyMsg, m.keys.Up) && !key.Matches(keyMsg, m.keys.Down) {
+		return false
+	}
+	if !m.inputHistory.shouldHandleNavigation(m.input.Value(), m.input.Position()) {
+		return false
+	}
+
+	var (
+		value string
+		ok    bool
+	)
+	if key.Matches(keyMsg, m.keys.Up) {
+		value, ok = m.inputHistory.navigateUp()
+	} else {
+		value, ok = m.inputHistory.navigateDown()
+	}
+	if !ok {
+		return false
+	}
+	m.input.SetValue(value)
+	m.input.CursorEnd()
+	m.state.InputDraft = value
+	m.syncInlinePaletteWithDraft()
+	m.refreshViewport()
+	return true
+}
+
+func (m *Model) recordInputHistory(text string) {
+	if m.inputHistory == nil {
+		return
+	}
+	m.inputHistory.record(text, m.historySessionID())
+}
+
+func (m *Model) historySessionID() string {
+	if base := strings.TrimSpace(filepath.Base(strings.TrimSpace(m.state.SessionPath))); base != "" && base != "." && base != string(filepath.Separator) {
+		return strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	return "interactive"
 }
 
 func (m *Model) updateInlineCommandPalette(keyMsg tea.KeyMsg) tea.Cmd {
@@ -929,6 +995,7 @@ func (m *Model) submitInput() tea.Cmd {
 	if draft == "" {
 		return nil
 	}
+	m.recordInputHistory(draft)
 	prefix := commandPrefix(m.layout.SettingsPath())
 	if strings.HasPrefix(draft, prefix) {
 		if m.isInlineCommandPaletteActive() {
@@ -1022,9 +1089,15 @@ func (m *Model) applyTaskResult(msg taskFinishedMsg) {
 	history := cloneRuntimeMessages(msg.Result.FullHistory())
 	m.history = history
 	m.state.LiveTurn = nil
-	m.state.Transcript = transcriptFromMessages(history, m.language)
 	m.state.SessionPath = msg.SessionPath
 	m.approval = nil
+	assistantText := visibleTranscriptBody(msg.Result.AssistantMessage)
+	if assistantText == "" {
+		assistantText = normalizeTranscriptBody(msg.Result.Text)
+	}
+	if assistantText != "" {
+		m.state.Transcript = appendTranscriptEntry(m.state.Transcript, "assistant", assistantText)
+	}
 	m.state.Model = fallback(msg.Result.Model, m.state.Model)
 	m.state.Provider = fallback(msg.Result.ProviderName, m.state.Provider)
 	m.state.Profile = fallback(msg.Result.Profile, m.state.Profile)
@@ -1047,6 +1120,7 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 	m.history = cloneRuntimeMessages(msg.Messages)
 	m.approvalStore = taskrun.NewApprovalSessionStore()
 	m.state.LiveTurn = nil
+	m.state.Transient = nil
 	m.state.Transcript = transcriptFromMessages(msg.Messages, m.language)
 	m.approval = nil
 	m.state.Model = msg.Meta.Model
@@ -2835,6 +2909,7 @@ func (m *Model) resetConversation() {
 	m.approvalStore = taskrun.NewApprovalSessionStore()
 	m.sessionPaletteStartup = false
 	m.state.LiveTurn = nil
+	m.state.Transient = nil
 	m.state.Transcript = defaultStateForLanguage(m.language).Transcript
 	m.state.SessionPath = ""
 	m.state.Footer = m.localize("Started a new session", "Начата новая сессия")
@@ -2844,6 +2919,7 @@ func (m *Model) resetConversation() {
 
 func (m *Model) clearTranscriptView() {
 	m.state.Transcript = nil
+	m.state.Transient = nil
 	m.state.LiveTurn = nil
 	m.state.Footer = m.localize("Screen cleared", "Экран очищен")
 	m.refreshViewport()
@@ -2867,6 +2943,20 @@ func (m *Model) updateStatus() {
 func (m *Model) appendTranscript(role string, body string) {
 	m.state.Transcript = appendTranscriptEntry(m.state.Transcript, role, body)
 	m.refreshViewport()
+}
+
+func (m *Model) appendTransientTranscript(entry TranscriptEntry) {
+	m.state.Transient = appendTranscriptEntryDedup(m.state.Transient, entry)
+	m.refreshViewport()
+}
+
+func (m *Model) flushLiveTurnEntries() {
+	if m.state.LiveTurn == nil {
+		return
+	}
+	for _, entry := range m.state.LiveTurn.Entries {
+		m.state.Transcript = appendTranscriptEntryDedup(m.state.Transcript, entry)
+	}
 }
 
 func (m *Model) helpText() string {
@@ -3182,42 +3272,19 @@ func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) {
 		live.ToolCalls = cloneRuntimeToolCalls(update.Snapshot.ToolCalls)
 	case taskrun.ProgressKindToolPlanned:
 		if update.ToolPlan != nil {
-			live.Notes = appendUniqueNote(live.Notes, localizedTextTUI(
-				m.language,
-				"Updated plan\n└ %d batches • %d calls",
-				"Обновлённый план\n└ %d пакетов • %d вызовов",
-				update.ToolPlan.Summary.BatchCount,
-				update.ToolPlan.Summary.CallCount,
-			))
+			live.Entries = appendTranscriptEntryDedup(live.Entries, renderToolPlanEntry(m.language, update.ToolPlan))
 		}
 	case taskrun.ProgressKindApprovalRequired:
 		if update.ApprovalRequest != nil {
-			live.Notes = appendUniqueNote(live.Notes, localizedTextTUI(
-				m.language,
-				"Approval required for %s (%s)",
-				"Нужно подтверждение для %s (%s)",
-				update.ApprovalRequest.Name,
-				localizedToolStatusTUI(m.language, string(update.ApprovalRequest.Status)),
-			))
+			live.Entries = appendTranscriptEntryDedup(live.Entries, renderApprovalEntry(m.language, update.ApprovalRequest))
 		}
 	case taskrun.ProgressKindToolResult:
 		if update.ToolResult != nil {
-			live.Notes = appendUniqueNote(live.Notes, localizedTextTUI(
-				m.language,
-				"Tool %s → %s",
-				"Инструмент %s → %s",
-				update.ToolResult.Name,
-				localizedToolStatusTUI(m.language, string(update.ToolResult.Status)),
-			))
+			live.Entries = appendTranscriptEntryDedup(live.Entries, renderToolResultEntry(m.language, update.ToolResult))
 		}
 	case taskrun.ProgressKindRetryScheduled:
-		if update.RetryAfter > 0 {
-			live.Notes = appendUniqueNote(live.Notes, localizedTextTUI(
-				m.language,
-				"Retry in %s",
-				"Повтор через %s",
-				update.RetryAfter,
-			))
+		if update.RetryAfter > 0 || update.Err != nil {
+			live.Entries = appendTranscriptEntryDedup(live.Entries, renderRetryEntry(m.language, update.RetryAfter, update.Err))
 		}
 	}
 	m.state.LiveTurn = live

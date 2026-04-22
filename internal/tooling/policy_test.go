@@ -22,7 +22,7 @@ func TestDefinitionsWithPolicyFiltersDeniedTools(t *testing.T) {
 		names = append(names, definition.Function.Name)
 	}
 
-	want := []string{"list_directory", "read_file", "request_permissions"}
+	want := []string{"list_directory", "read_file", "request_permissions", "spawn_worker", "list_workers", "wait_worker", "cancel_worker"}
 	if len(names) != len(want) {
 		t.Fatalf("definition count = %d, want %d (%v)", len(names), len(want), names)
 	}
@@ -56,7 +56,7 @@ func TestDefinitionsExposeStrictSchemasForOpenAIProviders(t *testing.T) {
 	if !ok {
 		t.Fatalf("run_shell_command required = %#v, want []string", root["required"])
 	}
-	wantRoot := []string{"cmd", "cwd", "timeout_seconds"}
+	wantRoot := []string{"cmd", "cwd", "timeout_seconds", "process_id", "yield_time_ms"}
 	if len(required) != len(wantRoot) {
 		t.Fatalf("run_shell_command required len = %d, want %d (%v)", len(required), len(wantRoot), required)
 	}

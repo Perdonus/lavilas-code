@@ -6,6 +6,8 @@ import (
 	goRuntime "runtime"
 	"path/filepath"
 	"strings"
+
+	"github.com/Perdonus/lavilas-code/internal/runtime"
 )
 
 const (
@@ -35,6 +37,9 @@ Working style:
 - Re-check assumptions before proposing edits or commands.
 - Do not invent tool output, file contents, environment facts, test results, or API behavior.
 - If a capability is unavailable, say that clearly and continue with the best precise fallback.
+- For long-running shell work, prefer background execution through run_shell_command with yield_time_ms and then poll the same process_id instead of blocking the turn.
+- For parallel sub-tasks, use spawn_worker, then collect or manage results with list_workers, wait_worker, and cancel_worker.
+- If a change needs extra write access, request it explicitly with request_permissions instead of guessing.
 
 Frontend tasks:
 - Avoid generic, average-looking UI output.
@@ -67,6 +72,22 @@ func resolveSystemPrompt(value string, cwd string) string {
 		return value
 	}
 	return strings.TrimSpace(value) + "\n\n" + contextBlock
+}
+
+func systemPromptFromMessages(messages []runtime.Message) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	blocks := make([]string, 0, 2)
+	for _, message := range messages {
+		if message.Role != runtime.RoleSystem {
+			continue
+		}
+		if body := strings.TrimSpace(message.Text()); body != "" {
+			blocks = append(blocks, body)
+		}
+	}
+	return strings.TrimSpace(strings.Join(blocks, "\n\n"))
 }
 
 func buildRuntimePromptContext(cwd string) string {
