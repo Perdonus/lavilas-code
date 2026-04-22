@@ -362,6 +362,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state.Palette.Visible && m.state.Focus == FocusPalette {
 			return m, m.updatePalette(msg)
 		}
+		if !m.isInlineCommandPaletteActive() {
+			switch {
+			case key.Matches(msg, m.keys.PageUp):
+				if m.scrollTranscriptPage(-1) {
+					return m, nil
+				}
+			case key.Matches(msg, m.keys.PageDown):
+				if m.scrollTranscriptPage(1) {
+					return m, nil
+				}
+			}
+		}
 
 		switch {
 		case key.Matches(msg, m.keys.NextFocus):
@@ -370,6 +382,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.cycleFocus(-1)
 		case key.Matches(msg, m.keys.Submit) && m.state.Focus == FocusInput && !m.isInlineCommandPaletteActive():
 			return m, m.submitInput()
+		}
+	case tea.MouseMsg:
+		if m.handleTranscriptMouse(msg) {
+			return m, nil
 		}
 	}
 
@@ -699,19 +715,7 @@ func (m *Model) renderTranscriptEntry(entry TranscriptEntry, width int) string {
 }
 
 func (m *Model) renderLiveTurnNotes(live *LiveTurnState) []string {
-	if live == nil {
-		return nil
-	}
-	notes := make([]string, 0, len(live.Notes)+len(live.ToolCalls))
-	for _, call := range live.ToolCalls {
-		line := fmt.Sprintf("%s %s", fallback(call.ID, "<id>"), call.Function.Name)
-		if args := strings.TrimSpace(call.Function.ArgumentsString()); args != "" {
-			line += "\n" + args
-		}
-		notes = append(notes, line)
-	}
-	notes = append(notes, live.Notes...)
-	return notes
+	return visibleLiveTurnNotes(live, m.language)
 }
 
 func (m *Model) updateInlineCommandPalette(keyMsg tea.KeyMsg) tea.Cmd {
@@ -827,6 +831,44 @@ func (m *Model) refreshViewport() {
 	m.viewport.SetContent(m.renderTranscriptContent(width))
 	if stickToBottom || len(m.state.Transcript) <= 2 {
 		m.viewport.GotoBottom()
+	}
+}
+
+func (m *Model) scrollTranscriptPage(direction int) bool {
+	if m.state.Palette.Visible && !m.isInlineCommandPaletteActive() {
+		return false
+	}
+	if m.viewport.Height <= 0 {
+		return false
+	}
+	if direction < 0 {
+		m.viewport.ViewUp()
+		return true
+	}
+	if direction > 0 {
+		m.viewport.ViewDown()
+		return true
+	}
+	return false
+}
+
+func (m *Model) handleTranscriptMouse(msg tea.MouseMsg) bool {
+	if m.state.Palette.Visible && !m.isInlineCommandPaletteActive() {
+		return false
+	}
+	if msg.Action != tea.MouseActionPress {
+		return false
+	}
+	step := maxInt(1, m.viewport.Height/4)
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.viewport.LineUp(step)
+		return true
+	case tea.MouseButtonWheelDown:
+		m.viewport.LineDown(step)
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1765,14 +1807,9 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec, args []string)
 		}
 		return nil
 	case PaletteActionShowStatus:
-		m.state.Transcript = append(m.state.Transcript, TranscriptEntry{Role: "card", Body: m.renderStatusCardInline()})
-		m.refreshViewport()
 		m.state.Footer = m.localize("Status opened", "Статус открыт")
 		m.updateStatus()
-		if m.state.Palette.Visible {
-			return m.closePalette()
-		}
-		return nil
+		return m.openPaletteMode(PaletteModeStatus, m.state.Palette.Visible)
 	case PaletteActionShowHelp:
 		m.appendTranscript("system", m.helpText())
 		m.state.Footer = m.localize("Help opened", "Открыта помощь")
@@ -2757,7 +2794,7 @@ func (m *Model) updateStatus() {
 }
 
 func (m *Model) appendTranscript(role string, body string) {
-	m.state.Transcript = append(m.state.Transcript, TranscriptEntry{Role: role, Body: body})
+	m.state.Transcript = appendTranscriptEntry(m.state.Transcript, role, body)
 	m.refreshViewport()
 }
 
@@ -2869,27 +2906,6 @@ func commandPrefixFromSettings(settings appstate.Settings) string {
 		prefix = "/"
 	}
 	return prefix
-}
-
-func transcriptFromMessages(messages []runtimeapi.Message, language commandcatalog.CatalogLanguage) []TranscriptEntry {
-	if len(messages) == 0 {
-		return nil
-	}
-	entries := make([]TranscriptEntry, 0, len(messages)*2)
-	for _, message := range messages {
-		if text := strings.TrimSpace(message.Text()); text != "" {
-			entries = append(entries, TranscriptEntry{Role: string(message.Role), Body: text})
-		}
-		for _, call := range message.ToolCalls {
-			body := fmt.Sprintf("%s %s %s", localizedTextTUI(language, "tool call", "вызов инструмента"), fallback(call.ID, "<id>"), call.Function.Name)
-			arguments := strings.TrimSpace(call.Function.ArgumentsString())
-			if arguments != "" {
-				body += "\n" + arguments
-			}
-			entries = append(entries, TranscriptEntry{Role: "tool", Body: body})
-		}
-	}
-	return entries
 }
 
 func persistTurn(layout apphome.Layout, sessionPath string, result taskrun.Result) (string, error) {
@@ -3085,19 +3101,19 @@ func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) {
 		live.ToolCalls = cloneRuntimeToolCalls(update.Snapshot.ToolCalls)
 	case taskrun.ProgressKindToolPlanned:
 		if update.ToolPlan != nil {
-			live.Notes = append(live.Notes, fmt.Sprintf("%s %d / %d", m.localize("Tool batches:", "Пакеты инструментов:"), update.ToolPlan.Summary.BatchCount, update.ToolPlan.Summary.CallCount))
+			live.Notes = appendUniqueNote(live.Notes, fmt.Sprintf("%s %d / %d", m.localize("Tool batches:", "Пакеты инструментов:"), update.ToolPlan.Summary.BatchCount, update.ToolPlan.Summary.CallCount))
 		}
 	case taskrun.ProgressKindApprovalRequired:
 		if update.ApprovalRequest != nil {
-			live.Notes = append(live.Notes, fmt.Sprintf("%s %s (%s)", m.localize("Approval status for", "Статус подтверждения для"), update.ApprovalRequest.Name, localizedToolStatusTUI(m.language, string(update.ApprovalRequest.Status))))
+			live.Notes = appendUniqueNote(live.Notes, fmt.Sprintf("%s %s (%s)", m.localize("Approval status for", "Статус подтверждения для"), update.ApprovalRequest.Name, localizedToolStatusTUI(m.language, string(update.ApprovalRequest.Status))))
 		}
 	case taskrun.ProgressKindToolResult:
 		if update.ToolResult != nil {
-			live.Notes = append(live.Notes, fmt.Sprintf("%s %s -> %s", m.localize("Tool", "Инструмент"), update.ToolResult.Name, localizedToolStatusTUI(m.language, string(update.ToolResult.Status))))
+			live.Notes = appendUniqueNote(live.Notes, fmt.Sprintf("%s %s -> %s", m.localize("Tool", "Инструмент"), update.ToolResult.Name, localizedToolStatusTUI(m.language, string(update.ToolResult.Status))))
 		}
 	case taskrun.ProgressKindRetryScheduled:
 		if update.RetryAfter > 0 {
-			live.Notes = append(live.Notes, fmt.Sprintf("%s %s", m.localize("Retry after", "Повтор через"), update.RetryAfter))
+			live.Notes = appendUniqueNote(live.Notes, fmt.Sprintf("%s %s", m.localize("Retry after", "Повтор через"), update.RetryAfter))
 		}
 	}
 	m.state.LiveTurn = live

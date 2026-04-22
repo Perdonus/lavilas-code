@@ -48,6 +48,7 @@ func (m *Model) reloadStyleSettings() {
 }
 
 func (m *Model) applyStyleSettings(settings appstate.Settings) {
+	ensureTerminalRendererConfigured()
 	styles := newStyles()
 	fallbackPreset := normalizedSelectionPreset(settings.SelectionHighlight.Preset)
 	if fallbackPreset == "" {
@@ -106,7 +107,7 @@ func selectionHighlightStyle(choice uiColorChoice, palette selectionPalette, fil
 				fg = palette.textFGEmphasis
 			}
 		}
-		style = style.Foreground(lipgloss.Color(ensureVisibleTextHex(fg, secondary))).Background(lipgloss.NoColor{})
+		style = style.Foreground(lipgloss.Color(fg)).Background(lipgloss.NoColor{})
 	}
 	return applyTextFormats(style, formats)
 }
@@ -135,20 +136,8 @@ func parseUIColorChoice(raw string, fallbackPreset string) uiColorChoice {
 	if normalized == "" || normalized == "auto" {
 		return uiColorChoice{kind: uiColorChoiceAuto, preset: normalizedSelectionPreset(fallbackPreset)}
 	}
-	for _, separator := range []string{"->", "→", ",", ";", "|"} {
-		if start, _, ok := strings.Cut(normalized, separator); ok {
-			if hex := normalizeHexColor(start); hex != "" {
-				return uiColorChoice{kind: uiColorChoiceCustom, preset: normalizedSelectionPreset(fallbackPreset), hex: hex}
-			}
-		}
-	}
-	if strings.HasPrefix(normalized, "gradient:") {
-		segments := strings.Split(strings.TrimPrefix(normalized, "gradient:"), ":")
-		if len(segments) >= 1 {
-			if hex := normalizeHexColor(segments[0]); hex != "" {
-				return uiColorChoice{kind: uiColorChoiceCustom, preset: normalizedSelectionPreset(fallbackPreset), hex: hex}
-			}
-		}
+	if hex := legacyGradientBaseHex(normalized); hex != "" {
+		return uiColorChoice{kind: uiColorChoiceCustom, preset: normalizedSelectionPreset(fallbackPreset), hex: hex}
 	}
 	if preset := normalizedSelectionPreset(normalized); preset != "light" || normalized == "light" {
 		return uiColorChoice{kind: uiColorChoicePreset, preset: preset}
@@ -157,6 +146,21 @@ func parseUIColorChoice(raw string, fallbackPreset string) uiColorChoice {
 		return uiColorChoice{kind: uiColorChoiceCustom, preset: normalizedSelectionPreset(fallbackPreset), hex: hex}
 	}
 	return uiColorChoice{kind: uiColorChoiceAuto, preset: normalizedSelectionPreset(fallbackPreset)}
+}
+
+func legacyGradientBaseHex(raw string) string {
+	legacy := strings.TrimSpace(raw)
+	if strings.HasPrefix(legacy, "gradient:") {
+		legacy = strings.TrimPrefix(legacy, "gradient:")
+	}
+	for _, separator := range []string{"->", "→", ",", ";", "|", ":"} {
+		if start, _, ok := strings.Cut(legacy, separator); ok {
+			if hex := normalizeHexColor(start); hex != "" {
+				return hex
+			}
+		}
+	}
+	return ""
 }
 
 func selectionPaletteForChoice(choice uiColorChoice, fallbackPreset string) selectionPalette {
@@ -299,7 +303,7 @@ func selectionPaletteFromBase(base [3]float64) selectionPalette {
 func applyColorAndFormats(style lipgloss.Style, rawChoice string, fallbackPreset string, formats appstate.TextFormats, secondary bool) lipgloss.Style {
 	choice := parseUIColorChoice(rawChoice, fallbackPreset)
 	if choice.kind != uiColorChoiceAuto {
-		style = style.Foreground(lipgloss.Color(ensureVisibleTextHex(resolveColorChoiceHex(choice, fallbackPreset), secondary)))
+		style = style.Foreground(lipgloss.Color(resolveColorChoiceHex(choice, fallbackPreset)))
 	}
 	return applyTextFormats(style, formats)
 }
@@ -337,14 +341,11 @@ func resolveColorChoiceHex(choice uiColorChoice, fallbackPreset string) string {
 }
 
 func resolveTextColorChoiceHex(choice uiColorChoice, secondary bool, fallbackPreset string) string {
+	_ = secondary
 	if choice.kind == uiColorChoiceAuto {
 		return ""
 	}
-	hex := resolveColorChoiceHex(choice, fallbackPreset)
-	if secondary {
-		return ensureVisibleTextHex(hex, true)
-	}
-	return ensureVisibleTextHex(hex, false)
+	return resolveColorChoiceHex(choice, fallbackPreset)
 }
 
 func selectionPresetHex(preset string) string {
@@ -448,6 +449,7 @@ func rgbFromTerminalColor(color lipgloss.TerminalColor) ([3]float64, bool) {
 }
 
 func defaultTerminalBackgroundRGB() [3]float64 {
+	ensureTerminalRendererConfigured()
 	if lipgloss.HasDarkBackground() {
 		return [3]float64{12, 12, 12}
 	}
@@ -455,6 +457,7 @@ func defaultTerminalBackgroundRGB() [3]float64 {
 }
 
 func defaultTerminalForegroundRGB() [3]float64 {
+	ensureTerminalRendererConfigured()
 	if lipgloss.HasDarkBackground() {
 		return [3]float64{234, 234, 234}
 	}

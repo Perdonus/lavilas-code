@@ -151,10 +151,16 @@ func popupFormatTargetLabel(target popupFormatTarget, language commandcatalog.Ca
 
 func renderStateTag(enabled bool) string {
 	text := " ✕ "
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("1")).Bold(true)
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#ffffff")).
+		Background(lipgloss.Color(rgbHex(visibleTerminalRGB([3]float64{180, 35, 24})))).
+		Bold(true)
 	if enabled {
 		text = " ✓ "
-		style = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("2")).Bold(true)
+		style = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#04130a")).
+			Background(lipgloss.Color(rgbHex(visibleTerminalRGB([3]float64{23, 178, 106})))).
+			Bold(true)
 	}
 	return style.Render(text)
 }
@@ -220,7 +226,7 @@ func renderColoredLabel(label string, hex string) string {
 	if normalized == "" {
 		normalized = "#ffffff"
 	}
-	return renderColorBadge(normalized) + " " + lipgloss.NewStyle().Foreground(lipgloss.Color(ensureVisibleTextHex(normalized, false))).Bold(true).Render(label)
+	return renderColorBadge(normalized) + " " + lipgloss.NewStyle().Foreground(lipgloss.Color(normalized)).Bold(true).Render(label)
 }
 
 func colorPreviewDescriptionChoice(choice uiColorChoice, fallbackPreset string, language commandcatalog.CatalogLanguage) string {
@@ -330,7 +336,7 @@ func formatCodeLabel(code string, language commandcatalog.CatalogLanguage) strin
 
 func renderFormatChoiceLabel(code string, language commandcatalog.CatalogLanguage) string {
 	label := formatCodeLabel(code, language)
-	preview := lipgloss.NewStyle().Foreground(lipgloss.Color(ensureVisibleTextHex("#e8ecf2", false)))
+	preview := lipgloss.NewStyle().Foreground(lipgloss.Color(previewFormatLabelHex()))
 	prefix := ""
 	switch code {
 	case "bold":
@@ -360,4 +366,8 @@ func formatValueSummary(formats appstate.TextFormats, language commandcatalog.Ca
 		return localizedTextTUI(language, "Off", "Выключено")
 	}
 	return strings.Join(labels, ", ")
+}
+
+func previewFormatLabelHex() string {
+	return rgbHex(visibleTerminalRGB([3]float64{232, 236, 242}))
 }

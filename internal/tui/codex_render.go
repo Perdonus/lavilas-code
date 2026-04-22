@@ -97,12 +97,7 @@ func (m *Model) renderSessionHeaderBox() string {
 		fmt.Sprintf("%-14s %s", labelModel, joinHeaderValue(modelValue, changeHint)),
 		fmt.Sprintf("%-14s %s", labelDirectory, compactPathForUI(strings.TrimSpace(m.effectiveWorkingDirectory()))),
 	}
-	return lipgloss.NewStyle().
-		Width(cardWidth).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
-		Padding(0, 1).
-		Render(strings.Join(rows, "\n"))
+	return m.styles.pane.Width(cardWidth).Render(strings.Join(rows, "\n"))
 }
 
 func joinHeaderValue(value string, hint string) string {
@@ -268,12 +263,7 @@ func (m *Model) statusCardBox(width int) string {
 	for _, field := range m.statusCardFields() {
 		lines = append(lines, formatStatusField(field[0], field[1]))
 	}
-	return lipgloss.NewStyle().
-		Width(width).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
-		Padding(0, 1).
-		Render(strings.Join(lines, "\n"))
+	return m.styles.pane.Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) statusCardFields() [][2]string {
@@ -377,11 +367,7 @@ func (m *Model) renderSessionPickerScreen() string {
 }
 
 func (m *Model) renderFramedScreen(title string, bodyLines []string, footer string) string {
-	pane := lipgloss.NewStyle().
-		Width(maxInt(40, m.width)).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
-		Padding(0, 1)
+	pane := m.styles.pane.Width(maxInt(40, m.width))
 	content := []string{title}
 	content = append(content, bodyLines...)
 	rendered := pane.Render(strings.Join(content, "\n"))
