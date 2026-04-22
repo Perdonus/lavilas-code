@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,7 +35,10 @@ const (
 	statusPaneMaxWidth = 34
 	inputPaneHeight    = 4
 	palettePaneHeight  = 10
+	busyTickInterval   = 200 * time.Millisecond
 )
+
+var busySpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 type taskFinishedMsg struct {
 	Prompt      string
@@ -52,6 +56,8 @@ type taskEventMsg struct {
 	Inner tea.Msg
 	Next  <-chan tea.Msg
 }
+
+type busyTickMsg struct{}
 
 type approvalRequestedMsg struct {
 	Request    tooling.ApprovalRequest
@@ -129,6 +135,7 @@ type Model struct {
 	approvalStore                 *taskrun.ApprovalSessionStore
 	customizationColorTarget      popupColorTarget
 	customizationFormatTarget     popupFormatTarget
+	taskCancel                    context.CancelFunc
 }
 
 var composerPlaceholders = map[commandcatalog.CatalogLanguage][]string{
@@ -281,6 +288,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskFinishedMsg:
 		m.state.Busy = false
 		m.state.LiveTurn = nil
+		m.taskCancel = nil
 		m.approval = nil
 		if msg.Err != nil {
 			m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), msg.Err))
@@ -297,6 +305,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case taskFinishedMsg:
 			m.state.Busy = false
 			m.state.LiveTurn = nil
+			m.taskCancel = nil
 			m.approval = nil
 			if inner.Err != nil {
 				m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), inner.Err))
@@ -310,6 +319,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, waitTaskEventCmd(msg.Next)
 		}
 		return m, nil
+	case busyTickMsg:
+		if !m.state.Busy || m.state.LiveTurn == nil {
+			return m, nil
+		}
+		m.state.LiveTurn.SpinnerFrame++
+		m.refreshViewport()
+		return m, busyTickCmd()
 	case sessionLoadedMsg:
 		if msg.Err != nil {
 			m.appendTranscript("system", msg.Err.Error())
@@ -364,6 +380,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.isInlineCommandPaletteActive() {
 			switch {
+			case key.Matches(msg, m.keys.Close) && m.state.Busy && m.taskCancel != nil:
+				m.taskCancel()
+				m.state.Footer = m.localize("Cancellation requested", "Запрошена остановка хода")
+				return m, nil
 			case key.Matches(msg, m.keys.PageUp):
 				if m.scrollTranscriptPage(-1) {
 					return m, nil
@@ -715,7 +735,39 @@ func (m *Model) renderTranscriptEntry(entry TranscriptEntry, width int) string {
 }
 
 func (m *Model) renderLiveTurnNotes(live *LiveTurnState) []string {
-	return visibleLiveTurnNotes(live, m.language)
+	if live == nil {
+		return nil
+	}
+	notes := make([]string, 0, len(live.Notes)+len(live.ToolCalls)+1)
+	if status := m.liveTurnStatusLine(live); status != "" {
+		notes = append(notes, status)
+	}
+	notes = append(notes, visibleLiveTurnNotes(live, m.language)...)
+	return notes
+}
+
+func (m *Model) liveTurnStatusLine(live *LiveTurnState) string {
+	if live == nil || !m.state.Busy {
+		return ""
+	}
+	spinner := "•"
+	if len(busySpinnerFrames) > 0 {
+		spinner = busySpinnerFrames[live.SpinnerFrame%len(busySpinnerFrames)]
+	}
+	elapsed := 0
+	if !live.StartedAt.IsZero() {
+		elapsed = int(time.Since(live.StartedAt).Round(time.Second) / time.Second)
+		if elapsed < 0 {
+			elapsed = 0
+		}
+	}
+	return localizedTextTUI(
+		m.language,
+		"%s Working (%ds • esc to cancel)",
+		"%s В работе (%ds • esc чтобы прервать)",
+		spinner,
+		elapsed,
+	)
 }
 
 func (m *Model) updateInlineCommandPalette(keyMsg tea.KeyMsg) tea.Cmd {
@@ -894,12 +946,15 @@ func (m *Model) submitInput() tea.Cmd {
 	m.input.Reset()
 	m.state.InputDraft = ""
 
+	m.appendTranscript("user", draft)
 	m.state.Busy = true
-	m.state.LiveTurn = &LiveTurnState{Prompt: draft}
+	m.state.LiveTurn = &LiveTurnState{
+		StartedAt: time.Now(),
+	}
 	m.state.Footer = m.localize("Running turn...", "Выполняется ход...")
 	m.updateStatus()
 	m.refreshViewport()
-	return m.runPromptCmd(draft)
+	return tea.Batch(m.runPromptCmd(draft), busyTickCmd())
 }
 
 func (m *Model) runPromptCmd(prompt string) tea.Cmd {
@@ -908,10 +963,16 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 	options.Prompt = prompt
 	options.History = history
 	options.ApprovalStore = m.approvalStore
+	if goruntime.GOOS == "windows" {
+		options.DisableStreaming = true
+	}
 	existingSessionPath := m.state.SessionPath
 	layout := m.layout
+	ctx, cancel := context.WithCancel(context.Background())
+	m.taskCancel = cancel
 
 	return startTaskCmd(func(eventCh chan<- tea.Msg) {
+		defer cancel()
 		progress := newTaskProgressBridge(eventCh)
 		defer progress.Close()
 		options.OnProgress = progress.Handle
@@ -929,7 +990,7 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 				return decision, nil
 			}
 		}
-		result, err := taskrun.Run(context.Background(), options)
+		result, err := taskrun.Run(ctx, options)
 		if err != nil {
 			eventCh <- taskFinishedMsg{Prompt: prompt, Err: err}
 			return
@@ -3089,46 +3150,89 @@ func waitTaskEventCmd(eventCh <-chan tea.Msg) tea.Cmd {
 	}
 }
 
+func busyTickCmd() tea.Cmd {
+	return tea.Tick(busyTickInterval, func(time.Time) tea.Msg {
+		return busyTickMsg{}
+	})
+}
+
 func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) {
 	if m.state.LiveTurn == nil {
-		m.state.LiveTurn = &LiveTurnState{}
+		m.state.LiveTurn = &LiveTurnState{StartedAt: time.Now()}
 	}
 	live := m.state.LiveTurn
+	if live.StartedAt.IsZero() {
+		live.StartedAt = time.Now()
+	}
 	if update.Round > 0 {
 		live.Round = update.Round
 	}
 	if strings.TrimSpace(update.Prompt) != "" {
-		live.Prompt = update.Prompt
+		if !m.hasTrailingTranscriptEntry("user", update.Prompt) {
+			live.Prompt = update.Prompt
+		} else {
+			live.Prompt = ""
+		}
 	}
 	switch update.Kind {
 	case taskrun.ProgressKindTurnStarted:
-		if update.Round <= 1 && strings.TrimSpace(update.Prompt) != "" {
-			live.Prompt = update.Prompt
-		}
 		m.state.Footer = m.localize("Running turn...", "Выполняется ход...")
 	case taskrun.ProgressKindAssistantSnapshot:
 		live.AssistantText = update.Snapshot.Text
 		live.ToolCalls = cloneRuntimeToolCalls(update.Snapshot.ToolCalls)
 	case taskrun.ProgressKindToolPlanned:
 		if update.ToolPlan != nil {
-			live.Notes = appendUniqueNote(live.Notes, fmt.Sprintf("%s %d / %d", m.localize("Tool batches:", "Пакеты инструментов:"), update.ToolPlan.Summary.BatchCount, update.ToolPlan.Summary.CallCount))
+			live.Notes = appendUniqueNote(live.Notes, localizedTextTUI(
+				m.language,
+				"Updated plan\n└ %d batches • %d calls",
+				"Обновлённый план\n└ %d пакетов • %d вызовов",
+				update.ToolPlan.Summary.BatchCount,
+				update.ToolPlan.Summary.CallCount,
+			))
 		}
 	case taskrun.ProgressKindApprovalRequired:
 		if update.ApprovalRequest != nil {
-			live.Notes = appendUniqueNote(live.Notes, fmt.Sprintf("%s %s (%s)", m.localize("Approval status for", "Статус подтверждения для"), update.ApprovalRequest.Name, localizedToolStatusTUI(m.language, string(update.ApprovalRequest.Status))))
+			live.Notes = appendUniqueNote(live.Notes, localizedTextTUI(
+				m.language,
+				"Approval required for %s (%s)",
+				"Нужно подтверждение для %s (%s)",
+				update.ApprovalRequest.Name,
+				localizedToolStatusTUI(m.language, string(update.ApprovalRequest.Status)),
+			))
 		}
 	case taskrun.ProgressKindToolResult:
 		if update.ToolResult != nil {
-			live.Notes = appendUniqueNote(live.Notes, fmt.Sprintf("%s %s -> %s", m.localize("Tool", "Инструмент"), update.ToolResult.Name, localizedToolStatusTUI(m.language, string(update.ToolResult.Status))))
+			live.Notes = appendUniqueNote(live.Notes, localizedTextTUI(
+				m.language,
+				"Tool %s → %s",
+				"Инструмент %s → %s",
+				update.ToolResult.Name,
+				localizedToolStatusTUI(m.language, string(update.ToolResult.Status)),
+			))
 		}
 	case taskrun.ProgressKindRetryScheduled:
 		if update.RetryAfter > 0 {
-			live.Notes = appendUniqueNote(live.Notes, fmt.Sprintf("%s %s", m.localize("Retry after", "Повтор через"), update.RetryAfter))
+			live.Notes = appendUniqueNote(live.Notes, localizedTextTUI(
+				m.language,
+				"Retry in %s",
+				"Повтор через %s",
+				update.RetryAfter,
+			))
 		}
 	}
 	m.state.LiveTurn = live
 	m.updateStatus()
 	m.refreshViewport()
+}
+
+func (m *Model) hasTrailingTranscriptEntry(role string, body string) bool {
+	role = strings.TrimSpace(strings.ToLower(role))
+	body = normalizeTranscriptBody(body)
+	if role == "" || body == "" || len(m.state.Transcript) == 0 {
+		return false
+	}
+	last := m.state.Transcript[len(m.state.Transcript)-1]
+	return strings.EqualFold(strings.TrimSpace(last.Role), role) && normalizeTranscriptBody(last.Body) == body
 }
 
 func (m *Model) updateApproval(keyMsg tea.KeyMsg) tea.Cmd {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/Perdonus/lavilas-code/internal/commandcatalog"
 	runtimeapi "github.com/Perdonus/lavilas-code/internal/runtime"
@@ -89,6 +90,8 @@ type LiveTurnState struct {
 	AssistantText string
 	ToolCalls     []runtimeapi.ToolCall
 	Notes         []string
+	StartedAt     time.Time
+	SpinnerFrame  int
 }
 
 type PaletteState struct {
@@ -362,6 +365,8 @@ func cloneLiveTurnState(value *LiveTurnState) *LiveTurnState {
 		AssistantText: value.AssistantText,
 		ToolCalls:     cloneRuntimeToolCalls(value.ToolCalls),
 		Notes:         cloneStrings(value.Notes),
+		StartedAt:     value.StartedAt,
+		SpinnerFrame:  value.SpinnerFrame,
 	}
 	return cloned
 }

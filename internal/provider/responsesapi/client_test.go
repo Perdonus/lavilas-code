@@ -257,3 +257,47 @@ func TestClientStreamDoesNotDuplicateMessageDone(t *testing.T) {
 		t.Fatalf("expected done event")
 	}
 }
+
+func TestClientStreamUsesMessageDoneWhenNoDeltaArrives(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello from done"}]}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-test","usage":{"input_tokens":12,"output_tokens":7,"total_tokens":19}}}`,
+		}
+		_, _ = io.WriteString(w, strings.Join(chunks, "\n\n")+"\n\n")
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{BaseURL: server.URL, ResponsesPath: "/", APIKey: "secret"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	stream, err := client.Stream(context.Background(), runtime.Request{
+		Model:    "gpt-test",
+		Messages: []runtime.Message{runtime.TextMessage(runtime.RoleUser, "hi")},
+	})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	defer stream.Close()
+
+	var text strings.Builder
+	for {
+		event, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		if event.Type == runtime.StreamEventTypeDelta {
+			text.WriteString(event.Delta.Text())
+		}
+	}
+
+	if got := text.String(); got != "Hello from done" {
+		t.Fatalf("unexpected streamed text: %q", got)
+	}
+}

@@ -275,10 +275,11 @@ func responseToRuntime(providerName string, response Response) *runtime.Response
 }
 
 type streamReader struct {
-	body   io.ReadCloser
-	reader *bufio.Reader
-	queue  []runtime.StreamEvent
-	done   bool
+	body                  io.ReadCloser
+	reader                *bufio.Reader
+	queue                 []runtime.StreamEvent
+	done                  bool
+	sawAssistantTextDelta bool
 }
 
 func (s *streamReader) Recv() (runtime.StreamEvent, error) {
@@ -308,7 +309,7 @@ func (s *streamReader) Recv() (runtime.StreamEvent, error) {
 		if err := json.Unmarshal(payload, &event); err != nil {
 			return runtime.StreamEvent{}, fmt.Errorf("decode stream event: %w", err)
 		}
-		s.queue = append(s.queue, eventToRuntime(event)...)
+		s.queue = append(s.queue, s.eventToRuntime(event)...)
 		if len(s.queue) == 0 {
 			continue
 		}
@@ -330,12 +331,13 @@ func (s *streamReader) Close() error {
 	return err
 }
 
-func eventToRuntime(event Event) []runtime.StreamEvent {
+func (s *streamReader) eventToRuntime(event Event) []runtime.StreamEvent {
 	switch event.Type {
 	case "response.output_text.delta":
 		if strings.TrimSpace(event.Delta) == "" {
 			return nil
 		}
+		s.sawAssistantTextDelta = true
 		return []runtime.StreamEvent{{
 			Type: runtime.StreamEventTypeDelta,
 			Delta: runtime.MessageDelta{
@@ -351,7 +353,23 @@ func eventToRuntime(event Event) []runtime.StreamEvent {
 		}
 		switch event.Item.Type {
 		case "message":
-			return nil
+			if s.sawAssistantTextDelta {
+				return nil
+			}
+			text := strings.TrimSpace(outputItemText(*event.Item))
+			if text == "" {
+				return nil
+			}
+			s.sawAssistantTextDelta = true
+			return []runtime.StreamEvent{{
+				Type: runtime.StreamEventTypeDelta,
+				Delta: runtime.MessageDelta{
+					Content: []runtime.ContentPartDelta{{
+						Type: runtime.ContentPartTypeText,
+						Text: text,
+					}},
+				},
+			}}
 		case "function_call", "custom_tool_call":
 			callID := strings.TrimSpace(event.Item.CallID)
 			if callID == "" {
