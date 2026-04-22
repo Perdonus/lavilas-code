@@ -57,6 +57,31 @@ func TestRequestFromRuntimePreservesInstructionsAndToolHistory(t *testing.T) {
 	}
 }
 
+func TestRequestFromRuntimeSerializesAssistantHistoryAsOutputText(t *testing.T) {
+	payload, err := requestFromRuntime(runtime.Request{
+		Model: "gpt-test",
+		Messages: []runtime.Message{
+			runtime.TextMessage(runtime.RoleSystem, "inspect the repo first"),
+			runtime.TextMessage(runtime.RoleUser, "hi"),
+			runtime.TextMessage(runtime.RoleAssistant, "hello"),
+			runtime.TextMessage(runtime.RoleUser, "next"),
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("requestFromRuntime: %v", err)
+	}
+
+	if len(payload.Input) != 3 {
+		t.Fatalf("unexpected input item count: %d", len(payload.Input))
+	}
+	if payload.Input[1].Role != "assistant" {
+		t.Fatalf("unexpected assistant role: %+v", payload.Input[1])
+	}
+	if len(payload.Input[1].Content) != 1 || payload.Input[1].Content[0].Type != "output_text" {
+		t.Fatalf("assistant content = %+v, want output_text", payload.Input[1].Content)
+	}
+}
+
 func TestRequestFromRuntimeNormalizesStrictToolSchema(t *testing.T) {
 	payload, err := requestFromRuntime(runtime.Request{
 		Model:    "gpt-test",

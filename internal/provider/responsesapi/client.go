@@ -164,7 +164,7 @@ func requestFromRuntime(req runtime.Request, stream bool) (Request, error) {
 				instructions = append(instructions, text)
 			}
 		case runtime.RoleUser:
-			input = append(input, marshalMessageInput(string(message.Role), message.Text()))
+			input = append(input, marshalInputTextMessage(string(message.Role), message.Text()))
 		case runtime.RoleAssistant:
 			if len(message.ToolCalls) > 0 {
 				for _, call := range message.ToolCalls {
@@ -181,7 +181,7 @@ func requestFromRuntime(req runtime.Request, stream bool) (Request, error) {
 				}
 			}
 			if text := strings.TrimSpace(message.Text()); text != "" {
-				input = append(input, marshalMessageInput(string(message.Role), text))
+				input = append(input, marshalOutputTextMessage(string(message.Role), text))
 			}
 		case runtime.RoleTool:
 			text := strings.TrimSpace(message.Text())
@@ -391,12 +391,23 @@ func eventToRuntime(event Event) []runtime.StreamEvent {
 	return nil
 }
 
-func marshalMessageInput(role string, text string) InputItem {
+func marshalInputTextMessage(role string, text string) InputItem {
 	return InputItem{
 		Type: "message",
 		Role: role,
 		Content: []InputContent{{
 			Type: "input_text",
+			Text: text,
+		}},
+	}
+}
+
+func marshalOutputTextMessage(role string, text string) InputItem {
+	return InputItem{
+		Type: "message",
+		Role: role,
+		Content: []InputContent{{
+			Type: "output_text",
 			Text: text,
 		}},
 	}

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Perdonus/lavilas-code/internal/apphome"
@@ -14,6 +15,9 @@ import (
 )
 
 const remoteCatalogRefreshTTL = 10 * time.Minute
+const remoteCatalogRefreshFailureCooldown = 90 * time.Second
+
+var remoteCatalogRefreshFailures sync.Map
 
 type remoteCatalogTarget struct {
 	ProviderID   string
@@ -52,6 +56,9 @@ func shouldAttemptLiveCatalogRefresh(ctx RuntimeContext, snapshot Snapshot) bool
 	if strings.TrimSpace(ctx.ProviderID) == "" {
 		return false
 	}
+	if refreshBlockedByFailureCooldown(remoteCatalogRefreshKey(ctx, snapshot)) {
+		return false
+	}
 	if len(snapshot.Models) == 0 {
 		return true
 	}
@@ -62,6 +69,7 @@ func shouldAttemptLiveCatalogRefresh(ctx RuntimeContext, snapshot Snapshot) bool
 }
 
 func refreshRuntimeCatalogSnapshot(config state.Config, ctx RuntimeContext, codexHome string, current Snapshot) (Snapshot, bool) {
+	refreshKey := remoteCatalogRefreshKey(ctx, current)
 	target, ok := resolveRemoteCatalogTarget(config, ctx, codexHome)
 	if !ok {
 		return Snapshot{}, false
@@ -72,6 +80,7 @@ func refreshRuntimeCatalogSnapshot(config state.Config, ctx RuntimeContext, code
 	}
 	models, etag, ok := fetchRemoteCatalogModels(endpoint, target, current)
 	if !ok || len(models) == 0 {
+		rememberRemoteCatalogRefreshFailure(refreshKey)
 		return Snapshot{}, false
 	}
 
@@ -89,7 +98,57 @@ func refreshRuntimeCatalogSnapshot(config state.Config, ctx RuntimeContext, code
 	case strings.TrimSpace(ctx.SidecarPath) != "":
 		_ = SaveSnapshot(ctx.SidecarPath, snapshot)
 	}
+	clearRemoteCatalogRefreshFailure(refreshKey)
 	return snapshot, true
+}
+
+func remoteCatalogRefreshKey(ctx RuntimeContext, snapshot Snapshot) string {
+	return firstNonEmptyTrimmed(
+		ctx.SidecarPath,
+		ctx.ProfileName,
+		ctx.ProviderID,
+		ctx.ProviderName,
+		snapshot.ProfileName,
+		snapshot.ProviderID,
+		snapshot.ProviderName,
+	)
+}
+
+func refreshBlockedByFailureCooldown(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	raw, ok := remoteCatalogRefreshFailures.Load(key)
+	if !ok {
+		return false
+	}
+	attemptedAt, ok := raw.(time.Time)
+	if !ok {
+		remoteCatalogRefreshFailures.Delete(key)
+		return false
+	}
+	if time.Since(attemptedAt) >= remoteCatalogRefreshFailureCooldown {
+		remoteCatalogRefreshFailures.Delete(key)
+		return false
+	}
+	return true
+}
+
+func rememberRemoteCatalogRefreshFailure(key string) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return
+	}
+	remoteCatalogRefreshFailures.Store(key, time.Now().UTC())
+}
+
+func clearRemoteCatalogRefreshFailure(key string) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return
+	}
+	remoteCatalogRefreshFailures.Delete(key)
 }
 
 func resolveRemoteCatalogTarget(config state.Config, ctx RuntimeContext, codexHome string) (remoteCatalogTarget, bool) {
@@ -101,7 +160,7 @@ func resolveRemoteCatalogTarget(config state.Config, ctx RuntimeContext, codexHo
 	headers := make(http.Header)
 
 	if ctx.HasProvider {
-		providerName = firstNonEmptyTrimmed(ctx.Provider.Name, providerName)
+		providerName = firstNonEmptyTrimmed(ctx.Provider.DisplayName(), ctx.Provider.Name, providerName)
 		if displayID := NormalizeProviderID(ctx.Provider.DisplayName()); displayID != "" {
 			providerID = displayID
 		}

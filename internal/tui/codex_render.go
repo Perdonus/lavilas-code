@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Perdonus/lavilas-code/internal/apphome"
 	"github.com/Perdonus/lavilas-code/internal/modelcatalog"
 	appstate "github.com/Perdonus/lavilas-code/internal/state"
 	"github.com/Perdonus/lavilas-code/internal/version"
@@ -372,14 +371,24 @@ func (m *Model) paletteSubtitle() string {
 	prefix := commandPrefix(m.layout.SettingsPath())
 	switch m.state.Palette.Mode {
 	case PaletteModeModelCatalog:
-		config, err := loadConfigOptional(m.layout.ConfigPath())
-		if err == nil {
-			ctx, resolveErr := modelcatalog.ResolveRuntimeContext(config, apphome.CodexHome(), "", "")
-			if resolveErr == nil {
-				return fmt.Sprintf("%s · %s", firstNonEmpty(strings.TrimSpace(ctx.ProviderName), strings.TrimSpace(m.state.Provider)), ctx.ProviderID)
+		providerName := firstNonEmpty(strings.TrimSpace(m.state.Provider), localizedUnsetTUI(m.language))
+		providerID := modelcatalog.NormalizeProviderID(providerName)
+		for _, item := range m.state.Palette.Items {
+			if item.Key != "model.catalog.entry" {
+				continue
 			}
+			if _, valueProviderName := splitModelCatalogValue(item.Value); strings.TrimSpace(valueProviderName) != "" {
+				providerName = strings.TrimSpace(valueProviderName)
+			}
+			if metaParts := strings.Fields(strings.TrimSpace(item.Meta)); len(metaParts) > 0 {
+				providerID = strings.ToLower(strings.TrimSpace(metaParts[0]))
+			}
+			break
 		}
-		return firstNonEmpty(strings.TrimSpace(m.state.Provider), localizedUnsetTUI(m.language))
+		if providerID == "" {
+			providerID = localizedUnsetTUI(m.language)
+		}
+		return fmt.Sprintf("%s · %s", providerName, providerID)
 	case PaletteModeProfiles:
 		if m.language == "ru" {
 			return fmt.Sprintf("Папка профилей: %s. Быстрый вызов: %sprofiles", m.layout.ProfilesDir(), prefix)

@@ -40,7 +40,7 @@ func (m *Model) openModelPickerPalette(pushCurrent bool) tea.Cmd {
 
 	presets := modelcatalog.EffectivePresetChoices(ctx.Catalog, settings, ctx.ProviderID)
 	if !settings.ModelPresets.Enabled || len(presets) == 0 {
-		return m.openAllModelsPalette(pushCurrent)
+		return m.openAllModelsPaletteFromContext(config, ctx, pushCurrent)
 	}
 
 	items := make([]PaletteItem, 0, len(presets)+1)
@@ -101,7 +101,7 @@ func (m *Model) reopenModelPickerPalette() tea.Cmd {
 
 	presets := modelcatalog.EffectivePresetChoices(ctx.Catalog, settings, ctx.ProviderID)
 	if !settings.ModelPresets.Enabled || len(presets) == 0 {
-		return m.reopenAllModelsPalette()
+		return m.reopenAllModelsPaletteFromContext(config, ctx)
 	}
 
 	items := make([]PaletteItem, 0, len(presets)+1)
@@ -148,6 +148,10 @@ func (m *Model) openAllModelsPalette(pushCurrent bool) tea.Cmd {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load provider catalog", "Не удалось загрузить каталог провайдера"), err)
 		return nil
 	}
+	return m.openAllModelsPaletteFromContext(config, ctx, pushCurrent)
+}
+
+func (m *Model) openAllModelsPaletteFromContext(config appstate.Config, ctx modelcatalog.RuntimeContext, pushCurrent bool) tea.Cmd {
 	models := ctx.Catalog.Models()
 	if len(models) == 0 {
 		m.state.Footer = m.localize("No models found for the active provider", "Для активного провайдера модели не найдены")
@@ -222,6 +226,10 @@ func (m *Model) reopenAllModelsPalette() tea.Cmd {
 		m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Failed to load provider catalog", "Не удалось загрузить каталог провайдера"), err)
 		return nil
 	}
+	return m.reopenAllModelsPaletteFromContext(config, ctx)
+}
+
+func (m *Model) reopenAllModelsPaletteFromContext(config appstate.Config, ctx modelcatalog.RuntimeContext) tea.Cmd {
 	models := ctx.Catalog.Models()
 	if len(models) == 0 {
 		m.state.Footer = m.localize("No models found for the active provider", "Для активного провайдера модели не найдены")

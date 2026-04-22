@@ -99,6 +99,17 @@ func MarshalInputText(role string, text string) InputItem {
 	}
 }
 
+func MarshalOutputText(role string, text string) InputItem {
+	return InputItem{
+		Type: "message",
+		Role: role,
+		Content: []InputContent{{
+			Type: "output_text",
+			Text: text,
+		}},
+	}
+}
+
 func (r Response) OutputText() string {
 	var parts []string
 	for _, item := range r.Output {
