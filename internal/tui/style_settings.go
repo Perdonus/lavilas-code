@@ -309,14 +309,6 @@ func applyColorAndFormats(style lipgloss.Style, rawChoice string, fallbackPreset
 }
 
 func applyTextFormats(style lipgloss.Style, formats appstate.TextFormats) lipgloss.Style {
-	if formats.Bold {
-		style = emphasizeForeground(style, 0.82)
-		style = style.Bold(true)
-	}
-	if formats.Italic {
-		style = italicizeForeground(style)
-		style = style.Italic(true)
-	}
 	if formats.Underlined {
 		style = style.Underline(true)
 	}

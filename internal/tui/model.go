@@ -887,6 +887,8 @@ func (m *Model) submitInput() tea.Cmd {
 		return m.dispatchSlash(draft, prefix)
 	}
 	if m.state.Busy {
+		m.appendTranscript("system", m.localize("The current turn is still running. Wait for it to finish before sending the next prompt.", "Текущий ход ещё выполняется. Дождитесь завершения перед следующим запросом."))
+		m.refreshViewport()
 		return nil
 	}
 	m.input.Reset()
@@ -1511,7 +1513,7 @@ func (m *Model) customizationFormattingTargetItems() []PaletteItem {
 	}
 	formats := popupFormatTargetValue(settings, target)
 	items := []PaletteItem{m.paletteBackItem()}
-	for _, code := range []string{"bold", "italic", "underlined", "crossed_out"} {
+	for _, code := range []string{"underlined", "crossed_out"} {
 		label := formatCodeLabel(code, m.language)
 		items = append(items, PaletteItem{
 			Key:                "customization.format.option",
@@ -1807,12 +1809,9 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec, args []string)
 		}
 		return nil
 	case PaletteActionShowStatus:
-		m.state.Footer = m.localize("Status opened", "Статус открыт")
 		m.updateStatus()
-		return m.openPaletteMode(PaletteModeStatus, m.state.Palette.Visible)
-	case PaletteActionShowHelp:
-		m.appendTranscript("system", m.helpText())
-		m.state.Footer = m.localize("Help opened", "Открыта помощь")
+		m.appendTranscript("card", m.renderStatusCardInline())
+		m.refreshViewport()
 		if m.state.Palette.Visible {
 			return m.closePalette()
 		}
@@ -1947,9 +1946,20 @@ func (m *Model) executeInlinePermissions(args []string) tea.Cmd {
 
 func (m *Model) togglePalette() tea.Cmd {
 	if m.state.Palette.Visible {
+		if m.isInlineCommandPaletteActive() {
+			m.input.Reset()
+			m.state.InputDraft = ""
+			m.dismissInlinePalette()
+			return m.setFocus(FocusInput)
+		}
 		return m.closePalette()
 	}
-	return m.openPaletteMode(PaletteModeRoot, false)
+	prefix := commandPrefix(m.layout.SettingsPath())
+	m.state.Focus = FocusInput
+	m.input.SetValue(prefix)
+	m.state.InputDraft = prefix
+	m.syncInlinePaletteWithDraft()
+	return m.setFocus(FocusInput)
 }
 
 func (m *Model) closePalette() tea.Cmd {

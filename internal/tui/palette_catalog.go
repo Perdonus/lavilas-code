@@ -254,47 +254,6 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			ShowInHelp:        true,
 		},
 		{
-			Key:               "help",
-			PresentationOrder: 110,
-			English: PaletteCommandLocale{
-				Slash:       "help",
-				Title:       "Help",
-				Description: "Show keyboard and slash commands",
-				Aliases:     []string{"?"},
-				Keywords:    []string{"help", "keys", "commands"},
-			},
-			Russian: PaletteCommandLocale{
-				Slash:       "помощь",
-				Title:       "Помощь",
-				Description: "Показать клавиши и слэш-команды",
-				Aliases:     []string{"?"},
-				Keywords:    []string{"помощь", "клавиши", "команды"},
-			},
-			Action:     PaletteActionShowHelp,
-			AvailableDuringTask: true,
-			ShowInRoot: true,
-			ShowInHelp: true,
-		},
-		{
-			Key:               "palette",
-			PresentationOrder: 130,
-			English: PaletteCommandLocale{
-				Slash:       "palette",
-				Title:       "Palette",
-				Description: "Open the command palette",
-				Keywords:    []string{"palette", "menu", "commands"},
-			},
-			Russian: PaletteCommandLocale{
-				Slash:       "палитра",
-				Title:       "Палитра",
-				Description: "Открыть палитру команд",
-				Keywords:    []string{"палитра", "меню", "команды"},
-			},
-			Action:     PaletteActionOpenPalette,
-			AvailableDuringTask: true,
-			ShowInHelp: true,
-		},
-		{
 			Key:               "exit",
 			PresentationOrder: 120,
 			English: PaletteCommandLocale{

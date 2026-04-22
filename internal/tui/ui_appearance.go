@@ -321,10 +321,6 @@ func popupFormatTargetValue(settings appstate.Settings, target popupFormatTarget
 
 func formatCodeLabel(code string, language commandcatalog.CatalogLanguage) string {
 	switch code {
-	case "bold":
-		return localizedTextTUI(language, "Bold", "Жирный")
-	case "italic":
-		return localizedTextTUI(language, "Italic", "Курсив")
 	case "underlined":
 		return localizedTextTUI(language, "Underlined", "Подчёркнутый")
 	case "crossed_out":
@@ -339,12 +335,6 @@ func renderFormatChoiceLabel(code string, language commandcatalog.CatalogLanguag
 	preview := lipgloss.NewStyle().Foreground(lipgloss.Color(previewFormatLabelHex()))
 	prefix := ""
 	switch code {
-	case "bold":
-		preview = applyTextFormats(preview, appstate.TextFormats{Bold: true})
-		prefix = "B "
-	case "italic":
-		preview = applyTextFormats(preview, appstate.TextFormats{Italic: true})
-		prefix = "/ "
 	case "underlined":
 		preview = applyTextFormats(preview, appstate.TextFormats{Underlined: true})
 		prefix = "_ "
@@ -356,8 +346,8 @@ func renderFormatChoiceLabel(code string, language commandcatalog.CatalogLanguag
 }
 
 func formatValueSummary(formats appstate.TextFormats, language commandcatalog.CatalogLanguage) string {
-	labels := make([]string, 0, 4)
-	for _, code := range []string{"bold", "italic", "underlined", "crossed_out"} {
+	labels := make([]string, 0, 2)
+	for _, code := range []string{"underlined", "crossed_out"} {
 		if formats.Contains(code) {
 			labels = append(labels, formatCodeLabel(code, language))
 		}

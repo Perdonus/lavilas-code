@@ -25,8 +25,6 @@ func (m *Model) renderCodexScreen() string {
 	switch {
 	case m.state.Focus == FocusPalette && m.isSessionPickerMode():
 		return m.styles.app.Render(m.renderSessionPickerScreen())
-	case m.state.Focus == FocusPalette && m.state.Palette.Visible && m.state.Palette.Mode == PaletteModeStatus:
-		return m.styles.app.Render(m.renderStatusScreen())
 	case m.state.Focus == FocusPalette && m.state.Palette.Visible:
 		return m.styles.app.Render(m.renderPaletteModalScreen())
 	}
@@ -154,16 +152,9 @@ func (m *Model) headerReasoningLabel() string {
 
 func (m *Model) renderComposerPane() string {
 	meta := m.renderComposerMeta()
-	footer := strings.TrimSpace(m.state.Footer)
-	if footer == "" {
-		footer = m.localize("? for hints", "? для подсказок")
-	}
 	parts := []string{m.input.View()}
 	if strings.TrimSpace(meta) != "" {
 		parts = append(parts, m.styles.muted.Render(meta))
-	}
-	if footer != "" {
-		parts = append(parts, m.styles.muted.Render("  "+footer))
 	}
 	return strings.Join(parts, "\n")
 }

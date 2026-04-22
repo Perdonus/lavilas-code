@@ -85,9 +85,14 @@ func ResolveRuntimeContext(config state.Config, codexHome, profileName, provider
 	if ctx.ProviderName == "" && ctx.HasProfile {
 		ctx.ProviderName = strings.TrimSpace(ctx.Profile.EffectiveProviderName())
 	}
+	if ctx.ProviderName == "" {
+		ctx.ProviderName = "openai"
+	}
 	ctx.ProviderID = NormalizeProviderID(ctx.ProviderName)
-	if ctx.ProviderID == "" && ctx.HasProvider {
-		ctx.ProviderID = NormalizeProviderID(ctx.Provider.DisplayName())
+	if ctx.HasProvider {
+		if providerID := NormalizeProviderID(ctx.Provider.DisplayName()); providerID != "" {
+			ctx.ProviderID = providerID
+		}
 	}
 
 	var snapshot Snapshot
@@ -104,10 +109,20 @@ func ResolveRuntimeContext(config state.Config, codexHome, profileName, provider
 			return RuntimeContext{}, err
 		}
 		ctx.SidecarFound = false
-		return ctx, nil
+		snapshot = Snapshot{}
+	} else {
+		ctx.SidecarFound = true
 	}
 
-	ctx.SidecarFound = true
+	if shouldAttemptLiveCatalogRefresh(ctx, snapshot) {
+		if refreshed, ok := refreshRuntimeCatalogSnapshot(config, ctx, codexHome, snapshot); ok {
+			snapshot = refreshed
+			if strings.TrimSpace(ctx.SidecarPath) != "" {
+				ctx.SidecarFound = true
+			}
+		}
+	}
+
 	if snapshot.ProfileName == "" {
 		snapshot.ProfileName = ctx.ProfileName
 	}

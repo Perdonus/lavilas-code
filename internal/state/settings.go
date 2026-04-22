@@ -80,7 +80,7 @@ type TextFormats struct {
 }
 
 func (f TextFormats) IsEmpty() bool {
-	return !f.Bold && !f.Italic && !f.Underlined && !f.CrossedOut
+	return !f.Underlined && !f.CrossedOut
 }
 
 func (f TextFormats) Contains(code string) bool {
@@ -113,13 +113,7 @@ func (f TextFormats) Toggle(code string) TextFormats {
 }
 
 func (f TextFormats) SettingValue() []string {
-	values := make([]string, 0, 4)
-	if f.Bold {
-		values = append(values, "bold")
-	}
-	if f.Italic {
-		values = append(values, "italic")
-	}
+	values := make([]string, 0, 2)
 	if f.Underlined {
 		values = append(values, "underlined")
 	}
@@ -176,7 +170,7 @@ func DefaultSettings() Settings {
 			Fill:   true,
 			Color:  "light",
 		},
-		ModelPresets: ModelPresetSettings{Enabled: true},
+		ModelPresets: ModelPresetSettings{Enabled: false},
 		ToolPolicy:   cloneToolPolicy(tooling.DefaultToolPolicy()),
 		Extras:       map[string]json.RawMessage{},
 	}
@@ -269,7 +263,7 @@ func ParseSettings(data []byte) (Settings, error) {
 		listSecondaryFormats = legacyListFormats
 	}
 
-	modelPresets := ModelPresetSettings{Enabled: true}
+	modelPresets := ModelPresetSettings{Enabled: false}
 	if rawValue, ok := raw["model_presets"]; ok {
 		modelPresets = parseModelPresets(rawValue)
 	} else {
@@ -671,7 +665,7 @@ func parseModelPresets(rawValue json.RawMessage) ModelPresetSettings {
 		Enabled   *bool                      `json:"enabled"`
 		Providers map[string]json.RawMessage `json:"providers"`
 	}
-	settings := ModelPresetSettings{Enabled: true}
+	settings := ModelPresetSettings{Enabled: false}
 	var nested nestedModelPresets
 	if err := json.Unmarshal(rawValue, &nested); err != nil {
 		return parseLegacyModelPresets(rawValue, settings.Enabled)
