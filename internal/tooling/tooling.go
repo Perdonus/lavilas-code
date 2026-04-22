@@ -413,7 +413,7 @@ func runShellCommandSync(ctx context.Context, commandText string, cwd string, ti
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 
 	exitCode := 0
 	if err != nil {
