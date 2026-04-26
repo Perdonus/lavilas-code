@@ -461,6 +461,7 @@ func runShellCommandSync(ctx context.Context, commandText string, cwd string, ti
 		"tool":             "run_shell_command",
 		"cmd":              commandText,
 		"cwd":              cwd,
+		"running":          false,
 		"exit_code":        exitCode,
 		"output":           joinCommandOutput(stdoutText, stderrText),
 		"stdout":           stdoutText,

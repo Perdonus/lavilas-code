@@ -27,6 +27,7 @@ type StreamEvent struct {
 	CreatedAt    time.Time
 	ChoiceIndex  int
 	Delta        MessageDelta
+	ReasoningDelta string
 	FinishReason FinishReason
 	Usage        *Usage
 }

@@ -89,6 +89,7 @@ type LiveTurnState struct {
 	Prompt        string
 	Round         int
 	AssistantText string
+	ReasoningText string
 	ToolCalls     []runtimeapi.ToolCall
 	Notes         []string
 	Entries       []TranscriptEntry
@@ -366,6 +367,7 @@ func cloneLiveTurnState(value *LiveTurnState) *LiveTurnState {
 		Prompt:        value.Prompt,
 		Round:         value.Round,
 		AssistantText: value.AssistantText,
+		ReasoningText: value.ReasoningText,
 		ToolCalls:     cloneRuntimeToolCalls(value.ToolCalls),
 		Notes:         cloneStrings(value.Notes),
 		Entries:       cloneTranscriptEntries(value.Entries),

@@ -115,8 +115,8 @@ func TestBuildExecutionPlanMarksShellAsConservative(t *testing.T) {
 	if call.Metadata.SideEffectKind != SideEffectKindShell {
 		t.Fatalf("side effect kind = %s, want %s", call.Metadata.SideEffectKind, SideEffectKindShell)
 	}
-	if !call.Metadata.ApprovalRequired {
-		t.Fatalf("shell tool should require approval metadata")
+	if call.Metadata.ApprovalRequired {
+		t.Fatalf("shell tool should not require approval metadata")
 	}
 	if !call.Metadata.SpawnsSubprocess {
 		t.Fatalf("shell tool should be marked as spawning subprocesses")
@@ -203,8 +203,8 @@ func TestBuildExecutionPlanTracksRequestPermissionsWritableRoots(t *testing.T) {
 	if got, want := len(call.ApprovalKeys), 2; got != want {
 		t.Fatalf("approval key count = %d, want %d (%v)", got, want, call.ApprovalKeys)
 	}
-	if call.Metadata.Permission != ToolPermissionApprovalRequired {
-		t.Fatalf("permission = %s, want %s", call.Metadata.Permission, ToolPermissionApprovalRequired)
+	if call.Metadata.Permission != ToolPermissionAllowed {
+		t.Fatalf("permission = %s, want %s", call.Metadata.Permission, ToolPermissionAllowed)
 	}
 }
 

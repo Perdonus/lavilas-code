@@ -22,6 +22,8 @@ const (
 	PaletteActionClearTranscript PaletteCommandAction = "clear_transcript"
 	PaletteActionShowStatus   PaletteCommandAction = "show_status"
 	PaletteActionShowHelp     PaletteCommandAction = "show_help"
+	PaletteActionShowProcesses PaletteCommandAction = "show_processes"
+	PaletteActionStopProcesses PaletteCommandAction = "stop_processes"
 	PaletteActionQuit         PaletteCommandAction = "quit"
 )
 
@@ -252,6 +254,50 @@ func defaultPaletteCommandSpecs() []PaletteCommandSpec {
 			Action:            PaletteActionShowStatus,
 			ShowInRoot:        true,
 			ShowInHelp:        true,
+		},
+		{
+			Key:               "ps",
+			PresentationOrder: 108,
+			AvailableDuringTask: true,
+			English: PaletteCommandLocale{
+				Slash:       "ps",
+				Title:       "Background Terminals",
+				Description: "Show background terminals",
+				Aliases:     []string{"processes", "jobs"},
+				Keywords:    []string{"background", "terminal", "process", "jobs"},
+			},
+			Russian: PaletteCommandLocale{
+				Slash:       "пс",
+				Title:       "Фоновые терминалы",
+				Description: "Показать фоновые терминалы",
+				Aliases:     []string{"ps", "процессы", "задачи"},
+				Keywords:    []string{"фоновые", "терминалы", "процессы", "задачи"},
+			},
+			Action:     PaletteActionShowProcesses,
+			ShowInRoot: true,
+			ShowInHelp: true,
+		},
+		{
+			Key:               "stop",
+			PresentationOrder: 110,
+			AvailableDuringTask: true,
+			English: PaletteCommandLocale{
+				Slash:       "stop",
+				Title:       "Stop",
+				Description: "Cancel current turn and background terminals",
+				Aliases:     []string{"cancel", "interrupt"},
+				Keywords:    []string{"stop", "cancel", "background", "terminal"},
+			},
+			Russian: PaletteCommandLocale{
+				Slash:       "стоп",
+				Title:       "Стоп",
+				Description: "Прервать ход и фоновые терминалы",
+				Aliases:     []string{"stop", "отмена", "прервать"},
+				Keywords:    []string{"стоп", "остановить", "фоновые", "терминалы"},
+			},
+			Action:     PaletteActionStopProcesses,
+			ShowInRoot: true,
+			ShowInHelp: true,
 		},
 		{
 			Key:               "exit",

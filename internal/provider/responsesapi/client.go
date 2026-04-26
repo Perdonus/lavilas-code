@@ -333,6 +333,14 @@ func (s *streamReader) Close() error {
 
 func (s *streamReader) eventToRuntime(event Event) []runtime.StreamEvent {
 	switch event.Type {
+	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.reasoning.delta", "response.reasoning_summary.delta":
+		if strings.TrimSpace(event.Delta) == "" {
+			return nil
+		}
+		return []runtime.StreamEvent{{
+			Type:           runtime.StreamEventTypeDelta,
+			ReasoningDelta: event.Delta,
+		}}
 	case "response.output_text.delta":
 		if strings.TrimSpace(event.Delta) == "" {
 			return nil

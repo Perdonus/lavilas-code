@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -372,6 +371,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.formPrompt != nil {
 			return m, m.updateFormPrompt(msg)
 		}
+		if msg.String() == "ctrl+c" {
+			return m, m.cancelClearOrQuit()
+		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -384,10 +386,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.isInlineCommandPaletteActive() {
 			switch {
-			case key.Matches(msg, m.keys.Close) && m.state.Busy && m.taskCancel != nil:
-				m.taskCancel()
-				m.state.Footer = m.localize("Cancellation requested", "Запрошена остановка хода")
-				return m, nil
+			case key.Matches(msg, m.keys.Close) && m.state.Focus == FocusInput:
+				return m, m.cancelClearOrQuit()
 			}
 		}
 
@@ -692,6 +692,9 @@ func (m *Model) renderTranscriptContent(width int) string {
 				blocks = append(blocks, block)
 			}
 		}
+		if reasoning := m.renderReasoningText(live.ReasoningText); reasoning != "" {
+			blocks = append(blocks, m.renderTranscriptEntry(TranscriptEntry{Role: "tool", Body: reasoning}, width))
+		}
 		if strings.TrimSpace(live.AssistantText) != "" {
 			blocks = append(blocks, m.renderTranscriptEntry(TranscriptEntry{Role: "assistant", Body: strings.TrimSpace(live.AssistantText)}, width))
 		}
@@ -749,6 +752,9 @@ func (m *Model) renderLiveTurnNotes(live *LiveTurnState) []string {
 	if status := m.liveTurnStatusLine(live); status != "" {
 		notes = append(notes, status)
 	}
+	if status := m.backgroundTerminalStatusLine(); status != "" {
+		notes = append(notes, status)
+	}
 	notes = append(notes, visibleLiveTurnNotes(live, m.language)...)
 	return notes
 }
@@ -768,13 +774,94 @@ func (m *Model) liveTurnStatusLine(live *LiveTurnState) string {
 			elapsed = 0
 		}
 	}
+	label := localizedTextTUI(m.language, "Working", "В работе")
+	if reasoning := m.reasoningStatusLabel(live.ReasoningText); reasoning != "" {
+		label = reasoning
+	}
 	return localizedTextTUI(
 		m.language,
-		"%s Working (%ds • esc to cancel)",
-		"%s В работе (%ds • esc чтобы прервать)",
+		"%s %s (%ds • esc to cancel)",
+		"%s %s (%ds • esc чтобы прервать)",
 		spinner,
+		label,
 		elapsed,
 	)
+}
+
+func (m *Model) renderReasoningText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	return truncateToolPreview(text, 1200)
+}
+
+func (m *Model) reasoningStatusLabel(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.Join(strings.Fields(text), " ")
+	runes := []rune(text)
+	if len(runes) > 72 {
+		return strings.TrimSpace(string(runes[:69])) + "..."
+	}
+	return text
+}
+
+func (m *Model) backgroundTerminalStatusLine() string {
+	count := tooling.ActiveBackgroundShellCount()
+	if count <= 0 {
+		return ""
+	}
+	prefix := commandPrefix(m.layout.SettingsPath())
+	psCommand := "ps"
+	stopCommand := "stop"
+	showLabel := "show"
+	stopLabel := "stop"
+	if m.language == commandcatalog.CatalogLanguageRussian {
+		psCommand = "пс"
+		stopCommand = "стоп"
+		showLabel = "показать"
+		stopLabel = "остановить"
+	}
+	return localizedTextTUI(
+		m.language,
+		"Background terminals: %d · %s%s %s · %s%s %s",
+		"Фоновых терминалов: %d · %s%s %s · %s%s %s",
+		count,
+		prefix,
+		psCommand,
+		showLabel,
+		prefix,
+		stopCommand,
+		stopLabel,
+	)
+}
+
+func (m *Model) renderBackgroundProcesses() string {
+	snapshots := tooling.BackgroundShellSnapshots()
+	if len(snapshots) == 0 {
+		return m.localize("No background terminals.", "Фоновых терминалов нет.")
+	}
+	lines := []string{m.localize("Background terminals", "Фоновые терминалы")}
+	for _, snapshot := range snapshots {
+		status := m.localize("failed", "ошибка")
+		if snapshot.Running {
+			status = m.localize("running", "выполняется")
+		} else if snapshot.TimedOut {
+			status = m.localize("timed out", "таймаут")
+		} else if snapshot.OK {
+			status = m.localize("done", "готово")
+		}
+		line := fmt.Sprintf("└ %s · %s", firstNonEmpty(strings.TrimSpace(snapshot.ProcessID), "-"), status)
+		if cmd := strings.TrimSpace(snapshot.Cmd); cmd != "" {
+			line += " · " + truncateToolPreview(cmd, 96)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) handleInputHistoryNavigation(keyMsg tea.KeyMsg) bool {
@@ -982,15 +1069,33 @@ func (m *Model) submitInput() tea.Cmd {
 	return tea.Batch(m.runPromptCmd(draft), busyTickCmd())
 }
 
+func (m *Model) cancelClearOrQuit() tea.Cmd {
+	if m.state.Busy && m.taskCancel != nil {
+		m.taskCancel()
+		m.state.Footer = m.localize("Cancellation requested", "Запрошена остановка хода")
+		return nil
+	}
+	if strings.TrimSpace(m.input.Value()) != "" || strings.TrimSpace(m.state.InputDraft) != "" {
+		m.input.Reset()
+		m.state.InputDraft = ""
+		if m.isInlineCommandPaletteActive() {
+			m.dismissInlinePalette()
+		}
+		if m.inputHistory != nil {
+			m.inputHistory.syncDraft("")
+		}
+		m.refreshViewport()
+		return nil
+	}
+	return tea.Quit
+}
+
 func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 	history := cloneRuntimeMessages(m.history)
 	options := m.options
 	options.Prompt = prompt
 	options.History = history
 	options.ApprovalStore = m.approvalStore
-	if goruntime.GOOS == "windows" {
-		options.DisableStreaming = true
-	}
 	existingSessionPath := m.state.SessionPath
 	layout := m.layout
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1001,20 +1106,7 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 		progress := newTaskProgressBridge(eventCh)
 		defer progress.Close()
 		options.OnProgress = progress.Handle
-		options.OnApproval = func(ctx context.Context, request tooling.ApprovalRequest) (taskrun.ApprovalDecision, error) {
-			decisionCh := make(chan taskrun.ApprovalDecision, 1)
-			select {
-			case <-ctx.Done():
-				return taskrun.ApprovalDecisionDeny, ctx.Err()
-			case eventCh <- approvalRequestedMsg{Request: request, DecisionCh: decisionCh}:
-			}
-			select {
-			case <-ctx.Done():
-				return taskrun.ApprovalDecisionDeny, ctx.Err()
-			case decision := <-decisionCh:
-				return decision, nil
-			}
-		}
+		options.OnApproval = nil
 		result, err := taskrun.Run(ctx, options)
 		if err != nil {
 			eventCh <- taskFinishedMsg{Prompt: prompt, Err: err}
@@ -1905,6 +1997,22 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec, args []string)
 		m.updateStatus()
 		m.appendTranscript("card", m.renderStatusCardInline())
 		m.refreshViewport()
+		if m.state.Palette.Visible {
+			return m.closePalette()
+		}
+		return nil
+	case PaletteActionShowProcesses:
+		m.appendTranscript("tool", m.renderBackgroundProcesses())
+		if m.state.Palette.Visible {
+			return m.closePalette()
+		}
+		return nil
+	case PaletteActionStopProcesses:
+		if m.taskCancel != nil && m.state.Busy {
+			m.taskCancel()
+		}
+		stopped := tooling.StopAllBackgroundShells()
+		m.appendTranscript("tool", localizedTextTUI(m.language, "Stopped background terminals: %d", "Остановлено фоновых терминалов: %d", stopped))
 		if m.state.Palette.Visible {
 			return m.closePalette()
 		}
@@ -3228,6 +3336,7 @@ func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) {
 		m.state.Footer = m.localize("Running turn...", "Выполняется ход...")
 	case taskrun.ProgressKindAssistantSnapshot:
 		live.AssistantText = update.Snapshot.Text
+		live.ReasoningText = update.Snapshot.Reasoning
 		live.ToolCalls = cloneRuntimeToolCalls(update.Snapshot.ToolCalls)
 	case taskrun.ProgressKindToolPlanned:
 		// Execution batches are internal. User-facing task plans come from update_plan.

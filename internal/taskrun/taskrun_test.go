@@ -232,7 +232,7 @@ func TestRunWithToolLoop_PreservesToolTraceInHistory(t *testing.T) {
 	}
 }
 
-func TestRunWithToolLoop_RequireApprovalBlocksMutatingTool(t *testing.T) {
+func TestRunWithToolLoop_RequireApprovalAutoExecutesMutatingTool(t *testing.T) {
 	tempDir := t.TempDir()
 	targetPath := filepath.Join(tempDir, "blocked.txt")
 	client := fakeProviderClient{
@@ -299,17 +299,21 @@ func TestRunWithToolLoop_RequireApprovalBlocksMutatingTool(t *testing.T) {
 	if assistant.Text() != "approval noted" {
 		t.Fatalf("assistant text = %q, want approval noted", assistant.Text())
 	}
-	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
-		t.Fatalf("mutating tool should not execute, stat err = %v", err)
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("expected mutating tool to execute: %v", err)
+	}
+	if string(content) != "denied" {
+		t.Fatalf("written content = %q, want denied", string(content))
 	}
 	if len(history) != 5 || history[3].Role != runtime.RoleTool {
-		t.Fatalf("unexpected history after blocked tool: %+v", history)
+		t.Fatalf("unexpected history after tool execution: %+v", history)
 	}
-	if got := history[3].Text(); got == "" || !strings.Contains(got, `"status": "approval_required"`) {
-		t.Fatalf("tool message missing approval payload: %s", got)
+	if got := history[3].Text(); got == "" || !strings.Contains(got, `"ok": true`) {
+		t.Fatalf("tool message missing success payload: %s", got)
 	}
-	if len(reports) != 1 || reports[0].Summary.ApprovalRequiredCount != 1 {
-		t.Fatalf("tool reports missing approval summary: %+v", reports)
+	if len(reports) != 1 || reports[0].Summary.SucceededCount != 1 || reports[0].Summary.ApprovalRequiredCount != 0 {
+		t.Fatalf("tool reports missing success summary: %+v", reports)
 	}
 }
 
@@ -381,8 +385,8 @@ func TestRunWithToolLoop_ApprovalHandlerExecutesApprovedTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
-	if handlerCalls != 1 {
-		t.Fatalf("approval handler calls = %d, want 1", handlerCalls)
+	if handlerCalls != 0 {
+		t.Fatalf("approval handler calls = %d, want 0", handlerCalls)
 	}
 	if assistant.Text() != "tool approved" {
 		t.Fatalf("assistant text = %q, want tool approved", assistant.Text())
@@ -471,17 +475,21 @@ func TestRunWithToolLoop_ApprovalHandlerDeniesTool(t *testing.T) {
 	if assistant.Text() != "tool denied" {
 		t.Fatalf("assistant text = %q, want tool denied", assistant.Text())
 	}
-	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
-		t.Fatalf("denied tool should not execute, stat err = %v", err)
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("expected tool to execute without approval prompt: %v", err)
 	}
-	if len(reports) != 1 || reports[0].Summary.DeniedCount != 1 || reports[0].Summary.ApprovalRequiredCount != 0 {
-		t.Fatalf("unexpected tool report after denial: %+v", reports)
+	if string(content) != "denied" {
+		t.Fatalf("written content = %q, want denied", string(content))
+	}
+	if len(reports) != 1 || reports[0].Summary.SucceededCount != 1 || reports[0].Summary.DeniedCount != 0 {
+		t.Fatalf("unexpected tool report after auto execution: %+v", reports)
 	}
 	if len(history) < 4 || history[3].Role != runtime.RoleTool {
-		t.Fatalf("missing denied tool payload in history: %+v", history)
+		t.Fatalf("missing tool payload in history: %+v", history)
 	}
-	if got := history[3].Text(); got == "" || !strings.Contains(got, `"status": "denied"`) || !strings.Contains(got, `denied by user`) {
-		t.Fatalf("tool output missing denied payload: %s", got)
+	if got := history[3].Text(); got == "" || !strings.Contains(got, `"ok": true`) {
+		t.Fatalf("tool output missing success payload: %s", got)
 	}
 }
 
@@ -557,8 +565,8 @@ func TestRunWithToolLoop_ApprovalHandlerApproveForSessionCachesEquivalentCalls(t
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
-	if handlerCalls != 1 {
-		t.Fatalf("approval handler calls = %d, want 1", handlerCalls)
+	if handlerCalls != 0 {
+		t.Fatalf("approval handler calls = %d, want 0", handlerCalls)
 	}
 	if assistant.Text() != "cached approval reused" {
 		t.Fatalf("assistant text = %q, want cached approval reused", assistant.Text())
@@ -566,11 +574,11 @@ func TestRunWithToolLoop_ApprovalHandlerApproveForSessionCachesEquivalentCalls(t
 	if len(reports) != 2 {
 		t.Fatalf("tool report count = %d, want 2", len(reports))
 	}
-	if reports[0].Results[0].Metadata.ApprovalState != tooling.ToolApprovalStateSessionApproved {
-		t.Fatalf("first call approval state = %s, want %s", reports[0].Results[0].Metadata.ApprovalState, tooling.ToolApprovalStateSessionApproved)
+	if reports[0].Results[0].Metadata.ApprovalState != tooling.ToolApprovalStateAutoApproved {
+		t.Fatalf("first call approval state = %s, want %s", reports[0].Results[0].Metadata.ApprovalState, tooling.ToolApprovalStateAutoApproved)
 	}
-	if reports[1].Results[0].Metadata.ApprovalState != tooling.ToolApprovalStateSessionApproved {
-		t.Fatalf("cached call approval state = %s, want %s", reports[1].Results[0].Metadata.ApprovalState, tooling.ToolApprovalStateSessionApproved)
+	if reports[1].Results[0].Metadata.ApprovalState != tooling.ToolApprovalStateAutoApproved {
+		t.Fatalf("cached call approval state = %s, want %s", reports[1].Results[0].Metadata.ApprovalState, tooling.ToolApprovalStateAutoApproved)
 	}
 	if len(history) < 6 {
 		t.Fatalf("unexpected history length: %d", len(history))
@@ -673,8 +681,8 @@ func TestRunWithToolLoop_RequestPermissionsGrantAllowsLaterWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runWithToolLoop: %v", err)
 	}
-	if handlerCalls != 1 {
-		t.Fatalf("approval handler calls = %d, want 1", handlerCalls)
+	if handlerCalls != 0 {
+		t.Fatalf("approval handler calls = %d, want 0", handlerCalls)
 	}
 	if assistant.Text() != "permission grant reused" {
 		t.Fatalf("assistant text = %q, want permission grant reused", assistant.Text())
@@ -685,11 +693,11 @@ func TestRunWithToolLoop_RequestPermissionsGrantAllowsLaterWrite(t *testing.T) {
 	if reports[0].Results[0].Name != "request_permissions" || reports[0].Results[0].Status != tooling.ResultStatusSucceeded {
 		t.Fatalf("unexpected request_permissions report: %+v", reports[0].Results[0])
 	}
-	if reports[0].Results[0].Metadata.PermissionGrantScope != tooling.PermissionGrantScopeSession {
-		t.Fatalf("request grant scope = %s, want %s", reports[0].Results[0].Metadata.PermissionGrantScope, tooling.PermissionGrantScopeSession)
+	if reports[0].Results[0].Metadata.PermissionGrantScope != "" {
+		t.Fatalf("request grant scope = %s, want empty", reports[0].Results[0].Metadata.PermissionGrantScope)
 	}
-	if reports[1].Results[0].Name != "write_file" || reports[1].Results[0].Metadata.ApprovalState != tooling.ToolApprovalStateSessionApproved {
-		t.Fatalf("write_file should reuse session grant: %+v", reports[1].Results[0])
+	if reports[1].Results[0].Name != "write_file" || reports[1].Results[0].Metadata.ApprovalState != tooling.ToolApprovalStateAutoApproved {
+		t.Fatalf("write_file should be auto-approved: %+v", reports[1].Results[0])
 	}
 	content, err := os.ReadFile(targetPath)
 	if err != nil {

@@ -72,6 +72,58 @@ var activeBackgroundShells = backgroundShellRegistry{
 	processes: make(map[string]*backgroundShellProcess),
 }
 
+func ActiveBackgroundShellCount() int {
+	activeBackgroundShells.mu.Lock()
+	defer activeBackgroundShells.mu.Unlock()
+	activeBackgroundShells.cleanupLocked(time.Now().UTC())
+	count := 0
+	for _, process := range activeBackgroundShells.processes {
+		if process != nil && !process.isFinished() {
+			count++
+		}
+	}
+	return count
+}
+
+func BackgroundShellSnapshots() []shellCommandSnapshot {
+	activeBackgroundShells.mu.Lock()
+	activeBackgroundShells.cleanupLocked(time.Now().UTC())
+	processes := make([]*backgroundShellProcess, 0, len(activeBackgroundShells.processes))
+	for _, process := range activeBackgroundShells.processes {
+		processes = append(processes, process)
+	}
+	activeBackgroundShells.mu.Unlock()
+
+	snapshots := make([]shellCommandSnapshot, 0, len(processes))
+	for _, process := range processes {
+		if process == nil {
+			continue
+		}
+		snapshots = append(snapshots, process.snapshot())
+	}
+	return snapshots
+}
+
+func StopAllBackgroundShells() int {
+	activeBackgroundShells.mu.Lock()
+	activeBackgroundShells.cleanupLocked(time.Now().UTC())
+	processes := make([]*backgroundShellProcess, 0, len(activeBackgroundShells.processes))
+	for _, process := range activeBackgroundShells.processes {
+		processes = append(processes, process)
+	}
+	activeBackgroundShells.mu.Unlock()
+
+	stopped := 0
+	for _, process := range processes {
+		if process == nil || process.isFinished() {
+			continue
+		}
+		process.cancel()
+		stopped++
+	}
+	return stopped
+}
+
 func startBackgroundShellCommand(ctx context.Context, commandText string, cwd string, timeout time.Duration, yieldTimeMs int) string {
 	select {
 	case <-ctx.Done():
@@ -224,6 +276,7 @@ func marshalShellSnapshot(snapshot shellCommandSnapshot) string {
 		"tool":             "run_shell_command",
 		"cmd":              snapshot.Cmd,
 		"cwd":              snapshot.Cwd,
+		"running":          snapshot.Running,
 		"exit_code":        snapshot.ExitCode,
 		"output":           snapshot.Output,
 		"stdout":           snapshot.Stdout,

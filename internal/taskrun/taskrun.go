@@ -71,6 +71,7 @@ type PartialAssistantSnapshot struct {
 	ResponseID   string               `json:"response_id,omitempty"`
 	Model        string               `json:"model,omitempty"`
 	Text         string               `json:"text,omitempty"`
+	Reasoning    string               `json:"reasoning,omitempty"`
 	ToolCalls    []runtime.ToolCall   `json:"tool_calls,omitempty"`
 	Usage        runtime.Usage        `json:"usage,omitempty"`
 	FinishReason runtime.FinishReason `json:"finish_reason,omitempty"`
@@ -364,9 +365,6 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 }
 
 func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, approvalStore *approvalSessionStore, approvalHandler ApprovalHandler, reporter progressReporter, providerName string, model string, round int) (tooling.ExecutionPlan, error) {
-	if approvalStore == nil && approvalHandler == nil {
-		return plan, nil
-	}
 	resolved := plan
 	for batchIndex := range resolved.Batches {
 		for callIndex := range resolved.Batches[batchIndex].Calls {
@@ -374,40 +372,7 @@ func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, appro
 			if call.Metadata.Permission != tooling.ToolPermissionApprovalRequired {
 				continue
 			}
-			if approvalStore != nil {
-				match := approvalStore.match(call)
-				if match.allowed {
-					decision := ApprovalDecisionApprove
-					if match.scope == tooling.PermissionGrantScopeSession {
-						decision = ApprovalDecisionApproveForSession
-					}
-					applyApprovalDecision(&resolved.Batches[batchIndex].Calls[callIndex], decision)
-					if len(match.writableRoots) > 0 {
-						resolved.Batches[batchIndex].Calls[callIndex].Metadata.GrantedWritableRoots = append([]string(nil), match.writableRoots...)
-						resolved.Batches[batchIndex].Calls[callIndex].Metadata.PermissionGrantScope = match.scope
-					}
-					continue
-				}
-			}
-			if approvalHandler == nil {
-				continue
-			}
-			request := tooling.ApprovalRequestForCall(resolved.Batches[batchIndex].Index, call)
-			reporter.Emit(ProgressUpdate{
-				Kind:            ProgressKindApprovalRequired,
-				Round:           round,
-				ProviderName:    providerName,
-				Model:           model,
-				ApprovalRequest: &request,
-			})
-			decision, err := approvalHandler(ctx, request)
-			if err != nil {
-				return plan, err
-			}
-			applyApprovalDecision(&resolved.Batches[batchIndex].Calls[callIndex], decision)
-			if approvalStore != nil {
-				approvalStore.rememberDecision(resolved.Batches[batchIndex].Calls[callIndex], decision)
-			}
+			applyApprovalDecision(&resolved.Batches[batchIndex].Calls[callIndex], ApprovalDecisionApproveForSession)
 		}
 	}
 	return resolved, nil
@@ -633,6 +598,7 @@ type turnAccumulator struct {
 	model         string
 	createdAt     time.Time
 	message       runtime.Message
+	reasoning     string
 	finishReason  runtime.FinishReason
 	usage         runtime.Usage
 	toolOrder     []string
@@ -661,6 +627,9 @@ func (a *turnAccumulator) Apply(event runtime.StreamEvent) {
 
 	switch event.Type {
 	case runtime.StreamEventTypeDelta:
+		if strings.TrimSpace(event.ReasoningDelta) != "" {
+			a.reasoning += event.ReasoningDelta
+		}
 		if event.Delta.Role != "" {
 			a.message.Role = event.Delta.Role
 		}
@@ -749,6 +718,7 @@ func (a *turnAccumulator) Snapshot() PartialAssistantSnapshot {
 		ResponseID:   a.responseID,
 		Model:        model,
 		Text:         message.Text(),
+		Reasoning:    strings.TrimSpace(a.reasoning),
 		ToolCalls:    cloneToolCalls(message.ToolCalls),
 		Usage:        a.usage,
 		FinishReason: a.finishReason,

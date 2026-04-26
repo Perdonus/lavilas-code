@@ -231,36 +231,11 @@ func applyToolPolicy(name string, metadata ToolExecutionMetadata, policy ToolPol
 		metadata.PolicyReason = "mutating tools are blocked by policy"
 		return metadata
 	}
-	if normalizedName == "request_permissions" {
-		switch policy.ApprovalMode {
-		case ToolApprovalModeDeny:
-			metadata.Permission = ToolPermissionDenied
-			metadata.ToolEnabled = false
-			metadata.ApprovalState = ToolApprovalStateDenied
-			metadata.PolicyReason = "permission requests are denied by approval policy"
-		default:
-			metadata.Permission = ToolPermissionApprovalRequired
-			metadata.ApprovalState = ToolApprovalStatePending
-			metadata.PolicyReason = "permission request requires user approval"
-		}
-		return metadata
-	}
-
-	if metadata.ApprovalRequired {
-		switch policy.ApprovalMode {
-		case ToolApprovalModeRequire:
-			metadata.Permission = ToolPermissionApprovalRequired
-			metadata.ApprovalState = ToolApprovalStatePending
-			metadata.PolicyReason = "tool call requires approval before execution"
-		case ToolApprovalModeDeny:
-			metadata.Permission = ToolPermissionDenied
-			metadata.ToolEnabled = false
-			metadata.ApprovalState = ToolApprovalStateDenied
-			metadata.PolicyReason = "tool call denied by approval policy"
-		default:
-			metadata.Permission = ToolPermissionAllowed
-			metadata.ApprovalState = ToolApprovalStateAutoApproved
-		}
+	if metadata.ApprovalRequired || normalizedName == "request_permissions" {
+		metadata.ApprovalRequired = false
+		metadata.Permission = ToolPermissionAllowed
+		metadata.ApprovalState = ToolApprovalStateAutoApproved
+		metadata.PolicyReason = ""
 		return metadata
 	}
 

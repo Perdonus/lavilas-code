@@ -20,6 +20,7 @@ type shellToolOutput struct {
 	ExitCode        *int   `json:"exit_code"`
 	ProcessID       string `json:"process_id"`
 	Status          string `json:"status"`
+	Running         bool   `json:"running"`
 	OK              bool   `json:"ok"`
 	TimedOut        bool   `json:"timed_out"`
 	StdoutTruncated bool   `json:"stdout_truncated"`
@@ -112,9 +113,11 @@ func renderToolResultEntry(language commandcatalog.CatalogLanguage, result *tool
 	if entry := renderPlanUpdateResultEntry(language, result); strings.TrimSpace(entry.Body) != "" {
 		return entry
 	}
+	if entry := renderShellResultEntry(language, result); strings.TrimSpace(entry.Body) != "" {
+		return entry
+	}
 	lines := []string{
-		localizedTextTUI(language, "Tool result", "Результат инструмента"),
-		localizedTextTUI(language, "└ %s · %s", "└ %s · %s", result.Name, localizedToolStatusTUI(language, string(result.Status))),
+		localizedTextTUI(language, "%s · %s", "%s · %s", result.Name, localizedToolStatusTUI(language, string(result.Status))),
 	}
 	if summary := strings.TrimSpace(result.Summary); summary != "" {
 		lines = append(lines, localizedTextTUI(language, "  summary: %s", "  сводка: %s", summary))
@@ -127,6 +130,52 @@ func renderToolResultEntry(language commandcatalog.CatalogLanguage, result *tool
 	}
 	if preview := renderToolOutputPreview(language, result.Name, result.OutputText); preview != "" {
 		lines = append(lines, preview)
+	}
+	return TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}
+}
+
+func renderShellResultEntry(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) TranscriptEntry {
+	if result == nil || !strings.EqualFold(strings.TrimSpace(result.Name), "run_shell_command") {
+		return TranscriptEntry{}
+	}
+	var payload shellToolOutput
+	if json.Unmarshal([]byte(strings.TrimSpace(result.OutputText)), &payload) != nil {
+		return TranscriptEntry{}
+	}
+	cmd := strings.TrimSpace(payload.Cmd)
+	if cmd == "" {
+		cmd = strings.TrimSpace(payload.ProcessID)
+	}
+	if cmd == "" {
+		cmd = "run_shell_command"
+	}
+	status := strings.ToLower(strings.TrimSpace(payload.Status))
+	running := payload.Running || status == "running"
+	title := "Ran " + cmd
+	if running {
+		title = localizedTextTUI(language, "Waiting for background terminal", "Ожидание фонового терминала")
+		if payload.ProcessID != "" {
+			title += " " + payload.ProcessID
+		}
+	}
+	lines := []string{title}
+	if running && strings.TrimSpace(payload.Cmd) != "" {
+		lines = append(lines, "│ "+payload.Cmd)
+	}
+	if cwd := strings.TrimSpace(payload.Cwd); cwd != "" {
+		lines = append(lines, "│ cwd: "+cwd)
+	}
+	output := strings.TrimSpace(payload.Output)
+	if output == "" {
+		output = strings.TrimSpace(joinNonEmpty(payload.Stdout, payload.Stderr))
+	}
+	if output != "" {
+		lines = append(lines, compactToolOutputBlock(truncateToolPreview(output, 4000))...)
+	} else if !running && payload.ExitCode != nil {
+		lines = append(lines, localizedTextTUI(language, "└ exit code: %d", "└ код выхода: %d", *payload.ExitCode))
+	}
+	if err := strings.TrimSpace(payload.Error); err != "" {
+		lines = append(lines, localizedTextTUI(language, "└ error: %s", "└ ошибка: %s", err))
 	}
 	return TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}
 }
@@ -410,6 +459,32 @@ func truncateToolPreview(value string, limit int) string {
 		return value[:limit]
 	}
 	return strings.TrimSpace(value[:limit-14]) + "\n...<truncated>"
+}
+
+func joinNonEmpty(values ...string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func compactToolOutputBlock(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	lines := strings.Split(value, "\n")
+	for index, line := range lines {
+		if index == 0 {
+			lines[index] = "└ " + line
+			continue
+		}
+		lines[index] = "  " + line
+	}
+	return lines
 }
 
 func indentBlock(value string, indent string) string {
