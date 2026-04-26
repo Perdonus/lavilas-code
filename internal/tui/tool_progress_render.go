@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -41,6 +42,53 @@ type updatePlanToolOutput struct {
 	OK          bool                     `json:"ok"`
 	Explanation string                   `json:"explanation"`
 	Plan        []tooling.UpdatePlanStep `json:"plan"`
+}
+
+type listDirectoryToolOutput struct {
+	Tool      string `json:"tool"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path"`
+	Truncated bool   `json:"truncated"`
+	Error     string `json:"error"`
+}
+
+type readFileToolOutput struct {
+	Tool      string `json:"tool"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+	Truncated bool   `json:"truncated"`
+	Error     string `json:"error"`
+}
+
+type searchTextToolOutput struct {
+	Tool      string `json:"tool"`
+	OK        bool   `json:"ok"`
+	Path      string `json:"path"`
+	Query     string `json:"query"`
+	Truncated bool   `json:"truncated"`
+	Error     string `json:"error"`
+}
+
+type writeFileToolOutput struct {
+	Tool  string `json:"tool"`
+	OK    bool   `json:"ok"`
+	Path  string `json:"path"`
+	Bytes int    `json:"bytes"`
+	Error string `json:"error"`
+}
+
+type patchToolOutput struct {
+	Tool           string   `json:"tool"`
+	OK             bool     `json:"ok"`
+	CheckOnly      bool     `json:"check_only"`
+	Paths          []string `json:"paths"`
+	Patch          string   `json:"patch"`
+	PatchTruncated bool     `json:"patch_truncated"`
+	Stdout         string   `json:"stdout"`
+	Stderr         string   `json:"stderr"`
+	Error          string   `json:"error"`
 }
 
 func renderToolPlanEntry(language commandcatalog.CatalogLanguage, plan *tooling.ExecutionPlan) TranscriptEntry {
@@ -116,6 +164,12 @@ func renderToolResultEntry(language commandcatalog.CatalogLanguage, result *tool
 	if entry := renderShellResultEntry(language, result); strings.TrimSpace(entry.Body) != "" {
 		return entry
 	}
+	if entry := renderExploreResultEntry(language, result); strings.TrimSpace(entry.Body) != "" {
+		return entry
+	}
+	if entry := renderEditResultEntry(language, result); strings.TrimSpace(entry.Body) != "" {
+		return entry
+	}
 	lines := []string{
 		localizedTextTUI(language, "%s · %s", "%s · %s", result.Name, localizedToolStatusTUI(language, string(result.Status))),
 	}
@@ -178,6 +232,91 @@ func renderShellResultEntry(language commandcatalog.CatalogLanguage, result *too
 		lines = append(lines, localizedTextTUI(language, "└ error: %s", "└ ошибка: %s", err))
 	}
 	return TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}
+}
+
+func renderExploreResultEntry(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) TranscriptEntry {
+	if result == nil {
+		return TranscriptEntry{}
+	}
+	var action string
+	switch strings.TrimSpace(result.Name) {
+	case "read_file":
+		var payload readFileToolOutput
+		if json.Unmarshal([]byte(strings.TrimSpace(result.OutputText)), &payload) != nil {
+			return TranscriptEntry{}
+		}
+		action = localizedTextTUI(language, "Read %s", "Read %s", compactToolPath(payload.Path))
+	case "search_text":
+		var payload searchTextToolOutput
+		if json.Unmarshal([]byte(strings.TrimSpace(result.OutputText)), &payload) != nil {
+			return TranscriptEntry{}
+		}
+		target := compactToolPath(payload.Path)
+		if target == "" || target == "." {
+			target = localizedTextTUI(language, ".", ".")
+		}
+		action = localizedTextTUI(language, "Search %s in %s", "Search %s in %s", strings.TrimSpace(payload.Query), target)
+	case "list_directory":
+		var payload listDirectoryToolOutput
+		if json.Unmarshal([]byte(strings.TrimSpace(result.OutputText)), &payload) != nil {
+			return TranscriptEntry{}
+		}
+		action = localizedTextTUI(language, "List %s", "List %s", compactToolPath(payload.Path))
+	default:
+		return TranscriptEntry{}
+	}
+	if strings.TrimSpace(action) == "" {
+		return TranscriptEntry{}
+	}
+	return TranscriptEntry{Role: "tool", Body: localizedTextTUI(language, "Explored", "Explored") + "\n└ " + action}
+}
+
+func renderEditResultEntry(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) TranscriptEntry {
+	if result == nil {
+		return TranscriptEntry{}
+	}
+	switch strings.TrimSpace(result.Name) {
+	case "write_file":
+		var payload writeFileToolOutput
+		if json.Unmarshal([]byte(strings.TrimSpace(result.OutputText)), &payload) != nil {
+			return TranscriptEntry{}
+		}
+		if !payload.OK {
+			return TranscriptEntry{Role: "tool", Body: localizedTextTUI(language, "Edit failed %s", "Ошибка правки %s", compactToolPath(payload.Path))}
+		}
+		title := localizedTextTUI(language, "Edited %s", "Edited %s", compactToolPath(payload.Path))
+		if payload.Bytes > 0 {
+			title += fmt.Sprintf("\n└ bytes=%d", payload.Bytes)
+		}
+		return TranscriptEntry{Role: "tool", Body: title}
+	case "apply_patch":
+		var payload patchToolOutput
+		if json.Unmarshal([]byte(strings.TrimSpace(result.OutputText)), &payload) != nil {
+			return TranscriptEntry{}
+		}
+		path := localizedTextTUI(language, "workspace", "workspace")
+		if len(payload.Paths) > 0 {
+			path = strings.Join(compactToolPaths(payload.Paths), ", ")
+		}
+		added, removed := countPatchLines(payload.Patch)
+		title := localizedTextTUI(language, "Edited %s", "Edited %s", path)
+		if added > 0 || removed > 0 {
+			title += fmt.Sprintf(" (+%d -%d)", added, removed)
+		}
+		lines := []string{title}
+		if patch := renderPatchPreview(payload.Patch); patch != "" {
+			lines = append(lines, patch)
+		}
+		if out := strings.TrimSpace(joinNonEmpty(payload.Stdout, payload.Stderr)); out != "" {
+			lines = append(lines, compactToolOutputBlock(truncateToolPreview(out, 1200))...)
+		}
+		if err := strings.TrimSpace(payload.Error); err != "" {
+			lines = append(lines, localizedTextTUI(language, "└ error: %s", "└ ошибка: %s", err))
+		}
+		return TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}
+	default:
+		return TranscriptEntry{}
+	}
 }
 
 func renderPlanUpdateResultEntry(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) TranscriptEntry {
@@ -485,6 +624,68 @@ func compactToolOutputBlock(value string) []string {
 		lines[index] = "  " + line
 	}
 	return lines
+}
+
+func compactToolPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "."
+	}
+	path = strings.ReplaceAll(path, "\\", "/")
+	parts := strings.Split(path, "/")
+	if len(parts) <= 3 {
+		return strings.TrimSpace(path)
+	}
+	return strings.Join(parts[len(parts)-3:], "/")
+}
+
+func compactToolPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if compact := compactToolPath(path); compact != "" {
+			out = append(out, compact)
+		}
+	}
+	return out
+}
+
+func countPatchLines(patch string) (int, int) {
+	added := 0
+	removed := 0
+	for _, line := range strings.Split(patch, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added++
+		case strings.HasPrefix(line, "-"):
+			removed++
+		}
+	}
+	return added, removed
+}
+
+func renderPatchPreview(patch string) string {
+	patch = strings.TrimSpace(patch)
+	if patch == "" {
+		return ""
+	}
+	lines := strings.Split(patch, "\n")
+	rendered := make([]string, 0, minInt(len(lines), 24))
+	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		rendered = append(rendered, "    "+line)
+		if len(rendered) >= 24 {
+			rendered = append(rendered, "    ⋮")
+			break
+		}
+	}
+	return strings.Join(rendered, "\n")
 }
 
 func indentBlock(value string, indent string) string {

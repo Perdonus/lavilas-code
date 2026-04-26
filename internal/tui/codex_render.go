@@ -28,7 +28,6 @@ func (m *Model) renderCodexScreen() string {
 		return m.styles.app.Render(m.renderPaletteModalScreen())
 	}
 
-	conversation := m.renderConversationArea()
 	composer := m.renderComposerPane()
 	popup := ""
 	if m.isInlineCommandPaletteActive() {
@@ -46,9 +45,6 @@ func (m *Model) renderCodexScreen() string {
 	}
 
 	parts := make([]string, 0, len(aux)+3)
-	if strings.TrimSpace(conversation) != "" {
-		parts = append(parts, conversation)
-	}
 	parts = append(parts, aux...)
 	if popup != "" {
 		parts = append(parts, popup)

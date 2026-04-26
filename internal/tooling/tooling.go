@@ -701,6 +701,7 @@ func applyPatch(ctx context.Context, args patchArgs) string {
 	if patchText == "" {
 		return marshalResult(map[string]any{"ok": false, "tool": "apply_patch", "error": "patch is required"})
 	}
+	patchPreview, patchTruncated := clampString(patchText, maxToolOutputChars)
 	commandCtx, cancel := context.WithTimeout(ctx, defaultShellTimeout)
 	defer cancel()
 	commandArgs := []string{"apply", "--whitespace=nowarn"}
@@ -721,6 +722,9 @@ func applyPatch(ctx context.Context, args patchArgs) string {
 		"ok":               err == nil,
 		"tool":             "apply_patch",
 		"check_only":       args.CheckOnly,
+		"paths":            patchTouchedPaths(patchText),
+		"patch":            patchPreview,
+		"patch_truncated":  patchTruncated,
 		"stdout":           stdoutText,
 		"stderr":           stderrText,
 		"stdout_truncated": stdoutTruncated,

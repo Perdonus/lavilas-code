@@ -136,6 +136,7 @@ type Model struct {
 	customizationFormatTarget     popupFormatTarget
 	taskCancel                    context.CancelFunc
 	inputHistory                  *inputHistory
+	terminalPrintedInitial       bool
 }
 
 var composerPlaceholders = map[commandcatalog.CatalogLanguage][]string{
@@ -285,6 +286,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
+		if !m.terminalPrintedInitial {
+			m.terminalPrintedInitial = true
+			return m, m.printFullTranscriptCmd()
+		}
 		return m, nil
 	case taskFinishedMsg:
 		m.state.Busy = false
@@ -293,17 +298,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskCancel = nil
 		m.approval = nil
 		if msg.Err != nil {
-			m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), msg.Err))
+			cmd := m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), msg.Err))
 			m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), msg.Err)
 			m.updateStatus()
-			return m, nil
+			return m, cmd
 		}
-		m.applyTaskResult(msg)
-		return m, nil
+		return m, m.applyTaskResult(msg)
 	case taskEventMsg:
+		var cmds []tea.Cmd
 		switch inner := msg.Inner.(type) {
 		case taskProgressMsg:
-			m.applyTaskProgress(inner.Update)
+			if cmd := m.applyTaskProgress(inner.Update); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		case taskFinishedMsg:
 			m.state.Busy = false
 			m.flushLiveTurnEntries()
@@ -311,17 +318,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.taskCancel = nil
 			m.approval = nil
 			if inner.Err != nil {
-				m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), inner.Err))
+				if cmd := m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), inner.Err)); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 				m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), inner.Err)
 			} else {
-				m.applyTaskResult(inner)
+				if cmd := m.applyTaskResult(inner); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 			m.updateStatus()
 		}
 		if msg.Next != nil {
-			return m, waitTaskEventCmd(msg.Next)
+			cmds = append(cmds, waitTaskEventCmd(msg.Next))
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 	case busyTickMsg:
 		if !m.state.Busy || m.state.LiveTurn == nil {
 			return m, nil
@@ -331,10 +342,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, busyTickCmd()
 	case sessionLoadedMsg:
 		if msg.Err != nil {
-			m.appendTranscript("system", msg.Err.Error())
+			cmd := m.appendTranscript("system", msg.Err.Error())
 			m.state.Footer = msg.Err.Error()
 			m.updateStatus()
-			return m, nil
+			return m, cmd
 		}
 		if msg.StartFresh {
 			m.resetConversation()
@@ -343,18 +354,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.beginCWDPrompt(msg) {
 			return m, nil
 		}
-		m.applyLoadedSession(msg)
-		return m, m.consumeStartupPrompt()
+		return m, tea.Batch(m.applyLoadedSession(msg), m.consumeStartupPrompt())
 	case approvalRequestedMsg:
 		m.approval = &approvalPromptState{Request: msg.Request, DecisionCh: msg.DecisionCh}
 		m.state.Footer = m.localize("Approval required", "Нужно подтверждение")
 		return m, nil
 	case paletteItemsMsg:
 		if msg.Err != nil {
-			m.appendTranscript("system", msg.Err.Error())
+			cmd := m.appendTranscript("system", msg.Err.Error())
 			m.state.Footer = msg.Err.Error()
 			m.updateStatus()
-			return m, nil
+			return m, cmd
 		}
 		if msg.StartFresh {
 			m.resetConversation()
@@ -1051,14 +1061,12 @@ func (m *Model) submitInput() tea.Cmd {
 		return m.dispatchSlash(draft, prefix)
 	}
 	if m.state.Busy {
-		m.appendTranscript("system", m.localize("The current turn is still running. Wait for it to finish before sending the next prompt.", "Текущий ход ещё выполняется. Дождитесь завершения перед следующим запросом."))
-		m.refreshViewport()
-		return nil
+		return m.appendTranscript("system", m.localize("The current turn is still running. Wait for it to finish before sending the next prompt.", "Текущий ход ещё выполняется. Дождитесь завершения перед следующим запросом."))
 	}
 	m.input.Reset()
 	m.state.InputDraft = ""
 
-	m.appendTranscript("user", draft)
+	printUser := m.appendTranscript("user", draft)
 	m.state.Busy = true
 	m.state.LiveTurn = &LiveTurnState{
 		StartedAt: time.Now(),
@@ -1066,7 +1074,7 @@ func (m *Model) submitInput() tea.Cmd {
 	m.state.Footer = m.localize("Running turn...", "Выполняется ход...")
 	m.updateStatus()
 	m.refreshViewport()
-	return tea.Batch(m.runPromptCmd(draft), busyTickCmd())
+	return tea.Batch(printUser, m.runPromptCmd(draft), busyTickCmd())
 }
 
 func (m *Model) cancelClearOrQuit() tea.Cmd {
@@ -1120,33 +1128,31 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 func (m *Model) dispatchSlash(line string, prefix string) tea.Cmd {
 	fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, prefix)))
 	if len(fields) == 0 {
-		m.appendTranscript("system", m.localize("Empty slash command.", "Пустая слэш-команда."))
-		return nil
+		return m.appendTranscript("system", m.localize("Empty slash command.", "Пустая слэш-команда."))
 	}
 	command, ok := m.resolveSlashCommand(fields[0])
 	if !ok {
-		m.appendTranscript("system", fmt.Sprintf("%s: %s%s", m.localize("Unknown slash command", "Неизвестная слэш-команда"), prefix, fields[0]))
-		return nil
+		return m.appendTranscript("system", fmt.Sprintf("%s: %s%s", m.localize("Unknown slash command", "Неизвестная слэш-команда"), prefix, fields[0]))
 	}
 	if m.state.Busy && !command.AvailableDuringTask {
-		m.appendTranscript("system", fmt.Sprintf("%s: %s%s", m.localize("Command unavailable while a turn is running", "Команда недоступна, пока выполняется ход"), prefix, fields[0]))
-		return nil
+		return m.appendTranscript("system", fmt.Sprintf("%s: %s%s", m.localize("Command unavailable while a turn is running", "Команда недоступна, пока выполняется ход"), prefix, fields[0]))
 	}
 	return m.executePaletteCommand(command, fields[1:])
 }
 
-func (m *Model) applyTaskResult(msg taskFinishedMsg) {
+func (m *Model) applyTaskResult(msg taskFinishedMsg) tea.Cmd {
 	history := cloneRuntimeMessages(msg.Result.FullHistory())
 	m.history = history
 	m.state.LiveTurn = nil
 	m.state.SessionPath = msg.SessionPath
 	m.approval = nil
+	var printAssistant tea.Cmd
 	assistantText := visibleTranscriptBody(msg.Result.AssistantMessage)
 	if assistantText == "" {
 		assistantText = normalizeTranscriptBody(msg.Result.Text)
 	}
 	if assistantText != "" {
-		m.state.Transcript = appendTranscriptEntry(m.state.Transcript, "assistant", assistantText)
+		printAssistant = m.appendTranscript("assistant", assistantText)
 	}
 	m.state.Model = fallback(msg.Result.Model, m.state.Model)
 	m.state.Provider = fallback(msg.Result.ProviderName, m.state.Provider)
@@ -1164,9 +1170,10 @@ func (m *Model) applyTaskResult(msg taskFinishedMsg) {
 	}
 	m.updateStatus()
 	m.refreshViewport()
+	return printAssistant
 }
 
-func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
+func (m *Model) applyLoadedSession(msg sessionLoadedMsg) tea.Cmd {
 	m.history = cloneRuntimeMessages(msg.Messages)
 	m.approvalStore = taskrun.NewApprovalSessionStore()
 	m.state.LiveTurn = nil
@@ -1202,6 +1209,8 @@ func (m *Model) applyLoadedSession(msg sessionLoadedMsg) {
 	m.applyFocusState()
 	m.updateStatus()
 	m.refreshViewport()
+	m.terminalPrintedInitial = true
+	return m.printFullTranscriptCmd()
 }
 
 func (m *Model) beginCWDPrompt(msg sessionLoadedMsg) bool {
@@ -1261,8 +1270,7 @@ func (m *Model) confirmCWDPrompt(selection cwdSelection) tea.Cmd {
 	default:
 		msg.Meta.CWD = prompt.SessionCWD
 	}
-	m.applyLoadedSession(msg)
-	return m.consumeStartupPrompt()
+	return tea.Batch(m.applyLoadedSession(msg), m.consumeStartupPrompt())
 }
 
 func (m *Model) openPaletteMode(mode PaletteMode, pushCurrent bool) tea.Cmd {
@@ -1995,28 +2003,28 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec, args []string)
 		return nil
 	case PaletteActionShowStatus:
 		m.updateStatus()
-		m.appendTranscript("card", m.renderStatusCardInline())
+		cmd := m.appendTranscript("card", m.renderStatusCardInline())
 		m.refreshViewport()
 		if m.state.Palette.Visible {
-			return m.closePalette()
+			return tea.Batch(cmd, m.closePalette())
 		}
-		return nil
+		return cmd
 	case PaletteActionShowProcesses:
-		m.appendTranscript("tool", m.renderBackgroundProcesses())
+		cmd := m.appendTranscript("tool", m.renderBackgroundProcesses())
 		if m.state.Palette.Visible {
-			return m.closePalette()
+			return tea.Batch(cmd, m.closePalette())
 		}
-		return nil
+		return cmd
 	case PaletteActionStopProcesses:
 		if m.taskCancel != nil && m.state.Busy {
 			m.taskCancel()
 		}
 		stopped := tooling.StopAllBackgroundShells()
-		m.appendTranscript("tool", localizedTextTUI(m.language, "Stopped background terminals: %d", "Остановлено фоновых терминалов: %d", stopped))
+		cmd := m.appendTranscript("tool", localizedTextTUI(m.language, "Stopped background terminals: %d", "Остановлено фоновых терминалов: %d", stopped))
 		if m.state.Palette.Visible {
-			return m.closePalette()
+			return tea.Batch(cmd, m.closePalette())
 		}
-		return nil
+		return cmd
 	case PaletteActionQuit:
 		return tea.Quit
 	case PaletteActionOpenMode:
@@ -3007,14 +3015,24 @@ func (m *Model) updateStatus() {
 	m.state.Status = buildStatusItems(m.layout, m.state, len(m.history))
 }
 
-func (m *Model) appendTranscript(role string, body string) {
+func (m *Model) appendTranscript(role string, body string) tea.Cmd {
+	before := len(m.state.Transcript)
 	m.state.Transcript = appendTranscriptEntry(m.state.Transcript, role, body)
 	m.refreshViewport()
+	if len(m.state.Transcript) == before {
+		return nil
+	}
+	return m.printTranscriptEntryCmd(m.state.Transcript[len(m.state.Transcript)-1])
 }
 
-func (m *Model) appendTransientTranscript(entry TranscriptEntry) {
+func (m *Model) appendTransientTranscript(entry TranscriptEntry) tea.Cmd {
+	before := len(m.state.Transient)
 	m.state.Transient = appendTranscriptEntryDedup(m.state.Transient, entry)
 	m.refreshViewport()
+	if len(m.state.Transient) == before {
+		return nil
+	}
+	return m.printTranscriptEntryCmd(m.state.Transient[len(m.state.Transient)-1])
 }
 
 func (m *Model) flushLiveTurnEntries() {
@@ -3024,6 +3042,39 @@ func (m *Model) flushLiveTurnEntries() {
 	for _, entry := range m.state.LiveTurn.Entries {
 		m.state.Transcript = appendTranscriptEntryDedup(m.state.Transcript, entry)
 	}
+}
+
+func (m *Model) terminalPrintWidth() int {
+	if m.width > 0 {
+		return maxInt(40, m.width)
+	}
+	return 88
+}
+
+func (m *Model) printTranscriptEntryCmd(entry TranscriptEntry) tea.Cmd {
+	block := strings.TrimSpace(m.renderTranscriptEntry(entry, m.terminalPrintWidth()))
+	if block == "" {
+		return nil
+	}
+	return tea.Println(block)
+}
+
+func (m *Model) printFullTranscriptCmd() tea.Cmd {
+	width := m.terminalPrintWidth()
+	blocks := make([]string, 0, len(m.state.Transcript)+2)
+	if header := strings.TrimSpace(m.renderSessionHeaderBox()); header != "" {
+		blocks = append(blocks, header)
+	}
+	for _, entry := range m.state.Transcript {
+		if block := strings.TrimSpace(m.renderTranscriptEntry(entry, width)); block != "" {
+			blocks = append(blocks, block)
+		}
+	}
+	body := strings.TrimSpace(strings.Join(blocks, "\n\n"))
+	if body == "" {
+		return nil
+	}
+	return tea.Println(body)
 }
 
 func (m *Model) helpText() string {
@@ -3313,11 +3364,12 @@ func busyTickCmd() tea.Cmd {
 	})
 }
 
-func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) {
+func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) tea.Cmd {
 	if m.state.LiveTurn == nil {
 		m.state.LiveTurn = &LiveTurnState{StartedAt: time.Now()}
 	}
 	live := m.state.LiveTurn
+	var printCmd tea.Cmd
 	if live.StartedAt.IsZero() {
 		live.StartedAt = time.Now()
 	}
@@ -3342,20 +3394,36 @@ func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) {
 		// Execution batches are internal. User-facing task plans come from update_plan.
 	case taskrun.ProgressKindApprovalRequired:
 		if update.ApprovalRequest != nil {
-			live.Entries = appendTranscriptEntryDedup(live.Entries, renderApprovalEntry(m.language, update.ApprovalRequest))
+			entry := renderApprovalEntry(m.language, update.ApprovalRequest)
+			if appended := appendLiveEntry(&live.Entries, entry); appended {
+				printCmd = m.printTranscriptEntryCmd(entry)
+			}
 		}
 	case taskrun.ProgressKindToolResult:
 		if update.ToolResult != nil {
-			live.Entries = appendTranscriptEntryDedup(live.Entries, renderToolResultEntry(m.language, update.ToolResult))
+			entry := renderToolResultEntry(m.language, update.ToolResult)
+			if appended := appendLiveEntry(&live.Entries, entry); appended {
+				printCmd = m.printTranscriptEntryCmd(entry)
+			}
 		}
 	case taskrun.ProgressKindRetryScheduled:
 		if update.RetryAfter > 0 || update.Err != nil {
-			live.Entries = appendTranscriptEntryDedup(live.Entries, renderRetryEntry(m.language, update.RetryAfter, update.Err))
+			entry := renderRetryEntry(m.language, update.RetryAfter, update.Err)
+			if appended := appendLiveEntry(&live.Entries, entry); appended {
+				printCmd = m.printTranscriptEntryCmd(entry)
+			}
 		}
 	}
 	m.state.LiveTurn = live
 	m.updateStatus()
 	m.refreshViewport()
+	return printCmd
+}
+
+func appendLiveEntry(entries *[]TranscriptEntry, entry TranscriptEntry) bool {
+	before := len(*entries)
+	*entries = appendTranscriptEntryDedup(*entries, entry)
+	return len(*entries) > before
 }
 
 func (m *Model) hasTrailingTranscriptEntry(role string, body string) bool {
