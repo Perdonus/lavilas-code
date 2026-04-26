@@ -93,6 +93,7 @@ type LiveTurnState struct {
 	ToolCalls     []runtimeapi.ToolCall
 	Notes         []string
 	Entries       []TranscriptEntry
+	ExploreActions []string
 	StartedAt     time.Time
 	SpinnerFrame  int
 }
@@ -371,6 +372,7 @@ func cloneLiveTurnState(value *LiveTurnState) *LiveTurnState {
 		ToolCalls:     cloneRuntimeToolCalls(value.ToolCalls),
 		Notes:         cloneStrings(value.Notes),
 		Entries:       cloneTranscriptEntries(value.Entries),
+		ExploreActions: cloneStrings(value.ExploreActions),
 		StartedAt:     value.StartedAt,
 		SpinnerFrame:  value.SpinnerFrame,
 	}

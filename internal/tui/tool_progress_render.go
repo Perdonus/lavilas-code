@@ -235,21 +235,29 @@ func renderShellResultEntry(language commandcatalog.CatalogLanguage, result *too
 }
 
 func renderExploreResultEntry(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) TranscriptEntry {
-	if result == nil {
+	action := renderExploreAction(language, result)
+	if strings.TrimSpace(action) == "" {
 		return TranscriptEntry{}
+	}
+	return renderExploreActionsEntry(language, []string{action})
+}
+
+func renderExploreAction(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) string {
+	if result == nil {
+		return ""
 	}
 	var action string
 	switch strings.TrimSpace(result.Name) {
 	case "read_file":
 		var payload readFileToolOutput
 		if json.Unmarshal([]byte(strings.TrimSpace(result.OutputText)), &payload) != nil {
-			return TranscriptEntry{}
+			return ""
 		}
 		action = localizedTextTUI(language, "Read %s", "Read %s", compactToolPath(payload.Path))
 	case "search_text":
 		var payload searchTextToolOutput
 		if json.Unmarshal([]byte(strings.TrimSpace(result.OutputText)), &payload) != nil {
-			return TranscriptEntry{}
+			return ""
 		}
 		target := compactToolPath(payload.Path)
 		if target == "" || target == "." {
@@ -259,16 +267,30 @@ func renderExploreResultEntry(language commandcatalog.CatalogLanguage, result *t
 	case "list_directory":
 		var payload listDirectoryToolOutput
 		if json.Unmarshal([]byte(strings.TrimSpace(result.OutputText)), &payload) != nil {
-			return TranscriptEntry{}
+			return ""
 		}
 		action = localizedTextTUI(language, "List %s", "List %s", compactToolPath(payload.Path))
 	default:
+		return ""
+	}
+	return strings.TrimSpace(action)
+}
+
+func renderExploreActionsEntry(language commandcatalog.CatalogLanguage, actions []string) TranscriptEntry {
+	cleaned := make([]string, 0, len(actions))
+	for _, action := range actions {
+		if action = strings.TrimSpace(action); action != "" {
+			cleaned = append(cleaned, action)
+		}
+	}
+	if len(cleaned) == 0 {
 		return TranscriptEntry{}
 	}
-	if strings.TrimSpace(action) == "" {
-		return TranscriptEntry{}
+	lines := []string{localizedTextTUI(language, "Explored", "Explored"), "└ " + cleaned[0]}
+	for _, action := range cleaned[1:] {
+		lines = append(lines, "  "+action)
 	}
-	return TranscriptEntry{Role: "tool", Body: localizedTextTUI(language, "Explored", "Explored") + "\n└ " + action}
+	return TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}
 }
 
 func renderEditResultEntry(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) TranscriptEntry {

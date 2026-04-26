@@ -293,17 +293,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taskFinishedMsg:
 		m.state.Busy = false
+		var cmds []tea.Cmd
+		if cmd := m.flushLiveExploreActionsCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		m.flushLiveTurnEntries()
 		m.state.LiveTurn = nil
 		m.taskCancel = nil
 		m.approval = nil
 		if msg.Err != nil {
 			cmd := m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), msg.Err))
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 			m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), msg.Err)
 			m.updateStatus()
-			return m, cmd
+			return m, tea.Batch(cmds...)
 		}
-		return m, m.applyTaskResult(msg)
+		if cmd := m.applyTaskResult(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 	case taskEventMsg:
 		var cmds []tea.Cmd
 		switch inner := msg.Inner.(type) {
@@ -313,6 +323,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case taskFinishedMsg:
 			m.state.Busy = false
+			if cmd := m.flushLiveExploreActionsCmd(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 			m.flushLiveTurnEntries()
 			m.state.LiveTurn = nil
 			m.taskCancel = nil
@@ -3039,9 +3052,33 @@ func (m *Model) flushLiveTurnEntries() {
 	if m.state.LiveTurn == nil {
 		return
 	}
+	m.flushLiveExploreActions(m.state.LiveTurn)
 	for _, entry := range m.state.LiveTurn.Entries {
 		m.state.Transcript = appendTranscriptEntryDedup(m.state.Transcript, entry)
 	}
+}
+
+func (m *Model) flushLiveExploreActionsCmd() tea.Cmd {
+	if m.state.LiveTurn == nil {
+		return nil
+	}
+	entry, appended := m.flushLiveExploreActions(m.state.LiveTurn)
+	if !appended {
+		return nil
+	}
+	return m.printTranscriptEntryCmd(entry)
+}
+
+func (m *Model) flushLiveExploreActions(live *LiveTurnState) (TranscriptEntry, bool) {
+	if live == nil || len(live.ExploreActions) == 0 {
+		return TranscriptEntry{}, false
+	}
+	entry := renderExploreActionsEntry(m.language, live.ExploreActions)
+	live.ExploreActions = nil
+	if strings.TrimSpace(entry.Body) == "" {
+		return TranscriptEntry{}, false
+	}
+	return entry, appendLiveEntry(&live.Entries, entry)
 }
 
 func (m *Model) terminalPrintWidth() int {
@@ -3369,7 +3406,7 @@ func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) tea.Cmd {
 		m.state.LiveTurn = &LiveTurnState{StartedAt: time.Now()}
 	}
 	live := m.state.LiveTurn
-	var printCmd tea.Cmd
+	var cmds []tea.Cmd
 	if live.StartedAt.IsZero() {
 		live.StartedAt = time.Now()
 	}
@@ -3394,30 +3431,46 @@ func (m *Model) applyTaskProgress(update taskrun.ProgressUpdate) tea.Cmd {
 		// Execution batches are internal. User-facing task plans come from update_plan.
 	case taskrun.ProgressKindApprovalRequired:
 		if update.ApprovalRequest != nil {
+			if entry, appended := m.flushLiveExploreActions(live); appended {
+				cmds = append(cmds, m.printTranscriptEntryCmd(entry))
+			}
 			entry := renderApprovalEntry(m.language, update.ApprovalRequest)
 			if appended := appendLiveEntry(&live.Entries, entry); appended {
-				printCmd = m.printTranscriptEntryCmd(entry)
+				cmds = append(cmds, m.printTranscriptEntryCmd(entry))
 			}
 		}
 	case taskrun.ProgressKindToolResult:
 		if update.ToolResult != nil {
+			if action := renderExploreAction(m.language, update.ToolResult); action != "" {
+				live.ExploreActions = append(live.ExploreActions, action)
+				break
+			}
+			if entry, appended := m.flushLiveExploreActions(live); appended {
+				cmds = append(cmds, m.printTranscriptEntryCmd(entry))
+			}
 			entry := renderToolResultEntry(m.language, update.ToolResult)
 			if appended := appendLiveEntry(&live.Entries, entry); appended {
-				printCmd = m.printTranscriptEntryCmd(entry)
+				cmds = append(cmds, m.printTranscriptEntryCmd(entry))
 			}
 		}
 	case taskrun.ProgressKindRetryScheduled:
 		if update.RetryAfter > 0 || update.Err != nil {
+			if entry, appended := m.flushLiveExploreActions(live); appended {
+				cmds = append(cmds, m.printTranscriptEntryCmd(entry))
+			}
 			entry := renderRetryEntry(m.language, update.RetryAfter, update.Err)
 			if appended := appendLiveEntry(&live.Entries, entry); appended {
-				printCmd = m.printTranscriptEntryCmd(entry)
+				cmds = append(cmds, m.printTranscriptEntryCmd(entry))
 			}
 		}
 	}
 	m.state.LiveTurn = live
 	m.updateStatus()
 	m.refreshViewport()
-	return printCmd
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 func appendLiveEntry(entries *[]TranscriptEntry, entry TranscriptEntry) bool {
