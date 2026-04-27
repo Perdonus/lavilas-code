@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,11 @@ const (
 )
 
 var busySpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+var (
+	collapsedBulletMarkerRE = regexp.MustCompile("([^\\s\\n])(-\\s+[\\p{L}\\p{N}`])")
+	collapsedNumberMarkerRE = regexp.MustCompile("([^\\s\\n])(\\d+\\.\\s+)")
+)
 
 type taskFinishedMsg struct {
 	TaskID      int64
@@ -275,6 +281,9 @@ func composerPlaceholder(language commandcatalog.CatalogLanguage) string {
 
 func (m *Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	if cmd := releaseTerminalMouseCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if m.state.Palette.Visible {
 		cmds = append(cmds, m.setFocus(FocusPalette))
 	} else {
@@ -467,7 +476,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.submitInput()
 		}
 	case tea.MouseMsg:
-		return m, nil
+		return m, releaseTerminalMouseCmd()
 	}
 
 	switch m.state.Focus {
@@ -798,11 +807,12 @@ func (m *Model) renderTranscriptEntry(entry TranscriptEntry, width int) string {
 		style = m.styles.roleSystem
 	}
 	bodyWidth := maxInt(1, width-lipgloss.Width(prefix)-1)
+	body = repairCollapsedListMarkers(body)
 	body = wrapPlainTextBlock(body, bodyWidth)
-	rendered := style.Width(bodyWidth).Render(body)
-	lines := strings.Split(rendered, "\n")
+	lines := strings.Split(body, "\n")
 	indent := strings.Repeat(" ", lipgloss.Width(prefix)+1)
 	for index, line := range lines {
+		line = style.Render(line)
 		if index == 0 {
 			lines[index] = prefix + " " + line
 			continue
@@ -876,6 +886,36 @@ func wrapPlainTextBlock(text string, width int) string {
 	return strings.Join(out, "\n")
 }
 
+func repairCollapsedListMarkers(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for index, line := range lines {
+		indent := leadingWhitespace(line)
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "- ") || isNumberedListLine(trimmed) {
+			repaired := collapsedBulletMarkerRE.ReplaceAllString(line, "$1\n"+indent+"$2")
+			repaired = collapsedNumberMarkerRE.ReplaceAllString(repaired, "$1\n"+indent+"$2")
+			lines[index] = repaired
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func isNumberedListLine(line string) bool {
+	dot := strings.IndexByte(line, '.')
+	if dot <= 0 || dot+1 >= len(line) || line[dot+1] != ' ' {
+		return false
+	}
+	for _, r := range line[:dot] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func wrapPlainTextLine(line string, width int) []string {
 	if lipgloss.Width(line) <= width {
 		return []string{line}
@@ -940,13 +980,22 @@ func splitDisplayWidth(value string, width int) (string, string) {
 	}
 	currentWidth := 0
 	byteIndex := 0
+	lastBreakStart := -1
+	lastBreakEnd := -1
 	for index, r := range value {
 		rw := lipgloss.Width(string(r))
 		if currentWidth > 0 && currentWidth+rw > width {
+			if lastBreakStart > 0 {
+				return value[:lastBreakStart], value[lastBreakEnd:]
+			}
 			return value[:byteIndex], value[index:]
 		}
 		currentWidth += rw
 		byteIndex = index + len(string(r))
+		if r == ' ' || r == '\t' {
+			lastBreakStart = index
+			lastBreakEnd = byteIndex
+		}
 	}
 	return value, ""
 }
