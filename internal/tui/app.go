@@ -46,6 +46,10 @@ type StartupOptions struct {
 }
 
 func Run(options Options) int {
+	if proceed, code := maybeRunUpdateGate(); !proceed {
+		return code
+	}
+
 	model, err := newModel(options)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tui: %v\n", err)

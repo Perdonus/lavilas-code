@@ -430,12 +430,7 @@ func runShellCommandSync(ctx context.Context, commandText string, cwd string, ti
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(commandCtx, "cmd", "/C", commandText)
-	} else {
-		cmd = exec.CommandContext(commandCtx, "sh", "-lc", commandText)
-	}
+	cmd, shellName := shellCommand(commandCtx, commandText)
 	cmd.Dir = cwd
 
 	var stdout bytes.Buffer
@@ -459,6 +454,7 @@ func runShellCommandSync(ctx context.Context, commandText string, cwd string, ti
 	payload := map[string]any{
 		"ok":               err == nil,
 		"tool":             "run_shell_command",
+		"shell":            shellName,
 		"cmd":              commandText,
 		"cwd":              cwd,
 		"running":          false,
@@ -477,6 +473,33 @@ func runShellCommandSync(ctx context.Context, commandText string, cwd string, ti
 		payload["error"] = err.Error()
 	}
 	return marshalResult(payload)
+}
+
+func shellCommand(ctx context.Context, commandText string) (*exec.Cmd, string) {
+	if runtime.GOOS == "windows" {
+		if looksLikePowerShell(commandText) {
+			return exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", commandText), "powershell"
+		}
+		return exec.CommandContext(ctx, "cmd", "/C", commandText), "cmd"
+	}
+	return exec.CommandContext(ctx, "sh", "-lc", commandText), "sh"
+}
+
+func looksLikePowerShell(commandText string) bool {
+	lower := strings.ToLower(commandText)
+	markers := []string{
+		"hkcu:\\", "hklm:\\", "hkcr:\\",
+		"get-item", "get-childitem", "get-itemproperty",
+		"set-item", "set-itemproperty", "remove-item", "new-item",
+		"where-object", "foreach-object", "select-object", "sort-object", "format-table",
+		"[pscustomobject]", "test-path", "join-path",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return strings.Contains(commandText, "$") && strings.Contains(commandText, "\n")
 }
 
 func normalizeShellTimeout(timeoutSeconds int) time.Duration {

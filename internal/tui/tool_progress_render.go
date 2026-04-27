@@ -13,6 +13,7 @@ import (
 
 type shellToolOutput struct {
 	Tool            string `json:"tool"`
+	Shell           string `json:"shell"`
 	Cmd             string `json:"cmd"`
 	Cwd             string `json:"cwd"`
 	Output          string `json:"output"`
@@ -205,7 +206,8 @@ func renderShellResultEntry(language commandcatalog.CatalogLanguage, result *too
 	}
 	status := strings.ToLower(strings.TrimSpace(payload.Status))
 	running := payload.Running || status == "running"
-	title := "Ran " + cmd
+	commandLines := compactCommandLines(cmd, 120)
+	title := "Ran " + firstNonEmpty(firstString(commandLines), cmd)
 	if running {
 		title = localizedTextTUI(language, "Waiting for background terminal", "Ожидание фонового терминала")
 		if payload.ProcessID != "" {
@@ -213,8 +215,18 @@ func renderShellResultEntry(language commandcatalog.CatalogLanguage, result *too
 		}
 	}
 	lines := []string{title}
-	if running && strings.TrimSpace(payload.Cmd) != "" {
-		lines = append(lines, "│ "+payload.Cmd)
+	if strings.TrimSpace(payload.Shell) != "" {
+		lines = append(lines, "│ shell: "+payload.Shell)
+	}
+	commandStartIndex := 1
+	if running {
+		commandStartIndex = 0
+	}
+	if commandStartIndex > len(commandLines) {
+		commandStartIndex = len(commandLines)
+	}
+	for _, line := range commandLines[commandStartIndex:] {
+		lines = append(lines, "│ "+line)
 	}
 	if cwd := strings.TrimSpace(payload.Cwd); cwd != "" {
 		lines = append(lines, "│ cwd: "+cwd)
@@ -232,6 +244,34 @@ func renderShellResultEntry(language commandcatalog.CatalogLanguage, result *too
 		lines = append(lines, localizedTextTUI(language, "└ error: %s", "└ ошибка: %s", err))
 	}
 	return TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}
+}
+
+func compactCommandLines(command string, limit int) []string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil
+	}
+	rawLines := strings.Split(command, "\n")
+	lines := make([]string, 0, minInt(len(rawLines), 18))
+	for _, line := range rawLines {
+		line = strings.TrimRight(line, " \t\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		lines = append(lines, truncateToolPreview(line, limit))
+		if len(lines) >= 18 {
+			lines = append(lines, "...<truncated>")
+			break
+		}
+	}
+	return lines
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(values[0])
 }
 
 func renderExploreResultEntry(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) TranscriptEntry {

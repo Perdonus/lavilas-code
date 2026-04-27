@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -202,12 +201,7 @@ func spawnBackgroundShell(commandText string, cwd string, timeout time.Duration)
 		},
 	}
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(commandCtx, "cmd", "/C", commandText)
-	} else {
-		cmd = exec.CommandContext(commandCtx, "sh", "-lc", commandText)
-	}
+	cmd, _ := shellCommand(commandCtx, commandText)
 	cmd.Dir = cwd
 
 	stdoutPipe, err := cmd.StdoutPipe()

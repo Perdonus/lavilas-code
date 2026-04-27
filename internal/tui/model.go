@@ -754,6 +754,7 @@ func (m *Model) renderTranscriptEntry(entry TranscriptEntry, width int) string {
 		style = m.styles.roleSystem
 	}
 	bodyWidth := maxInt(1, width-lipgloss.Width(prefix)-1)
+	body = wrapPlainTextBlock(body, bodyWidth)
 	rendered := style.Width(bodyWidth).Render(body)
 	lines := strings.Split(rendered, "\n")
 	indent := strings.Repeat(" ", lipgloss.Width(prefix)+1)
@@ -817,6 +818,93 @@ func (m *Model) renderReasoningText(text string) string {
 		return ""
 	}
 	return truncateToolPreview(text, 1200)
+}
+
+func wrapPlainTextBlock(text string, width int) string {
+	if width < 20 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, wrapPlainTextLine(line, width)...)
+	}
+	return strings.Join(out, "\n")
+}
+
+func wrapPlainTextLine(line string, width int) []string {
+	if lipgloss.Width(line) <= width {
+		return []string{line}
+	}
+	indent := leadingWhitespace(line)
+	continuationIndent := continuationIndentFor(line, indent)
+	out := make([]string, 0, 2)
+	remaining := line
+	for lipgloss.Width(remaining) > width {
+		limit := width
+		if len(out) > 0 {
+			limit = maxInt(1, width-lipgloss.Width(continuationIndent))
+		}
+		head, tail := splitDisplayWidth(remaining, limit)
+		head = strings.TrimRight(head, " \t")
+		if strings.TrimSpace(head) == "" {
+			break
+		}
+		out = append(out, head)
+		tail = strings.TrimLeft(tail, " \t")
+		if strings.TrimSpace(tail) == "" {
+			remaining = ""
+			break
+		}
+		remaining = continuationIndent + tail
+	}
+	if strings.TrimSpace(remaining) != "" {
+		out = append(out, remaining)
+	}
+	if len(out) == 0 {
+		return []string{line}
+	}
+	return out
+}
+
+func leadingWhitespace(line string) string {
+	index := 0
+	for index < len(line) {
+		switch line[index] {
+		case ' ', '\t':
+			index++
+		default:
+			return line[:index]
+		}
+	}
+	return line
+}
+
+func continuationIndentFor(line string, indent string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	for _, marker := range []string{"└ ", "│ ", "├ ", "□ ", "✔ ", "- ", "+ "} {
+		if strings.HasPrefix(trimmed, marker) {
+			return indent + strings.Repeat(" ", lipgloss.Width(marker))
+		}
+	}
+	return indent
+}
+
+func splitDisplayWidth(value string, width int) (string, string) {
+	if width <= 0 || value == "" {
+		return "", value
+	}
+	currentWidth := 0
+	byteIndex := 0
+	for index, r := range value {
+		rw := lipgloss.Width(string(r))
+		if currentWidth > 0 && currentWidth+rw > width {
+			return value[:byteIndex], value[index:]
+		}
+		currentWidth += rw
+		byteIndex = index + len(string(r))
+	}
+	return value, ""
 }
 
 func (m *Model) reasoningStatusLabel(text string) string {
@@ -3093,7 +3181,7 @@ func (m *Model) printTranscriptEntryCmd(entry TranscriptEntry) tea.Cmd {
 	if block == "" {
 		return nil
 	}
-	return tea.Println(block)
+	return tea.Println("\n" + block + "\n")
 }
 
 func (m *Model) printFullTranscriptCmd() tea.Cmd {
@@ -3111,7 +3199,7 @@ func (m *Model) printFullTranscriptCmd() tea.Cmd {
 	if body == "" {
 		return nil
 	}
-	return tea.Println(body)
+	return tea.Println(body + "\n\n")
 }
 
 func (m *Model) helpText() string {
