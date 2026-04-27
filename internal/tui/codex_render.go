@@ -44,15 +44,18 @@ func (m *Model) renderCodexScreen() string {
 		aux = append(aux, m.renderFormPromptPane())
 	}
 
-	parts := make([]string, 0, len(aux)+3)
+	parts := make([]string, 0, len(aux)+4)
 	parts = append(parts, aux...)
-	if popup != "" {
-		parts = append(parts, popup)
+	if liveStatus := strings.TrimSpace(m.renderActiveTurnStatus()); liveStatus != "" {
+		parts = append(parts, liveStatus)
 	}
 	if strings.TrimSpace(composer) != "" {
 		parts = append(parts, composer)
 	}
-	return m.styles.app.Width(m.width).Render(strings.Join(parts, "\n\n"))
+	if popup != "" {
+		parts = append(parts, popup)
+	}
+	return m.styles.app.Width(m.width).Render(strings.Join(parts, "\n\n") + "\n\n")
 }
 
 func (m *Model) isSessionPickerMode() bool {
@@ -175,6 +178,23 @@ func (m *Model) renderComposerMeta() string {
 		return ""
 	}
 	return "  " + strings.Join(parts, " · ")
+}
+
+func (m *Model) renderActiveTurnStatus() string {
+	if m.state.LiveTurn == nil || !m.state.Busy {
+		return ""
+	}
+	lines := make([]string, 0, 2)
+	if status := m.liveTurnStatusLine(m.state.LiveTurn); strings.TrimSpace(status) != "" {
+		lines = append(lines, status)
+	}
+	if status := m.backgroundTerminalStatusLine(); strings.TrimSpace(status) != "" {
+		lines = append(lines, status)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return m.renderTranscriptEntry(TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}, maxInt(1, m.width))
 }
 
 func (m *Model) renderConversationArea() string {

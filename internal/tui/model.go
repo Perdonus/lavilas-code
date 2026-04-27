@@ -137,6 +137,8 @@ type Model struct {
 	taskCancel                    context.CancelFunc
 	inputHistory                  *inputHistory
 	terminalPrintedInitial       bool
+	terminalPrintedAny           bool
+	terminalLastPrintedRole      string
 }
 
 var composerPlaceholders = map[commandcatalog.CatalogLanguage][]string{
@@ -499,7 +501,7 @@ func (m *Model) resize() {
 	m.input.Width = maxInt(1, m.mainWidth-2)
 	m.paletteInput.Width = maxInt(1, m.mainWidth-2)
 	m.viewport.Width = maxInt(1, m.mainWidth)
-	m.viewport.Height = maxInt(1, m.height-6)
+	m.viewport.Height = maxInt(1, m.height-7)
 }
 
 func (m *Model) renderStatusPane() string {
@@ -3181,18 +3183,32 @@ func (m *Model) printTranscriptEntryCmd(entry TranscriptEntry) tea.Cmd {
 	if block == "" {
 		return nil
 	}
-	return tea.Println("\n" + block + "\n")
+	role := normalizeTerminalTranscriptRole(entry.Role)
+	prefix := "\n"
+	if m.shouldPrintTerminalDivider(role) {
+		prefix += m.terminalDivider() + "\n\n"
+	}
+	m.markTerminalPrinted(role)
+	return tea.Println(prefix + block + "\n\n")
 }
 
 func (m *Model) printFullTranscriptCmd() tea.Cmd {
 	width := m.terminalPrintWidth()
+	m.terminalPrintedAny = false
+	m.terminalLastPrintedRole = ""
 	blocks := make([]string, 0, len(m.state.Transcript)+2)
 	if header := strings.TrimSpace(m.renderSessionHeaderBox()); header != "" {
 		blocks = append(blocks, header)
+		m.markTerminalPrinted("card")
 	}
 	for _, entry := range m.state.Transcript {
 		if block := strings.TrimSpace(m.renderTranscriptEntry(entry, width)); block != "" {
+			role := normalizeTerminalTranscriptRole(entry.Role)
+			if shouldSeparateTerminalRoles(m.terminalLastPrintedRole, role) {
+				blocks = append(blocks, m.terminalDivider())
+			}
 			blocks = append(blocks, block)
+			m.markTerminalPrinted(role)
 		}
 	}
 	body := strings.TrimSpace(strings.Join(blocks, "\n\n"))
@@ -3200,6 +3216,63 @@ func (m *Model) printFullTranscriptCmd() tea.Cmd {
 		return nil
 	}
 	return tea.Println(body + "\n\n")
+}
+
+func (m *Model) terminalDivider() string {
+	width := m.terminalPrintWidth()
+	width = minInt(maxInt(40, width), 100)
+	return m.styles.muted.Render(strings.Repeat("─", width))
+}
+
+func (m *Model) shouldPrintTerminalDivider(nextRole string) bool {
+	if !m.terminalPrintedAny {
+		return false
+	}
+	return shouldSeparateTerminalRoles(m.terminalLastPrintedRole, nextRole)
+}
+
+func shouldSeparateTerminalRoles(previousRole string, nextRole string) bool {
+	previousRole = normalizeTerminalTranscriptRole(previousRole)
+	nextRole = normalizeTerminalTranscriptRole(nextRole)
+	if previousRole == "" || nextRole == "" || nextRole == "user" {
+		return false
+	}
+	if nextRole == "tool" {
+		return previousRole != "tool"
+	}
+	if nextRole == "assistant" {
+		return previousRole == "tool"
+	}
+	if nextRole == "system" || nextRole == "card" {
+		return previousRole != nextRole
+	}
+	return false
+}
+
+func (m *Model) markTerminalPrinted(role string) {
+	role = normalizeTerminalTranscriptRole(role)
+	if role == "" {
+		return
+	}
+	m.terminalPrintedAny = true
+	m.terminalLastPrintedRole = role
+}
+
+func normalizeTerminalTranscriptRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "user":
+		return "user"
+	case "assistant":
+		return "assistant"
+	case "tool":
+		return "tool"
+	case "system":
+		return "system"
+	case "card":
+		return "card"
+	default:
+		return strings.ToLower(strings.TrimSpace(role))
+	}
 }
 
 func (m *Model) helpText() string {
