@@ -155,25 +155,15 @@ func scheduleWindowsInstall(ctx context.Context, nvPath string, packageSpec stri
 		"@echo off",
 		"setlocal",
 		"title Go Lavilas update",
-		"echo Updating Go Lavilas through NV...",
-		"echo Waiting for lvls.exe to exit...",
+		fmt.Sprintf("set \"LOG=%%TEMP%%\\lvls-update-%d.log\"", pid),
 		":wait",
-		fmt.Sprintf("tasklist /FI \"PID eq %d\" 2^>NUL | find \"%d\" ^>NUL", pid, pid),
+		fmt.Sprintf("tasklist /FI \"PID eq %d\" 2>NUL | find \"%d\" >NUL", pid, pid),
 		"if not errorlevel 1 (",
 		"  timeout /t 1 /nobreak >NUL",
 		"  goto wait",
 		")",
-		"echo.",
-		fmt.Sprintf("%s install %s", cmdFileQuote(nvPath), cmdFileQuote(packageSpec)),
+		fmt.Sprintf("%s install %s > \"%%LOG%%\" 2>&1", cmdFileQuote(nvPath), cmdFileQuote(packageSpec)),
 		"set \"code=%ERRORLEVEL%\"",
-		"echo.",
-		"if \"%code%\"==\"0\" (",
-		"  echo Go Lavilas updated successfully.",
-		") else (",
-		"  echo Go Lavilas update failed with code %code%.",
-		")",
-		"echo.",
-		"pause",
 		"del \"%~f0\" >NUL 2>NUL",
 		"exit /b %code%",
 		"",
@@ -181,7 +171,7 @@ func scheduleWindowsInstall(ctx context.Context, nvPath string, packageSpec stri
 	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "cmd", "/C", "start", "", scriptPath)
+	cmd := exec.CommandContext(ctx, "cmd", "/C", "start", "", "/min", "cmd", "/C", scriptPath)
 	if err := cmd.Run(); err != nil {
 		return "", err
 	}

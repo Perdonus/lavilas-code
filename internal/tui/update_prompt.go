@@ -55,11 +55,7 @@ func RunUpdateGate() (bool, int) {
 			return false, 1
 		}
 		if installResult.Scheduled {
-			fmt.Printf("Обновление запланировано в отдельном окне NV.\n")
-			fmt.Printf("Закрываю lvls, чтобы Windows отпустил файл программы.\n")
-			if installResult.Script != "" {
-				fmt.Printf("Скрипт обновления: %s\n", installResult.Script)
-			}
+			fmt.Printf("Обновление в процессе. lvls закроется, новая версия поставится через NV.\n")
 			return false, 0
 		}
 		fmt.Printf("\nОбновление установлено: %s. Запусти lvls снова.\n", result.LatestVersion)
