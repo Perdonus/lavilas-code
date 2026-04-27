@@ -46,7 +46,7 @@ type StartupOptions struct {
 }
 
 func Run(options Options) int {
-	if proceed, code := maybeRunUpdateGate(); !proceed {
+	if proceed, code := RunUpdateGate(); !proceed {
 		return code
 	}
 

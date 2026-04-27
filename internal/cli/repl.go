@@ -7,14 +7,16 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Perdonus/lavilas-code/internal/apphome"
 	"github.com/Perdonus/lavilas-code/internal/runtime"
 	"github.com/Perdonus/lavilas-code/internal/taskrun"
 	"github.com/Perdonus/lavilas-code/internal/tooling"
 	"github.com/Perdonus/lavilas-code/internal/tui"
+	"github.com/Perdonus/lavilas-code/internal/version"
 )
 
 const (
-	replPrompt        = "lvls> "
+	replPrompt        = "› "
 	replExitRequested = -1
 )
 
@@ -65,6 +67,9 @@ func runChat(args []string) int {
 	if !usePlain {
 		return tui.Run(tui.Options{TaskOptions: options})
 	}
+	if proceed, code := tui.RunUpdateGate(); !proceed {
+		return code
+	}
 
 	session := chatSession{
 		options:       options,
@@ -75,14 +80,13 @@ func runChat(args []string) int {
 	}
 	session.lookup = buildReplLookup(session.commands, session.language)
 
-	fmt.Println(localizedText(session.language,
-		fmt.Sprintf("Interactive chat. %shelp for commands, %sexit to quit.", session.commandPrefix, session.commandPrefix),
-		fmt.Sprintf("Интерактивный чат. %sпомощь покажет команды, %sвыход завершит сеанс.", session.commandPrefix, session.commandPrefix),
-	))
+	session.printHeader()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for {
+		fmt.Println()
+		fmt.Println()
 		fmt.Print(replPrompt)
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {
@@ -107,19 +111,116 @@ func runChat(args []string) int {
 
 func consumeChatModeFlags(args []string) (bool, []string) {
 	if len(args) == 0 {
-		return false, nil
+		return true, nil
 	}
-	usePlain := false
+	usePlain := true
 	filtered := make([]string, 0, len(args))
 	for _, arg := range args {
 		switch arg {
 		case "--plain", "--no-tui":
 			usePlain = true
+		case "--tui":
+			usePlain = false
 		default:
 			filtered = append(filtered, arg)
 		}
 	}
 	return usePlain, filtered
+}
+
+func (s *chatSession) printHeader() {
+	config, _ := loadConfigOptional(apphome.ConfigPath())
+	model := firstNonEmpty(strings.TrimSpace(s.options.Model), config.EffectiveModel(), localizedUnset(s.language))
+	reasoning := firstNonEmpty(strings.TrimSpace(s.options.ReasoningEffort), config.EffectiveReasoningEffort())
+	if reasoning != "" {
+		model += " " + plainReasoningLabel(s.language, reasoning)
+	}
+	cwd := strings.TrimSpace(s.options.CWD)
+	if cwd == "" {
+		if current, err := os.Getwd(); err == nil {
+			cwd = current
+		}
+	}
+	cwd = compactPlainPath(cwd)
+	changeHint := fmt.Sprintf("%s%s %s", s.commandPrefix, localizedText(s.language, "model", "модель"), localizedText(s.language, "to change", "для смены"))
+	width := 57
+	rows := []string{
+		fmt.Sprintf(">_ Go Lavilas (v%s)", version.Version),
+		"",
+		fmt.Sprintf("%-14s %s", localizedText(s.language, "model:", "модель:"), joinPlainHeaderValue(model, changeHint, width-18)),
+		fmt.Sprintf("%-14s %s", localizedText(s.language, "directory:", "каталог:"), cwd),
+	}
+	printPlainBox(rows, width)
+	fmt.Println()
+	fmt.Println(localizedText(s.language,
+		"  Tip: Go Lavilas prints the chat directly into terminal scrollback.",
+		"  Подсказка: Go Lavilas печатает чат прямо в прокрутку терминала.",
+	))
+}
+
+func joinPlainHeaderValue(value string, hint string, limit int) string {
+	value = strings.TrimSpace(value)
+	hint = strings.TrimSpace(hint)
+	if hint == "" {
+		return value
+	}
+	joined := value + "   " + hint
+	if len([]rune(joined)) <= limit {
+		return joined
+	}
+	return value
+}
+
+func plainReasoningLabel(language CatalogLanguage, reasoning string) string {
+	switch strings.ToLower(strings.TrimSpace(reasoning)) {
+	case "xhigh", "extra-high":
+		return localizedText(language, "xhigh", "максимальный")
+	case "high":
+		return localizedText(language, "high", "высокий")
+	case "medium":
+		return localizedText(language, "medium", "средний")
+	case "low":
+		return localizedText(language, "low", "низкий")
+	case "none", "off":
+		return localizedText(language, "no reasoning", "без размышлений")
+	default:
+		return strings.TrimSpace(reasoning)
+	}
+}
+
+func compactPlainPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "~"
+	}
+	home, _ := os.UserHomeDir()
+	if home != "" && strings.EqualFold(path, home) {
+		return "~"
+	}
+	if home != "" && strings.HasPrefix(path, home+string(os.PathSeparator)) {
+		return "~" + strings.TrimPrefix(path, home)
+	}
+	return path
+}
+
+func printPlainBox(rows []string, width int) {
+	if width < 32 {
+		width = 32
+	}
+	fmt.Println("╭" + strings.Repeat("─", width-2) + "╮")
+	for _, row := range rows {
+		runes := []rune(row)
+		if len(runes) > width-4 {
+			runes = runes[:width-5]
+			row = string(runes) + "…"
+		}
+		padding := width - 4 - len([]rune(row))
+		if padding < 0 {
+			padding = 0
+		}
+		fmt.Println("│ " + row + strings.Repeat(" ", padding) + " │")
+	}
+	fmt.Println("╰" + strings.Repeat("─", width-2) + "╯")
 }
 
 func parseChatOptions(args []string) (taskrun.Options, error) {
@@ -442,29 +543,29 @@ func (p *streamPrinter) Handle(update taskrun.ProgressUpdate) {
 		p.printedLen = len(update.Snapshot.Text)
 		p.lineOpen = !strings.HasSuffix(suffix, "\n")
 	case taskrun.ProgressKindToolPlanned:
-		if update.ToolPlan != nil {
-			p.printStatus(localizedText(p.language,
-				fmt.Sprintf("[tools] planned %d calls in %d batches", update.ToolPlan.Summary.CallCount, update.ToolPlan.Summary.BatchCount),
-				fmt.Sprintf("[инструменты] запланировано %d вызовов в %d пакетах", update.ToolPlan.Summary.CallCount, update.ToolPlan.Summary.BatchCount),
-			))
-		}
+		// Internal execution batches are intentionally quiet. User-facing plans
+		// are printed from the update_plan tool result below.
 	case taskrun.ProgressKindApprovalRequired:
 		if update.ApprovalRequest != nil {
-			p.printStatus(localizedText(p.language,
+			p.printBlock(localizedText(p.language,
 				fmt.Sprintf("[approval] %s -> %s", update.ApprovalRequest.Name, localizedToolStatusCLI(p.language, string(update.ApprovalRequest.Status))),
 				fmt.Sprintf("[подтверждение] %s -> %s", update.ApprovalRequest.Name, localizedToolStatusCLI(p.language, string(update.ApprovalRequest.Status))),
 			))
 		}
 	case taskrun.ProgressKindToolResult:
 		if update.ToolResult != nil {
-			p.printStatus(localizedText(p.language,
-				fmt.Sprintf("[tool] %s -> %s", update.ToolResult.Name, localizedToolStatusCLI(p.language, string(update.ToolResult.Status))),
-				fmt.Sprintf("[инструмент] %s -> %s", update.ToolResult.Name, localizedToolStatusCLI(p.language, string(update.ToolResult.Status))),
-			))
+			if body := strings.TrimSpace(tui.RenderToolResultText(p.language, update.ToolResult)); body != "" {
+				p.printBlock(body)
+			} else {
+				p.printBlock(localizedText(p.language,
+					fmt.Sprintf("%s -> %s", update.ToolResult.Name, localizedToolStatusCLI(p.language, string(update.ToolResult.Status))),
+					fmt.Sprintf("%s -> %s", update.ToolResult.Name, localizedToolStatusCLI(p.language, string(update.ToolResult.Status))),
+				))
+			}
 		}
 	case taskrun.ProgressKindRetryScheduled:
 		if update.RetryAfter > 0 {
-			p.printStatus(localizedText(p.language,
+			p.printBlock(localizedText(p.language,
 				fmt.Sprintf("[retry] waiting %s", update.RetryAfter),
 				fmt.Sprintf("[повтор] ждём %s", update.RetryAfter),
 			))
@@ -486,14 +587,23 @@ func (p *streamPrinter) ensureRound(round int) {
 	p.lineOpen = false
 }
 
-func (p *streamPrinter) printStatus(line string) {
-	if strings.TrimSpace(line) == "" {
+func (p *streamPrinter) printBlock(body string) {
+	body = strings.TrimSpace(body)
+	if body == "" {
 		return
 	}
 	if p.lineOpen {
 		fmt.Println()
 	}
-	fmt.Println(line)
+	fmt.Println()
+	for index, line := range strings.Split(body, "\n") {
+		if index == 0 {
+			fmt.Println("• " + line)
+			continue
+		}
+		fmt.Println("  " + line)
+	}
+	fmt.Println()
 	p.seenProgress = true
 	p.lineOpen = false
 }

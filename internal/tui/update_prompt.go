@@ -29,7 +29,7 @@ type updatePromptModel struct {
 	decision updateDecision
 }
 
-func maybeRunUpdateGate() (bool, int) {
+func RunUpdateGate() (bool, int) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("LAVILAS_SKIP_UPDATE_CHECK")), "1") {
 		return true, 0
 	}

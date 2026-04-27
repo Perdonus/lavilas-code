@@ -124,6 +124,10 @@ func renderToolPlanEntry(language commandcatalog.CatalogLanguage, plan *tooling.
 	return TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}
 }
 
+func RenderToolPlanText(language commandcatalog.CatalogLanguage, plan *tooling.ExecutionPlan) string {
+	return renderToolPlanEntry(language, plan).Body
+}
+
 func renderApprovalEntry(language commandcatalog.CatalogLanguage, request *tooling.ApprovalRequest) TranscriptEntry {
 	if request == nil {
 		return TranscriptEntry{}
@@ -187,6 +191,10 @@ func renderToolResultEntry(language commandcatalog.CatalogLanguage, result *tool
 		lines = append(lines, preview)
 	}
 	return TranscriptEntry{Role: "tool", Body: strings.Join(lines, "\n")}
+}
+
+func RenderToolResultText(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) string {
+	return renderToolResultEntry(language, result).Body
 }
 
 func renderShellResultEntry(language commandcatalog.CatalogLanguage, result *tooling.ToolResultEnvelope) TranscriptEntry {
