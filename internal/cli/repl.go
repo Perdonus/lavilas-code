@@ -111,9 +111,9 @@ func runChat(args []string) int {
 
 func consumeChatModeFlags(args []string) (bool, []string) {
 	if len(args) == 0 {
-		return true, nil
+		return false, nil
 	}
-	usePlain := true
+	usePlain := false
 	filtered := make([]string, 0, len(args))
 	for _, arg := range args {
 		switch arg {
