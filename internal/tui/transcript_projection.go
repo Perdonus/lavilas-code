@@ -8,6 +8,8 @@ import (
 	runtimeapi "github.com/Perdonus/lavilas-code/internal/runtime"
 )
 
+const unfinishedTurnContextMarker = "__go_lavilas_unfinished_turn_context__"
+
 func visibleTranscriptFromMessages(messages []runtimeapi.Message, language commandcatalog.CatalogLanguage) []TranscriptEntry {
 	if len(messages) == 0 {
 		return nil
@@ -124,6 +126,7 @@ func isHiddenRuntimeTranscript(body string) bool {
 		return false
 	}
 	markers := []string{
+		unfinishedTurnContextMarker,
 		"you are go lavilas, based on the current lavilas/codex client.",
 		"working style:",
 		"frontend tasks:",

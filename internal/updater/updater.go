@@ -150,36 +150,51 @@ func scheduleWindowsInstall(ctx context.Context, nvPath string, packageSpec stri
 		packageSpec = PackageSpec()
 	}
 	pid := os.Getpid()
-	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("lvls-update-%d.cmd", pid))
+	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("lvls-update-%d.ps1", pid))
 	script := strings.Join([]string{
-		"@echo off",
-		"setlocal",
-		"title Go Lavilas update",
-		fmt.Sprintf("set \"LOG=%%TEMP%%\\lvls-update-%d.log\"", pid),
-		":wait",
-		fmt.Sprintf("tasklist /FI \"PID eq %d\" 2>NUL | find \"%d\" >NUL", pid, pid),
-		"if not errorlevel 1 (",
-		"  timeout /t 1 /nobreak >NUL",
-		"  goto wait",
-		")",
-		fmt.Sprintf("%s install %s > \"%%LOG%%\" 2>&1", cmdFileQuote(nvPath), cmdFileQuote(packageSpec)),
-		"set \"code=%ERRORLEVEL%\"",
-		"del \"%~f0\" >NUL 2>NUL",
-		"exit /b %code%",
+		"$ErrorActionPreference = 'SilentlyContinue'",
+		fmt.Sprintf("$pidToWait = %d", pid),
+		fmt.Sprintf("$nv = %s", powershellQuote(nvPath)),
+		fmt.Sprintf("$packageSpec = %s", powershellQuote(packageSpec)),
+		fmt.Sprintf("$log = Join-Path $env:TEMP %s", powershellQuote(fmt.Sprintf("lvls-update-%d.log", pid))),
+		"$frames = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')",
+		"$i = 0",
+		"Write-Host ''",
+		"Write-Host 'ОБНОВЛЕНИЕ GO LAVILAS'",
+		"while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {",
+		"  $frame = $frames[$i % $frames.Count]",
+		"  Write-Host -NoNewline (\"`r$frame жду завершения текущего lvls...\")",
+		"  Start-Sleep -Milliseconds 150",
+		"  $i++",
+		"}",
+		"Write-Host \"`r⠿ ставлю новую версию через NV...        \"",
+		"& $nv install $packageSpec 2>&1 | Tee-Object -FilePath $log",
+		"$code = $LASTEXITCODE",
+		"if ($code -eq 0) {",
+		"  Write-Host 'Готово. Запусти lvls снова.'",
+		"} else {",
+		"  Write-Host \"Ошибка обновления. Лог: $log\"",
+		"}",
+		"Remove-Item -LiteralPath $PSCommandPath -Force",
+		"exit $code",
 		"",
 	}, "\r\n")
 	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "cmd", "/C", "start", "", "/min", "cmd", "/C", scriptPath)
-	if err := cmd.Run(); err != nil {
+	_ = ctx
+	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
 		return "", err
 	}
 	return scriptPath, nil
 }
 
-func cmdFileQuote(value string) string {
-	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+func powershellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func installNV(ctx context.Context) error {

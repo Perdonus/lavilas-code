@@ -40,6 +40,7 @@ const (
 var busySpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 type taskFinishedMsg struct {
+	TaskID      int64
 	Prompt      string
 	Result      taskrun.Result
 	SessionPath string
@@ -48,6 +49,7 @@ type taskFinishedMsg struct {
 }
 
 type taskProgressMsg struct {
+	TaskID int64
 	Update taskrun.ProgressUpdate
 }
 
@@ -139,6 +141,9 @@ type Model struct {
 	terminalPrintedInitial       bool
 	terminalPrintedAny           bool
 	terminalLastPrintedRole      string
+	activeTaskID                 int64
+	taskCancelRequested          bool
+	taskCancelNoticePrinted      bool
 }
 
 var composerPlaceholders = map[commandcatalog.CatalogLanguage][]string{
@@ -294,6 +299,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case taskFinishedMsg:
+		if msg.TaskID != 0 && msg.TaskID != m.activeTaskID {
+			return m, nil
+		}
 		m.state.Busy = false
 		var cmds []tea.Cmd
 		if cmd := m.flushLiveExploreActionsCmd(); cmd != nil {
@@ -308,7 +316,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskCancel = nil
 		m.approval = nil
 		if msg.Err != nil {
-			cmd := m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), msg.Err))
+			body := m.taskFailureBody(msg.Err)
+			cmd := m.appendTranscript("system", body)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -317,10 +326,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, cmd)
 				}
 			}
-			m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), msg.Err)
+			m.state.Footer = body
+			m.taskCancelRequested = false
+			m.taskCancelNoticePrinted = false
 			m.updateStatus()
 			return m, tea.Batch(cmds...)
 		}
+		m.taskCancelRequested = false
+		m.taskCancelNoticePrinted = false
 		if cmd := m.applyTaskResult(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -329,10 +342,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		switch inner := msg.Inner.(type) {
 		case taskProgressMsg:
+			if inner.TaskID != 0 && inner.TaskID != m.activeTaskID {
+				break
+			}
 			if cmd := m.applyTaskProgress(inner.Update); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		case taskFinishedMsg:
+			if inner.TaskID != 0 && inner.TaskID != m.activeTaskID {
+				break
+			}
 			m.state.Busy = false
 			if cmd := m.flushLiveExploreActionsCmd(); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -346,7 +365,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.taskCancel = nil
 			m.approval = nil
 			if inner.Err != nil {
-				if cmd := m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), inner.Err)); cmd != nil {
+				body := m.taskFailureBody(inner.Err)
+				if cmd := m.appendTranscript("system", body); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 				if saveWarn != nil {
@@ -354,8 +374,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						cmds = append(cmds, cmd)
 					}
 				}
-				m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), inner.Err)
+				m.state.Footer = body
+				m.taskCancelRequested = false
+				m.taskCancelNoticePrinted = false
 			} else {
+				m.taskCancelRequested = false
+				m.taskCancelNoticePrinted = false
 				if cmd := m.applyTaskResult(inner); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
@@ -1189,20 +1213,48 @@ func (m *Model) submitInput() tea.Cmd {
 
 	printUser := m.appendTranscript("user", draft)
 	m.state.Busy = true
+	m.activeTaskID++
+	m.taskCancelRequested = false
+	m.taskCancelNoticePrinted = false
+	taskID := m.activeTaskID
 	m.state.LiveTurn = &LiveTurnState{
 		StartedAt: time.Now(),
 	}
 	m.state.Footer = m.localize("Running turn...", "Выполняется ход...")
 	m.updateStatus()
 	m.refreshViewport()
-	return tea.Batch(printUser, m.runPromptCmd(draft), busyTickCmd())
+	return tea.Batch(printUser, m.runPromptCmd(draft, taskID), busyTickCmd())
 }
 
 func (m *Model) cancelClearOrQuit() tea.Cmd {
 	if m.state.Busy && m.taskCancel != nil {
+		m.taskCancelRequested = true
+		m.taskCancelNoticePrinted = true
 		m.taskCancel()
-		m.state.Footer = m.localize("Cancellation requested", "Запрошена остановка хода")
-		return nil
+		if cmd := m.flushLiveExploreActionsCmd(); cmd != nil {
+			m.flushLiveTurnEntries()
+			_ = m.persistFailedTurnContext(m.currentTurnPrompt(), context.Canceled)
+			m.state.Busy = false
+			m.state.LiveTurn = nil
+			m.taskCancel = nil
+			m.approval = nil
+			m.activeTaskID++
+			body := m.localize("Model work was paused by the user.", "Работа модели была приостановлена пользователем")
+			m.state.Footer = body
+			m.updateStatus()
+			return tea.Batch(cmd, m.appendTranscript("system", body))
+		}
+		m.flushLiveTurnEntries()
+		_ = m.persistFailedTurnContext(m.currentTurnPrompt(), context.Canceled)
+		m.state.Busy = false
+		m.state.LiveTurn = nil
+		m.taskCancel = nil
+		m.approval = nil
+		m.activeTaskID++
+		body := m.localize("Model work was paused by the user.", "Работа модели была приостановлена пользователем")
+		m.state.Footer = body
+		m.updateStatus()
+		return m.appendTranscript("system", body)
 	}
 	if strings.TrimSpace(m.input.Value()) != "" || strings.TrimSpace(m.state.InputDraft) != "" {
 		m.input.Reset()
@@ -1219,7 +1271,7 @@ func (m *Model) cancelClearOrQuit() tea.Cmd {
 	return tea.Quit
 }
 
-func (m *Model) runPromptCmd(prompt string) tea.Cmd {
+func (m *Model) runPromptCmd(prompt string, taskID int64) tea.Cmd {
 	history := cloneRuntimeMessages(m.history)
 	options := m.options
 	options.Prompt = prompt
@@ -1232,17 +1284,17 @@ func (m *Model) runPromptCmd(prompt string) tea.Cmd {
 
 	return startTaskCmd(func(eventCh chan<- tea.Msg) {
 		defer cancel()
-		progress := newTaskProgressBridge(eventCh)
+		progress := newTaskProgressBridge(eventCh, taskID)
 		defer progress.Close()
 		options.OnProgress = progress.Handle
 		options.OnApproval = nil
 		result, err := taskrun.Run(ctx, options)
 		if err != nil {
-			eventCh <- taskFinishedMsg{Prompt: prompt, Err: err}
+			eventCh <- taskFinishedMsg{TaskID: taskID, Prompt: prompt, Err: err}
 			return
 		}
 		sessionPath, warn := persistTurn(layout, existingSessionPath, result)
-		eventCh <- taskFinishedMsg{Prompt: prompt, Result: result, SessionPath: sessionPath, Warn: warn}
+		eventCh <- taskFinishedMsg{TaskID: taskID, Prompt: prompt, Result: result, SessionPath: sessionPath, Warn: warn}
 	})
 }
 
@@ -2138,6 +2190,7 @@ func (m *Model) executePaletteCommand(command PaletteCommandSpec, args []string)
 		return cmd
 	case PaletteActionStopProcesses:
 		if m.taskCancel != nil && m.state.Busy {
+			m.taskCancelRequested = true
 			m.taskCancel()
 		}
 		stopped := tooling.StopAllBackgroundShells()
@@ -3431,6 +3484,38 @@ func persistTurn(layout apphome.Layout, sessionPath string, result taskrun.Resul
 	return sessionPath, nil
 }
 
+func (m *Model) currentTurnPrompt() string {
+	if m.state.LiveTurn != nil {
+		if prompt := strings.TrimSpace(m.state.LiveTurn.Prompt); prompt != "" {
+			return prompt
+		}
+	}
+	for index := len(m.state.Transcript) - 1; index >= 0; index-- {
+		entry := m.state.Transcript[index]
+		if strings.EqualFold(strings.TrimSpace(entry.Role), "user") {
+			return normalizeTranscriptBody(entry.Body)
+		}
+	}
+	return ""
+}
+
+func (m *Model) taskFailureBody(turnErr error) string {
+	if m.taskCancelRequested && isContextCanceledError(turnErr) {
+		return m.localize("Model work was paused by the user.", "Работа модели была приостановлена пользователем")
+	}
+	return fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), turnErr)
+}
+
+func isContextCanceledError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "context canceled")
+}
+
 func (m *Model) persistFailedTurnContext(prompt string, turnErr error) error {
 	history := cloneRuntimeMessages(m.history)
 	if text := strings.TrimSpace(prompt); text != "" {
@@ -3477,7 +3562,7 @@ func (m *Model) failedTurnAssistantMessage(turnErr error) runtimeapi.Message {
 	if len(parts) == 0 {
 		parts = append(parts, m.localize("Unfinished turn was saved for continuation.", "Незавершённый ход сохранён для продолжения."))
 	}
-	return runtimeapi.TextMessage(runtimeapi.RoleAssistant, strings.Join(parts, "\n\n"))
+	return runtimeapi.TextMessage(runtimeapi.RoleAssistant, unfinishedTurnContextMarker+"\n"+strings.Join(parts, "\n\n"))
 }
 
 func compactLiveEntryContext(entries []TranscriptEntry) string {
@@ -3588,15 +3673,17 @@ const taskProgressSnapshotThrottle = 40 * time.Millisecond
 
 type taskProgressBridge struct {
 	eventCh chan<- tea.Msg
+	taskID  int64
 	done    chan struct{}
 	wg      sync.WaitGroup
 	mu      sync.Mutex
 	latest  *taskrun.ProgressUpdate
 }
 
-func newTaskProgressBridge(eventCh chan<- tea.Msg) *taskProgressBridge {
+func newTaskProgressBridge(eventCh chan<- tea.Msg, taskID int64) *taskProgressBridge {
 	bridge := &taskProgressBridge{
 		eventCh: eventCh,
+		taskID:  taskID,
 		done:    make(chan struct{}),
 	}
 	bridge.wg.Add(1)
@@ -3606,7 +3693,7 @@ func newTaskProgressBridge(eventCh chan<- tea.Msg) *taskProgressBridge {
 
 func (b *taskProgressBridge) Handle(update taskrun.ProgressUpdate) {
 	if update.Kind != taskrun.ProgressKindAssistantSnapshot {
-		b.eventCh <- taskProgressMsg{Update: update}
+		b.eventCh <- taskProgressMsg{TaskID: b.taskID, Update: update}
 		return
 	}
 	copy := update
@@ -3643,7 +3730,7 @@ func (b *taskProgressBridge) flush() {
 	if latest == nil {
 		return
 	}
-	b.eventCh <- taskProgressMsg{Update: *latest}
+	b.eventCh <- taskProgressMsg{TaskID: b.taskID, Update: *latest}
 }
 
 func waitTaskEventCmd(eventCh <-chan tea.Msg) tea.Cmd {

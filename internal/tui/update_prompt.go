@@ -22,12 +22,24 @@ const (
 )
 
 type updatePromptModel struct {
-	result   updater.CheckResult
-	selected int
-	width    int
-	height   int
-	decision updateDecision
+	result     updater.CheckResult
+	selected   int
+	width      int
+	height     int
+	decision   updateDecision
+	installing bool
+	spinner    int
+	installErr error
 }
+
+type updateInstallFinishedMsg struct {
+	Result updater.InstallResult
+	Err    error
+}
+
+type updateSpinnerMsg struct{}
+
+var updateSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func RunUpdateGate() (bool, int) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("LAVILAS_SKIP_UPDATE_CHECK")), "1") {
@@ -46,19 +58,6 @@ func RunUpdateGate() (bool, int) {
 	}
 	switch decision {
 	case updateDecisionInstall:
-		fmt.Printf("\nОбновляю Go Lavilas через NV: %s -> %s\n\n", result.CurrentVersion, result.LatestVersion)
-		installCtx, installCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		installResult, err := updater.InstallOrSchedule(installCtx, result.NVPath, result.PackageSpec)
-		installCancel()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "update failed: %v\n", err)
-			return false, 1
-		}
-		if installResult.Scheduled {
-			fmt.Printf("Обновление в процессе. lvls закроется, новая версия поставится через NV.\n")
-			return false, 0
-		}
-		fmt.Printf("\nОбновление установлено: %s. Запусти lvls снова.\n", result.LatestVersion)
 		return false, 0
 	case updateDecisionExit:
 		return false, 130
@@ -89,6 +88,9 @@ func (m updatePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
+		if m.installing {
+			return m, nil
+		}
 		switch strings.ToLower(strings.TrimSpace(msg.String())) {
 		case "ctrl+c":
 			m.decision = updateDecisionExit
@@ -104,12 +106,27 @@ func (m updatePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if m.selected == 0 {
-				m.decision = updateDecisionInstall
-			} else {
-				m.decision = updateDecisionLater
+				m.installing = true
+				m.installErr = nil
+				return m, tea.Batch(updateSpinnerCmd(), installUpdateCmd(m.result))
 			}
+			m.decision = updateDecisionLater
 			return m, tea.Quit
 		}
+	case updateSpinnerMsg:
+		if !m.installing {
+			return m, nil
+		}
+		m.spinner++
+		return m, updateSpinnerCmd()
+	case updateInstallFinishedMsg:
+		m.installing = false
+		if msg.Err != nil {
+			m.installErr = msg.Err
+			return m, nil
+		}
+		m.decision = updateDecisionInstall
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -117,9 +134,10 @@ func (m updatePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m updatePromptModel) View() string {
 	boxWidth := 58
 	if m.width > 0 {
-		boxWidth = minInt(maxInt(42, m.width-4), 64)
+		boxWidth = minInt(maxInt(42, m.width-4), 72)
 	}
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f43f5e"))
+	progressStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#38bdf8"))
 	oldStyle := lipgloss.NewStyle().Strikethrough(true).Foreground(lipgloss.Color("#8b949e"))
 	newStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#38bdf8"))
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e"))
@@ -135,6 +153,21 @@ func (m updatePromptModel) View() string {
 	}
 
 	versions := oldStyle.Render(m.result.CurrentVersion) + muted.Render("  ->  ") + newStyle.Render(m.result.LatestVersion)
+	if m.installing {
+		frame := "⠋"
+		if len(updateSpinnerFrames) > 0 {
+			frame = updateSpinnerFrames[m.spinner%len(updateSpinnerFrames)]
+		}
+		lines := []string{
+			progressStyle.Render("ОБНОВЛЕНИЕ УСТАНАВЛИВАЕТСЯ"),
+			"",
+			versions,
+			"",
+			progressStyle.Render(frame+" NV ставит новую версию. Терминал не закрывай."),
+			muted.Render("После замены запусти lvls снова."),
+		}
+		return updatePromptBox(boxWidth).Render(strings.Join(lines, "\n")) + "\n"
+	}
 	lines := []string{
 		titleStyle.Render("ВЫШЛО ОБНОВЛЕНИЕ!!!"),
 		"",
@@ -142,13 +175,33 @@ func (m updatePromptModel) View() string {
 		"",
 		updateButton,
 		laterButton,
-		"",
-		muted.Render("enter — выбрать, ↑/↓ — переключить, esc — позже, ctrl+c — выйти"),
 	}
-	pane := lipgloss.NewStyle().
-		Width(boxWidth).
+	if m.installErr != nil {
+		lines = append(lines, "", titleStyle.Render("Ошибка обновления: "+m.installErr.Error()))
+	}
+	lines = append(lines, "", muted.Render("enter — выбрать, ↑/↓ — переключить, esc — позже, ctrl+c — выйти"))
+	return updatePromptBox(boxWidth).Render(strings.Join(lines, "\n")) + "\n"
+}
+
+func updatePromptBox(width int) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Width(width).
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#38bdf8"))
-	return pane.Render(strings.Join(lines, "\n"))
+}
+
+func updateSpinnerCmd() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+		return updateSpinnerMsg{}
+	})
+}
+
+func installUpdateCmd(result updater.CheckResult) tea.Cmd {
+	return func() tea.Msg {
+		installCtx, installCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer installCancel()
+		installResult, err := updater.InstallOrSchedule(installCtx, result.NVPath, result.PackageSpec)
+		return updateInstallFinishedMsg{Result: installResult, Err: err}
+	}
 }
