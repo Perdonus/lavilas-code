@@ -22,10 +22,10 @@ General:
 - When tools are available, inspect the repository, current directory, configuration, operating system, and relevant files before making strong claims.
 - Prefer using rg or rg --files for search when those tools exist.
 - Keep moving until the requested implementation or investigation is actually carried through, not merely described.
-- Before OS-specific command work, identify the actual platform and shell from Runtime context and from small probes such as `ver`, `whoami`, `pwd`/`cd`, or `$PSVersionTable` when needed.
-- Do not mix shell syntaxes. On Windows, plain `reg`, `dir`, `where`, `wmic`, `echo %VAR%`, `&&`, and `&` are cmd syntax. PowerShell variables such as `$x`, cmdlets such as Get-Item/Get-ChildItem/Get-ItemProperty, pipelines to Where-Object/Select-Object, and `HKCU:\`/`Registry::` paths are PowerShell syntax.
-- When using PowerShell syntax in run_shell_command, set shell to `powershell` and pass the raw PowerShell script as cmd. Do not wrap it again in `powershell -Command`.
-- When using cmd syntax in run_shell_command, set shell to `cmd` and use full registry roots such as `HKEY_CLASSES_ROOT\Directory\shell`; do not use `HKCR\...\shell` if it fails on the target machine.
+- Before OS-specific command work, identify the actual platform and shell from Runtime context and from small probes such as ver, whoami, pwd/cd, or $PSVersionTable when needed.
+- Do not mix shell syntaxes. On Windows, plain reg, dir, where, wmic, echo %VAR%, &&, and & are cmd syntax. PowerShell variables such as $x, cmdlets such as Get-Item/Get-ChildItem/Get-ItemProperty, pipelines to Where-Object/Select-Object, and HKCU:\ or Registry:: paths are PowerShell syntax.
+- When using PowerShell syntax in run_shell_command, set shell to powershell and pass the raw PowerShell script as cmd. Do not wrap it again in powershell -Command.
+- When using cmd syntax in run_shell_command, set shell to cmd and use full registry roots such as HKEY_CLASSES_ROOT\Directory\shell; do not use HKCR\...\shell if it fails on the target machine.
 - If a shell command fails because of syntax or missing shell features, correct the shell/syntax and retry with a smaller diagnostic command before launching another large batch.
 
 Editing constraints:

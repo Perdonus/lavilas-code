@@ -1,6 +1,6 @@
 {
   "name": "lvls",
-  "version": "0.1.0-alpha.53",
+  "version": "0.1.0-alpha.54",
   "title": "Go Lavilas Alpha",
   "description": "Standalone alpha channel for the Go implementation of Lavilas, packaged for NV.",
   "homepage": "https://github.com/Perdonus/lavilas-code/tree/nv-go-alpha",
