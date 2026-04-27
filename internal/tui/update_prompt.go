@@ -48,11 +48,19 @@ func RunUpdateGate() (bool, int) {
 	case updateDecisionInstall:
 		fmt.Printf("\nОбновляю Go Lavilas через NV: %s -> %s\n\n", result.CurrentVersion, result.LatestVersion)
 		installCtx, installCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		err := updater.Install(installCtx, result.NVPath, result.PackageSpec)
+		installResult, err := updater.InstallOrSchedule(installCtx, result.NVPath, result.PackageSpec)
 		installCancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "update failed: %v\n", err)
 			return false, 1
+		}
+		if installResult.Scheduled {
+			fmt.Printf("Обновление запланировано в отдельном окне NV.\n")
+			fmt.Printf("Закрываю lvls, чтобы Windows отпустил файл программы.\n")
+			if installResult.Script != "" {
+				fmt.Printf("Скрипт обновления: %s\n", installResult.Script)
+			}
+			return false, 0
 		}
 		fmt.Printf("\nОбновление установлено: %s. Запусти lvls снова.\n", result.LatestVersion)
 		return false, 0
@@ -111,11 +119,10 @@ func (m updatePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m updatePromptModel) View() string {
-	width := maxInt(42, m.width-4)
-	if m.width <= 0 {
-		width = 78
+	boxWidth := 58
+	if m.width > 0 {
+		boxWidth = minInt(maxInt(42, m.width-4), 64)
 	}
-	boxWidth := minInt(maxInt(50, width), 86)
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f43f5e"))
 	oldStyle := lipgloss.NewStyle().Strikethrough(true).Foreground(lipgloss.Color("#8b949e"))
 	newStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#38bdf8"))
@@ -131,23 +138,21 @@ func (m updatePromptModel) View() string {
 		laterButton = selectedButton.Render("позже")
 	}
 
-	versions := padBetween(oldStyle.Render(m.result.CurrentVersion), newStyle.Render(m.result.LatestVersion), boxWidth-4)
-	spacerLines := maxInt(8, minInt(14, m.height/2))
-	if m.height <= 0 {
-		spacerLines = 10
-	}
+	versions := oldStyle.Render(m.result.CurrentVersion) + muted.Render("  ->  ") + newStyle.Render(m.result.LatestVersion)
 	lines := []string{
 		titleStyle.Render("ВЫШЛО ОБНОВЛЕНИЕ!!!"),
 		"",
 		versions,
 		"",
 		updateButton,
-		muted.Render("↓ ниже есть вариант позже"),
-		strings.Repeat("\n", spacerLines),
 		laterButton,
 		"",
 		muted.Render("enter — выбрать, ↑/↓ — переключить, esc — позже, ctrl+c — выйти"),
 	}
-	pane := lipgloss.NewStyle().Width(boxWidth).Padding(1, 2)
+	pane := lipgloss.NewStyle().
+		Width(boxWidth).
+		Padding(1, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#38bdf8"))
 	return pane.Render(strings.Join(lines, "\n"))
 }

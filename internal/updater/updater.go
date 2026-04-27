@@ -121,6 +121,77 @@ func Install(ctx context.Context, nvPath string, packageSpec string) error {
 	return cmd.Run()
 }
 
+type InstallResult struct {
+	Scheduled bool
+	Script    string
+}
+
+func InstallOrSchedule(ctx context.Context, nvPath string, packageSpec string) (InstallResult, error) {
+	if runtime.GOOS != "windows" {
+		return InstallResult{}, Install(ctx, nvPath, packageSpec)
+	}
+	script, err := scheduleWindowsInstall(ctx, nvPath, packageSpec)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	return InstallResult{Scheduled: true, Script: script}, nil
+}
+
+func scheduleWindowsInstall(ctx context.Context, nvPath string, packageSpec string) (string, error) {
+	var err error
+	if strings.TrimSpace(nvPath) == "" {
+		nvPath, err = EnsureNV(ctx)
+		if err != nil {
+			return "", err
+		}
+	}
+	packageSpec = strings.TrimSpace(packageSpec)
+	if packageSpec == "" {
+		packageSpec = PackageSpec()
+	}
+	pid := os.Getpid()
+	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("lvls-update-%d.cmd", pid))
+	script := strings.Join([]string{
+		"@echo off",
+		"setlocal",
+		"title Go Lavilas update",
+		"echo Updating Go Lavilas through NV...",
+		"echo Waiting for lvls.exe to exit...",
+		":wait",
+		fmt.Sprintf("tasklist /FI \"PID eq %d\" 2^>NUL | find \"%d\" ^>NUL", pid, pid),
+		"if not errorlevel 1 (",
+		"  timeout /t 1 /nobreak >NUL",
+		"  goto wait",
+		")",
+		"echo.",
+		fmt.Sprintf("%s install %s", cmdFileQuote(nvPath), cmdFileQuote(packageSpec)),
+		"set \"code=%ERRORLEVEL%\"",
+		"echo.",
+		"if \"%code%\"==\"0\" (",
+		"  echo Go Lavilas updated successfully.",
+		") else (",
+		"  echo Go Lavilas update failed with code %code%.",
+		")",
+		"echo.",
+		"pause",
+		"del \"%~f0\" >NUL 2>NUL",
+		"exit /b %code%",
+		"",
+	}, "\r\n")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, "cmd", "/C", "start", "", scriptPath)
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return scriptPath, nil
+}
+
+func cmdFileQuote(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+}
+
 func installNV(ctx context.Context) error {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
