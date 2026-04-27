@@ -23,13 +23,14 @@ const (
 	maxReadBytes        = 128 * 1024
 	maxListEntries      = 256
 	maxSearchResults    = 128
-	defaultShellTimeout = 20 * time.Second
-	maxShellTimeout     = 2 * time.Minute
+	defaultShellTimeout = 60 * time.Second
+	maxShellTimeout     = 10 * time.Minute
 )
 
 type shellArgs struct {
 	Cmd            string `json:"cmd"`
 	Cwd            string `json:"cwd,omitempty"`
+	Shell          string `json:"shell,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	ProcessID      string `json:"process_id,omitempty"`
 	YieldTimeMs    int    `json:"yield_time_ms,omitempty"`
@@ -95,11 +96,12 @@ func Definitions() []toolruntime.ToolDefinition {
 				"properties": map[string]any{
 					"cmd":             map[string]any{"type": "string", "description": "Shell command to execute."},
 					"cwd":             map[string]any{"type": "string", "description": "Optional working directory. Defaults to the current directory."},
-					"timeout_seconds": map[string]any{"type": "integer", "description": "Optional timeout in seconds. Defaults to 20, max 120."},
+					"shell":           map[string]any{"type": "string", "description": "Optional shell override. On Windows use cmd for cmd syntax and powershell for PowerShell syntax.", "enum": []string{"", "cmd", "powershell", "pwsh", "sh", "bash"}},
+					"timeout_seconds": map[string]any{"type": "integer", "description": "Optional timeout in seconds. Defaults to 60, max 600."},
 					"process_id":      map[string]any{"type": "string", "description": "Optional process identifier for polling a command started earlier."},
 					"yield_time_ms":   map[string]any{"type": "integer", "description": "Optional time to wait for background command output before returning. Values above zero enable background polling mode."},
 				},
-				"required": []string{"cmd", "cwd", "timeout_seconds", "process_id", "yield_time_ms"},
+				"required": []string{"cmd", "cwd", "shell", "timeout_seconds", "process_id", "yield_time_ms"},
 			},
 		),
 		functionTool(
@@ -413,6 +415,7 @@ func runShellCommand(ctx context.Context, args shellArgs) string {
 	if commandText == "" {
 		return marshalResult(map[string]any{"ok": false, "tool": "run_shell_command", "error": "cmd is required"})
 	}
+	commandText = normalizeWindowsRegistryAliases(commandText)
 
 	cwd, err := resolvePath(args.Cwd, true)
 	if err != nil {
@@ -420,17 +423,18 @@ func runShellCommand(ctx context.Context, args shellArgs) string {
 	}
 
 	timeout := normalizeShellTimeout(args.TimeoutSeconds)
+	shell := normalizeShellName(args.Shell)
 	if args.YieldTimeMs > 0 {
-		return startBackgroundShellCommand(ctx, commandText, cwd, timeout, args.YieldTimeMs)
+		return startBackgroundShellCommand(ctx, commandText, cwd, shell, timeout, args.YieldTimeMs)
 	}
-	return runShellCommandSync(ctx, commandText, cwd, timeout)
+	return runShellCommandSync(ctx, commandText, cwd, shell, timeout)
 }
 
-func runShellCommandSync(ctx context.Context, commandText string, cwd string, timeout time.Duration) string {
+func runShellCommandSync(ctx context.Context, commandText string, cwd string, shell string, timeout time.Duration) string {
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd, shellName := shellCommand(commandCtx, commandText)
+	cmd, shellName := shellCommand(commandCtx, commandText, shell)
 	cmd.Dir = cwd
 
 	var stdout bytes.Buffer
@@ -475,31 +479,126 @@ func runShellCommandSync(ctx context.Context, commandText string, cwd string, ti
 	return marshalResult(payload)
 }
 
-func shellCommand(ctx context.Context, commandText string) (*exec.Cmd, string) {
+func shellCommand(ctx context.Context, commandText string, requestedShell string) (*exec.Cmd, string) {
+	requestedShell = normalizeShellName(requestedShell)
 	if runtime.GOOS == "windows" {
+		switch requestedShell {
+		case "powershell":
+			return exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", unwrapPowerShellCommand(commandText)), "powershell"
+		case "pwsh":
+			return exec.CommandContext(ctx, "pwsh", "-NoProfile", "-Command", unwrapPowerShellCommand(commandText)), "pwsh"
+		case "cmd":
+			return exec.CommandContext(ctx, "cmd", "/C", commandText), "cmd"
+		}
 		if looksLikePowerShell(commandText) {
-			return exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", commandText), "powershell"
+			return exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", unwrapPowerShellCommand(commandText)), "powershell"
 		}
 		return exec.CommandContext(ctx, "cmd", "/C", commandText), "cmd"
 	}
+	switch requestedShell {
+	case "bash":
+		return exec.CommandContext(ctx, "bash", "-lc", commandText), "bash"
+	case "sh":
+		return exec.CommandContext(ctx, "sh", "-lc", commandText), "sh"
+	}
 	return exec.CommandContext(ctx, "sh", "-lc", commandText), "sh"
+}
+
+func normalizeWindowsRegistryAliases(commandText string) string {
+	if runtime.GOOS != "windows" {
+		return commandText
+	}
+	replacements := []struct {
+		short string
+		full  string
+	}{
+		{`HKCR\`, `HKEY_CLASSES_ROOT\`},
+		{`HKCU\`, `HKEY_CURRENT_USER\`},
+		{`HKLM\`, `HKEY_LOCAL_MACHINE\`},
+		{`HKU\`, `HKEY_USERS\`},
+		{`HKCC\`, `HKEY_CURRENT_CONFIG\`},
+	}
+	result := commandText
+	for _, replacement := range replacements {
+		result = strings.ReplaceAll(result, replacement.short, replacement.full)
+		result = strings.ReplaceAll(result, strings.ToLower(replacement.short), replacement.full)
+	}
+	return result
 }
 
 func looksLikePowerShell(commandText string) bool {
 	lower := strings.ToLower(commandText)
 	markers := []string{
 		"hkcu:\\", "hklm:\\", "hkcr:\\",
+		"registry::",
 		"get-item", "get-childitem", "get-itemproperty",
-		"set-item", "set-itemproperty", "remove-item", "new-item",
-		"where-object", "foreach-object", "select-object", "sort-object", "format-table",
-		"[pscustomobject]", "test-path", "join-path",
+		"set-item", "set-itemproperty", "remove-item", "new-item", "new-object",
+		"where-object", "foreach-object", "select-object", "sort-object", "format-table", "format-list",
+		"[pscustomobject]", "test-path", "join-path", "split-path", "convertto-json",
+		"$erroractionpreference", "$psversiontable", "$env:", "$pwd", "$home",
 	}
 	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
 			return true
 		}
 	}
-	return strings.Contains(commandText, "$") && strings.Contains(commandText, "\n")
+	return strings.Contains(commandText, "$") && (strings.Contains(commandText, ";") || strings.Contains(commandText, "\n") || strings.Contains(commandText, "|"))
+}
+
+func normalizeShellName(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "cmd", "cmd.exe":
+		return "cmd"
+	case "powershell", "powershell.exe":
+		return "powershell"
+	case "pwsh", "pwsh.exe":
+		return "pwsh"
+	case "bash":
+		return "bash"
+	case "sh":
+		return "sh"
+	default:
+		return ""
+	}
+}
+
+func unwrapPowerShellCommand(commandText string) string {
+	trimmed := strings.TrimSpace(commandText)
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range []string{"powershell", "powershell.exe", "pwsh", "pwsh.exe"} {
+		if lower == prefix {
+			return ""
+		}
+		if strings.HasPrefix(lower, prefix+" ") {
+			return stripPowerShellCommandPrefix(strings.TrimSpace(trimmed[len(prefix):]))
+		}
+	}
+	return commandText
+}
+
+func stripPowerShellCommandPrefix(args string) string {
+	fields := strings.Fields(args)
+	index := 0
+	for index < len(fields) {
+		flag := strings.ToLower(strings.TrimSpace(fields[index]))
+		switch flag {
+		case "-noprofile", "-noninteractive", "-executionpolicy", "bypass":
+			index++
+			if flag == "-executionpolicy" && index < len(fields) {
+				index++
+			}
+		case "-command", "-c", "/c":
+			rest := strings.TrimSpace(strings.TrimPrefix(args, strings.Join(fields[:index+1], " ")))
+			return strings.Trim(rest, "\"")
+		default:
+			if strings.HasPrefix(flag, "-") {
+				index++
+				continue
+			}
+			return strings.Trim(args, "\"")
+		}
+	}
+	return strings.Trim(args, "\"")
 }
 
 func normalizeShellTimeout(timeoutSeconds int) time.Duration {

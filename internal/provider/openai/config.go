@@ -11,7 +11,7 @@ import (
 const (
 	DefaultBaseURL             = "https://api.openai.com"
 	DefaultChatCompletionsPath = "/v1/chat/completions"
-	DefaultTimeout             = 60 * time.Second
+	DefaultTimeout             = 5 * time.Minute
 	DefaultUserAgent           = "lavilas-go/provider-openai"
 )
 

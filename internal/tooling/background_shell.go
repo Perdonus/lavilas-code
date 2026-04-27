@@ -27,6 +27,7 @@ type backgroundShellProcess struct {
 	id        string
 	cmdText   string
 	cwd       string
+	shell     string
 	timeout   time.Duration
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -53,6 +54,7 @@ type shellCommandSnapshot struct {
 	ProcessID       string
 	Cmd             string
 	Cwd             string
+	Shell           string
 	Running         bool
 	ExitCode        any
 	OK              bool
@@ -123,14 +125,14 @@ func StopAllBackgroundShells() int {
 	return stopped
 }
 
-func startBackgroundShellCommand(ctx context.Context, commandText string, cwd string, timeout time.Duration, yieldTimeMs int) string {
+func startBackgroundShellCommand(ctx context.Context, commandText string, cwd string, shell string, timeout time.Duration, yieldTimeMs int) string {
 	select {
 	case <-ctx.Done():
 		return marshalResult(map[string]any{"ok": false, "tool": "run_shell_command", "error": ctx.Err().Error()})
 	default:
 	}
 
-	process, err := spawnBackgroundShell(commandText, cwd, timeout)
+	process, err := spawnBackgroundShell(commandText, cwd, shell, timeout)
 	if err != nil {
 		return marshalResult(map[string]any{
 			"ok":               false,
@@ -183,12 +185,14 @@ func pollBackgroundShellCommand(ctx context.Context, args shellArgs) string {
 	return marshalShellSnapshot(snapshot)
 }
 
-func spawnBackgroundShell(commandText string, cwd string, timeout time.Duration) (*backgroundShellProcess, error) {
+func spawnBackgroundShell(commandText string, cwd string, shell string, timeout time.Duration) (*backgroundShellProcess, error) {
 	commandCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	cmd, shellName := shellCommand(commandCtx, commandText, shell)
 	process := &backgroundShellProcess{
 		id:        newBackgroundProcessID(),
 		cmdText:   commandText,
 		cwd:       cwd,
+		shell:     shellName,
 		timeout:   timeout,
 		cancel:    cancel,
 		done:      make(chan struct{}),
@@ -201,7 +205,6 @@ func spawnBackgroundShell(commandText string, cwd string, timeout time.Duration)
 		},
 	}
 
-	cmd, _ := shellCommand(commandCtx, commandText)
 	cmd.Dir = cwd
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -268,6 +271,7 @@ func marshalShellSnapshot(snapshot shellCommandSnapshot) string {
 	payload := map[string]any{
 		"ok":               snapshot.OK,
 		"tool":             "run_shell_command",
+		"shell":            snapshot.Shell,
 		"cmd":              snapshot.Cmd,
 		"cwd":              snapshot.Cwd,
 		"running":          snapshot.Running,
@@ -376,6 +380,7 @@ func (p *backgroundShellProcess) snapshot() shellCommandSnapshot {
 		ProcessID:       p.id,
 		Cmd:             p.cmdText,
 		Cwd:             p.cwd,
+		Shell:           p.shell,
 		Running:         running,
 		ExitCode:        nil,
 		OK:              running,

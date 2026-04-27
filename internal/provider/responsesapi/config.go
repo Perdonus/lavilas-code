@@ -11,7 +11,7 @@ import (
 const (
 	DefaultBaseURL       = "https://api.openai.com"
 	DefaultResponsesPath = "/v1/responses"
-	DefaultTimeout       = 60 * time.Second
+	DefaultTimeout       = 5 * time.Minute
 	DefaultUserAgent     = "lvls/provider-responses"
 )
 

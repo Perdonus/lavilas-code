@@ -56,7 +56,7 @@ func TestDefinitionsExposeStrictSchemasForOpenAIProviders(t *testing.T) {
 	if !ok {
 		t.Fatalf("run_shell_command required = %#v, want []string", root["required"])
 	}
-	wantRoot := []string{"cmd", "cwd", "timeout_seconds", "process_id", "yield_time_ms"}
+	wantRoot := []string{"cmd", "cwd", "shell", "timeout_seconds", "process_id", "yield_time_ms"}
 	if len(required) != len(wantRoot) {
 		t.Fatalf("run_shell_command required len = %d, want %d (%v)", len(required), len(wantRoot), required)
 	}
