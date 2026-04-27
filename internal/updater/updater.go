@@ -83,7 +83,7 @@ func LatestVersion(ctx context.Context, nvPath string, packageSpec string) (stri
 	if packageSpec == "" {
 		packageSpec = PackageSpec()
 	}
-	cmd := exec.CommandContext(ctx, nvPath, "view", packageSpec, "--json")
+	cmd := exec.CommandContext(ctx, nvPath, "view", packageSpec, "version", "--json")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -163,17 +163,44 @@ func findNVInCommonLocations() string {
 }
 
 func decodeNVVersion(data []byte) string {
-	var payload struct {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return ""
+	}
+	if value := decodeVersionField(raw["version"]); value != "" {
+		return value
+	}
+	if value := decodeVersionField(raw["latest_version"]); value != "" {
+		return value
+	}
+	if variantsRaw, ok := raw["variants"]; ok {
+		var variants []struct {
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(variantsRaw, &variants) == nil {
+			for _, variant := range variants {
+				if value := strings.TrimSpace(variant.Version); value != "" {
+					return value
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func decodeVersionField(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		return strings.TrimSpace(value)
+	}
+	var object struct {
 		Version string `json:"version"`
 	}
-	if json.Unmarshal(data, &payload) == nil && strings.TrimSpace(payload.Version) != "" {
-		return strings.TrimSpace(payload.Version)
-	}
-	var generic map[string]any
-	if json.Unmarshal(data, &generic) == nil {
-		if value, ok := generic["version"].(string); ok {
-			return strings.TrimSpace(value)
-		}
+	if json.Unmarshal(raw, &object) == nil {
+		return strings.TrimSpace(object.Version)
 	}
 	return ""
 }
