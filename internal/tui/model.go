@@ -300,6 +300,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		m.flushLiveTurnEntries()
+		var saveWarn error
+		if msg.Err != nil {
+			saveWarn = m.persistFailedTurnContext(msg.Prompt, msg.Err)
+		}
 		m.state.LiveTurn = nil
 		m.taskCancel = nil
 		m.approval = nil
@@ -307,6 +311,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), msg.Err))
 			if cmd != nil {
 				cmds = append(cmds, cmd)
+			}
+			if saveWarn != nil {
+				if cmd := m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Failed to save unfinished turn", "Не удалось сохранить незавершённый ход"), saveWarn)); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 			m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), msg.Err)
 			m.updateStatus()
@@ -329,12 +338,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 			m.flushLiveTurnEntries()
+			var saveWarn error
+			if inner.Err != nil {
+				saveWarn = m.persistFailedTurnContext(inner.Prompt, inner.Err)
+			}
 			m.state.LiveTurn = nil
 			m.taskCancel = nil
 			m.approval = nil
 			if inner.Err != nil {
 				if cmd := m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Run failed", "Сбой запуска"), inner.Err)); cmd != nil {
 					cmds = append(cmds, cmd)
+				}
+				if saveWarn != nil {
+					if cmd := m.appendTranscript("system", fmt.Sprintf("%s: %v", m.localize("Failed to save unfinished turn", "Не удалось сохранить незавершённый ход"), saveWarn)); cmd != nil {
+						cmds = append(cmds, cmd)
+					}
 				}
 				m.state.Footer = fmt.Sprintf("%s: %v", m.localize("Last error", "Последняя ошибка"), inner.Err)
 			} else {
@@ -3413,6 +3431,75 @@ func persistTurn(layout apphome.Layout, sessionPath string, result taskrun.Resul
 	return sessionPath, nil
 }
 
+func (m *Model) persistFailedTurnContext(prompt string, turnErr error) error {
+	history := cloneRuntimeMessages(m.history)
+	if text := strings.TrimSpace(prompt); text != "" {
+		history = appendHistoryMessageDedup(history, runtimeapi.TextMessage(runtimeapi.RoleUser, text))
+	}
+	assistantMessage := m.failedTurnAssistantMessage(turnErr)
+	history = appendHistoryMessageDedup(history, assistantMessage)
+	if len(history) == len(m.history) {
+		return nil
+	}
+	m.history = history
+
+	result := taskrun.Result{
+		ProviderName: fallback(m.state.Provider, m.options.Provider),
+		Model:        fallback(m.state.Model, m.options.Model),
+		Reasoning:    fallback(m.state.Reasoning, m.options.ReasoningEffort),
+		Profile:      fallback(m.state.Profile, m.options.Profile),
+		CWD:          fallback(strings.TrimSpace(m.state.CWD), strings.TrimSpace(m.effectiveWorkingDirectory())),
+		History:      cloneRuntimeMessages(history),
+	}
+	sessionPath, err := persistTurn(m.layout, m.state.SessionPath, result)
+	if strings.TrimSpace(sessionPath) != "" {
+		m.state.SessionPath = sessionPath
+	}
+	return err
+}
+
+func (m *Model) failedTurnAssistantMessage(turnErr error) runtimeapi.Message {
+	parts := make([]string, 0, 4)
+	if live := m.state.LiveTurn; live != nil {
+		if reasoning := strings.TrimSpace(live.ReasoningText); reasoning != "" {
+			parts = append(parts, m.localize("Unfinished reasoning:\n", "Размышления незавершённого хода:\n")+truncateToolPreview(reasoning, 4000))
+		}
+		if answer := strings.TrimSpace(live.AssistantText); answer != "" {
+			parts = append(parts, m.localize("Partial answer:\n", "Частичный ответ:\n")+truncateToolPreview(answer, 4000))
+		}
+		if context := compactLiveEntryContext(live.Entries); context != "" {
+			parts = append(parts, m.localize("Tool context:\n", "Контекст инструментов:\n")+truncateToolPreview(context, 8000))
+		}
+	}
+	if len(parts) == 0 && turnErr != nil {
+		parts = append(parts, fmt.Sprintf("%s: %v", m.localize("Unfinished turn stopped", "Незавершённый ход остановлен"), turnErr))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, m.localize("Unfinished turn was saved for continuation.", "Незавершённый ход сохранён для продолжения."))
+	}
+	return runtimeapi.TextMessage(runtimeapi.RoleAssistant, strings.Join(parts, "\n\n"))
+}
+
+func compactLiveEntryContext(entries []TranscriptEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		role := strings.TrimSpace(entry.Role)
+		body := normalizeTranscriptBody(entry.Body)
+		if body == "" {
+			continue
+		}
+		if role != "" {
+			lines = append(lines, role+": "+body)
+		} else {
+			lines = append(lines, body)
+		}
+	}
+	return strings.Join(lines, "\n\n")
+}
+
 func cloneRuntimeMessages(messages []runtimeapi.Message) []runtimeapi.Message {
 	if len(messages) == 0 {
 		return nil
@@ -3420,6 +3507,19 @@ func cloneRuntimeMessages(messages []runtimeapi.Message) []runtimeapi.Message {
 	cloned := make([]runtimeapi.Message, len(messages))
 	copy(cloned, messages)
 	return cloned
+}
+
+func appendHistoryMessageDedup(messages []runtimeapi.Message, message runtimeapi.Message) []runtimeapi.Message {
+	if !hasPersistableMessage(message) {
+		return messages
+	}
+	if len(messages) > 0 {
+		last := messages[len(messages)-1]
+		if last.Role == message.Role && normalizeTranscriptBody(last.Text()) == normalizeTranscriptBody(message.Text()) && strings.TrimSpace(last.Refusal) == strings.TrimSpace(message.Refusal) {
+			return messages
+		}
+	}
+	return append(messages, message)
 }
 
 func hasPersistableMessage(message runtimeapi.Message) bool {

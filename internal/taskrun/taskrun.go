@@ -281,7 +281,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 }
 
 func runWithToolLoop(ctx context.Context, client provider.Client, request runtime.Request, preferStreaming bool, toolPolicy tooling.ToolPolicy, approvalStore *ApprovalSessionStore, approvalHandler ApprovalHandler, reporter progressReporter, workerBase workerRuntimeOptions) ([]runtime.Message, []runtime.Message, *runtime.Response, runtime.Message, []runtime.StreamEvent, []tooling.ExecutionReport, error) {
-	const maxRounds = 8
+	const maxRounds = 24
 
 	messages := cloneMessages(request.Messages)
 	baseRequest := request
@@ -291,10 +291,13 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 	approvalStore.beginTurn()
 	var events []runtime.StreamEvent
 	var toolReports []tooling.ExecutionReport
+	var lastRequestMessages []runtime.Message
+	var lastResponse *runtime.Response
 
 	for round := 0; round < maxRounds; round++ {
 		currentRequest := baseRequest
 		currentRequest.Messages = cloneMessages(messages)
+		lastRequestMessages = cloneMessages(currentRequest.Messages)
 		if round > 0 {
 			reporter.Emit(ProgressUpdate{
 				Kind:  ProgressKindTurnStarted,
@@ -305,8 +308,14 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 
 		response, roundEvents, assistantMessage, err := runSingleTurn(ctx, client, &currentRequest, preferStreaming, round+1, reporter)
 		if err != nil {
+			if len(messages) > len(request.Messages) {
+				assistantMessage := toolLoopContinuationMessage(fmt.Sprintf("provider returned an error after tool work: %v", err))
+				fullHistory := append(cloneMessages(messages), assistantMessage)
+				return fullHistory, cloneMessages(lastRequestMessages), lastResponse, assistantMessage, events, toolReports, nil
+			}
 			return nil, nil, nil, runtime.Message{}, nil, nil, err
 		}
+		lastResponse = response
 		events = append(events, roundEvents...)
 		if len(assistantMessage.ToolCalls) == 0 {
 			fullHistory := cloneMessages(messages)
@@ -327,6 +336,11 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 		})
 		resolvedPlan, err := resolveToolApprovals(ctx, plan, approvalStore, approvalHandler, reporter, client.Name(), currentRequest.Model, round+1)
 		if err != nil {
+			if len(messages) > len(request.Messages) {
+				assistantMessage := toolLoopContinuationMessage(fmt.Sprintf("tool approval handling stopped: %v", err))
+				fullHistory := append(cloneMessages(messages), assistantMessage)
+				return fullHistory, cloneMessages(lastRequestMessages), lastResponse, assistantMessage, events, toolReports, nil
+			}
 			return nil, nil, nil, runtime.Message{}, nil, nil, err
 		}
 		workerOptions := workerBase
@@ -361,7 +375,21 @@ func runWithToolLoop(ctx context.Context, client provider.Client, request runtim
 		messages = append(messages, report.Messages()...)
 	}
 
-	return nil, nil, nil, runtime.Message{}, nil, nil, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+	assistantMessage := toolLoopContinuationMessage(fmt.Sprintf("internal tool loop limit reached after %d rounds", maxRounds))
+	fullHistory := append(cloneMessages(messages), assistantMessage)
+	if len(lastRequestMessages) == 0 {
+		lastRequestMessages = cloneMessages(request.Messages)
+	}
+	return fullHistory, cloneMessages(lastRequestMessages), lastResponse, assistantMessage, events, toolReports, nil
+}
+
+func toolLoopContinuationMessage(reason string) runtime.Message {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "tool loop stopped before a final assistant answer"
+	}
+	text := "Ход не был полностью завершён, но найденный контекст и результаты инструментов сохранены в истории. Продолжи с этого места следующим сообщением.\n\nПричина: " + reason
+	return runtime.TextMessage(runtime.RoleAssistant, text)
 }
 
 func resolveToolApprovals(ctx context.Context, plan tooling.ExecutionPlan, approvalStore *approvalSessionStore, approvalHandler ApprovalHandler, reporter progressReporter, providerName string, model string, round int) (tooling.ExecutionPlan, error) {
