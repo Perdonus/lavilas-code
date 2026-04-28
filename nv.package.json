@@ -1,6 +1,6 @@
 {
   "name": "lvls",
-  "version": "0.1.0-alpha.57",
+  "version": "0.1.0-alpha.58",
   "title": "Go Lavilas Alpha",
   "description": "Standalone alpha channel for the Go implementation of Lavilas, packaged for NV.",
   "homepage": "https://github.com/Perdonus/lavilas-code/tree/nv-go-alpha",
@@ -31,6 +31,36 @@
       "artifact": "dist/lvls-linux-arm64.tar.gz",
       "file_name": "lvls-linux-arm64.tar.gz",
       "install_strategy": "linux-portable-tar"
+    },
+    {
+      "id": "lvls-termux-arm64",
+      "label": "Termux ARM64",
+      "os": "android",
+      "default": true,
+      "artifact": "dist/lvls-termux-arm64",
+      "file_name": "lvls-termux-arm64",
+      "install_strategy": "unix-self-binary",
+      "install_root": "$PREFIX/bin",
+      "binary_name": "lvls",
+      "update_command": "nv i lvls@alpha",
+      "metadata": {
+        "bootstrapPlatform": "lvls-termux-arm64"
+      }
+    },
+    {
+      "id": "lvls-termux-armv7",
+      "label": "Termux ARMv7",
+      "os": "android",
+      "artifact": "dist/lvls-termux-armv7",
+      "file_name": "lvls-termux-armv7",
+      "install_strategy": "unix-self-binary",
+      "install_root": "$PREFIX/bin",
+      "binary_name": "lvls",
+      "update_command": "nv i lvls@alpha",
+      "metadata": {
+        "bootstrapPlatform": "lvls-termux-armv7",
+        "sourcePlatform": "lvls-linux-armv7"
+      }
     },
     {
       "id": "lvls-windows-amd64",

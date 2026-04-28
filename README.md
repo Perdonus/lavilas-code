@@ -5,7 +5,7 @@
 Текущее состояние:
 - package id в `nv`: `lvls`;
 - publish-контур целится в `nv`, не в `npm`;
-- alpha foundation собирает `linux/amd64`, `linux/arm64` и `windows/amd64`;
+- alpha foundation собирает `linux/amd64`, `linux/arm64`, `termux/arm64`, `termux/armv7` и `windows/amd64`;
 - основной interactive path теперь идёт через Bubble Tea TUI;
 - built-in runtime умеет shell/file/search/write/apply_patch tools;
 - release metadata складывается в `dist/SHA256SUMS` и `dist/release-metadata.json`;
@@ -35,6 +35,8 @@ LAVILAS_VERSION=0.1.0-alpha.local \
 После сборки в `dist/` будут:
 - `lvls-linux-amd64.tar.gz`
 - `lvls-linux-arm64.tar.gz`
+- `lvls-termux-arm64`
+- `lvls-termux-armv7`
 - `lvls-windows-amd64.exe`
 - `SHA256SUMS`
 - `release-metadata.json`
