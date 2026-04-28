@@ -8,7 +8,7 @@ PRODUCT_SLUG=${GO_LAVILAS_PRODUCT_SLUG:-lvls}
 PRODUCT_TITLE=${GO_LAVILAS_PRODUCT_TITLE:-Go Lavilas Alpha}
 PRODUCT_BINARY=${GO_LAVILAS_BINARY_NAME:-lvls}
 RELEASE_CHANNEL=${GO_LAVILAS_CHANNEL:-alpha}
-VERSION=${LAVILAS_VERSION:-0.1.0-alpha.58}
+VERSION=${LAVILAS_VERSION:-0.1.0-alpha.59}
 COMMIT=${LAVILAS_COMMIT:-dev}
 GIT_REF=${LAVILAS_GIT_REF:-local}
 BUILD_DATE=${LAVILAS_BUILD_DATE:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}
@@ -51,6 +51,37 @@ build_linux_tarball() {
   tar -C "$stage_dir" -czf "$archive_path" "$PRODUCT_BINARY"
 }
 
+find_android_clang() {
+  local tool="$1"
+  local ndk_roots=()
+
+  [ -n "${ANDROID_NDK_HOME:-}" ] && ndk_roots+=("$ANDROID_NDK_HOME")
+  [ -n "${ANDROID_NDK_ROOT:-}" ] && ndk_roots+=("$ANDROID_NDK_ROOT")
+  [ -n "${ANDROID_HOME:-}" ] && ndk_roots+=("$ANDROID_HOME/ndk-bundle")
+  if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+    while IFS= read -r ndk_dir; do
+      ndk_roots+=("$ndk_dir")
+    done < <(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -Vr)
+  fi
+
+  local root
+  for root in "${ndk_roots[@]}"; do
+    local candidate="$root/toolchains/llvm/prebuilt/linux-x86_64/bin/$tool"
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v "$tool" >/dev/null 2>&1; then
+    command -v "$tool"
+    return 0
+  fi
+
+  echo "Android NDK clang not found: $tool" >&2
+  exit 1
+}
+
 build_termux_binary() {
   local arch_label="$1"
   local goarch="$2"
@@ -58,7 +89,9 @@ build_termux_binary() {
   local output_path="$DIST_DIR/${PRODUCT_SLUG}-termux-$arch_label"
 
   if [ -n "$goarm" ]; then
-    CGO_ENABLED=0 GOOS=android GOARCH="$goarch" GOARM="$goarm" \
+    local cc
+    cc=$(find_android_clang armv7a-linux-androideabi21-clang)
+    CGO_ENABLED=1 CC="$cc" GOOS=android GOARCH="$goarch" GOARM="$goarm" \
       go build -trimpath -ldflags "$LDFLAGS" -o "$output_path" ./cmd/lvls
   else
     CGO_ENABLED=0 GOOS=android GOARCH="$goarch" \

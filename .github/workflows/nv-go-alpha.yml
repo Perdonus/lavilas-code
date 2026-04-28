@@ -71,6 +71,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
       - name: Build alpha artifacts
         env:
           GO_LAVILAS_PRODUCT_SLUG: ${{ env.PACKAGE_ID }}
