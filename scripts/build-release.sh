@@ -8,7 +8,7 @@ PRODUCT_SLUG=${GO_LAVILAS_PRODUCT_SLUG:-lvls}
 PRODUCT_TITLE=${GO_LAVILAS_PRODUCT_TITLE:-Go Lavilas Alpha}
 PRODUCT_BINARY=${GO_LAVILAS_BINARY_NAME:-lvls}
 RELEASE_CHANNEL=${GO_LAVILAS_CHANNEL:-alpha}
-VERSION=${LAVILAS_VERSION:-0.1.0-alpha.59}
+VERSION=${LAVILAS_VERSION:-0.1.0-alpha.60}
 COMMIT=${LAVILAS_COMMIT:-dev}
 GIT_REF=${LAVILAS_GIT_REF:-local}
 BUILD_DATE=${LAVILAS_BUILD_DATE:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}
@@ -86,7 +86,11 @@ build_termux_binary() {
   local arch_label="$1"
   local goarch="$2"
   local goarm="${3:-}"
-  local output_path="$DIST_DIR/${PRODUCT_SLUG}-termux-$arch_label"
+  local stage_dir="$BUILD_DIR/termux-$arch_label"
+  local output_path="$stage_dir/$PRODUCT_BINARY"
+  local archive_path="$DIST_DIR/${PRODUCT_SLUG}-termux-$arch_label.tar.gz"
+
+  mkdir -p "$stage_dir"
 
   if [ -n "$goarm" ]; then
     local cc
@@ -97,6 +101,8 @@ build_termux_binary() {
     CGO_ENABLED=0 GOOS=android GOARCH="$goarch" \
       go build -trimpath -ldflags "$LDFLAGS" -o "$output_path" ./cmd/lvls
   fi
+
+  tar -C "$stage_dir" -czf "$archive_path" "$PRODUCT_BINARY"
 }
 
 build_windows_binary() {
@@ -197,9 +203,9 @@ data = {
             "id": f'{os.environ["PRODUCT_SLUG"]}-termux-arm64',
             "os": "android",
             "arch": "arm64",
-            "path": f'dist/{os.environ["PRODUCT_SLUG"]}-termux-arm64',
-            "file_name": f'{os.environ["PRODUCT_SLUG"]}-termux-arm64',
-            "packaging": "self-binary",
+            "path": f'dist/{os.environ["PRODUCT_SLUG"]}-termux-arm64.tar.gz',
+            "file_name": f'{os.environ["PRODUCT_SLUG"]}-termux-arm64.tar.gz',
+            "packaging": "tar.gz",
             "install_strategy": "unix-self-binary",
             "install_root": "$PREFIX/bin",
             "binary_name": os.environ["PRODUCT_BINARY"],
@@ -209,9 +215,9 @@ data = {
             "id": f'{os.environ["PRODUCT_SLUG"]}-termux-armv7',
             "os": "android",
             "arch": "armv7",
-            "path": f'dist/{os.environ["PRODUCT_SLUG"]}-termux-armv7',
-            "file_name": f'{os.environ["PRODUCT_SLUG"]}-termux-armv7',
-            "packaging": "self-binary",
+            "path": f'dist/{os.environ["PRODUCT_SLUG"]}-termux-armv7.tar.gz',
+            "file_name": f'{os.environ["PRODUCT_SLUG"]}-termux-armv7.tar.gz',
+            "packaging": "tar.gz",
             "install_strategy": "unix-self-binary",
             "install_root": "$PREFIX/bin",
             "binary_name": os.environ["PRODUCT_BINARY"],
@@ -235,8 +241,8 @@ build_windows_binary amd64
 
 LINUX_AMD64_FILE="$DIST_DIR/${PRODUCT_SLUG}-linux-amd64.tar.gz"
 LINUX_ARM64_FILE="$DIST_DIR/${PRODUCT_SLUG}-linux-arm64.tar.gz"
-TERMUX_ARM64_FILE="$DIST_DIR/${PRODUCT_SLUG}-termux-arm64"
-TERMUX_ARMV7_FILE="$DIST_DIR/${PRODUCT_SLUG}-termux-armv7"
+TERMUX_ARM64_FILE="$DIST_DIR/${PRODUCT_SLUG}-termux-arm64.tar.gz"
+TERMUX_ARMV7_FILE="$DIST_DIR/${PRODUCT_SLUG}-termux-armv7.tar.gz"
 WINDOWS_AMD64_FILE="$DIST_DIR/${PRODUCT_SLUG}-windows-amd64.exe"
 
 LINUX_AMD64_HASH=$(checksum_file "$LINUX_AMD64_FILE")
